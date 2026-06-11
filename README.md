@@ -20,6 +20,7 @@ The project is designed as a research and monitoring tool. It does not place ord
   - source timestamps and confidence notes
 - Football account performance panel based on public Polymarket data.
 - SQLite history archive for snapshots, price points, account positions, context updates, and final match results.
+- Bundled Agent Skill for project-specific data sync, match intelligence, AI synthesis, history archiving, and deployment workflows.
 
 ## Project Name
 
@@ -28,6 +29,25 @@ Recommended GitHub repository name:
 ```text
 world-cup-match-intelligence-dashboard
 ```
+
+## Included Agent Skill
+
+This repository includes a reusable skill for maintaining and extending the match intelligence workflow:
+
+```text
+.codex/skills/world-cup-match-intelligence/SKILL.md
+.claude/skills/world-cup-match-intelligence/SKILL.md
+```
+
+The two files have the same instructions so the workflow is available to both Codex and Claude Code style skill loaders. The skill covers:
+
+- public match data synchronization
+- lineup, injury, news, weather, and tactical context handling
+- live market curves for match result, handicap, and totals
+- AI synthesis with confidence downgrades when inputs are missing
+- elite public account position display rules
+- SQLite history archiving for later calibration and backtesting
+- deployment and `/worldcup` path verification
 
 ## Requirements
 
