@@ -1,0 +1,12 @@
+[Unit]
+Description=Archive World Cup dashboard history snapshot
+After=network-online.target worldcup-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/worldcup-polymarket-dashboard
+EnvironmentFile=-/etc/worldcup-dashboard.env
+ExecStart=/usr/bin/node scripts/archive-dashboard.js

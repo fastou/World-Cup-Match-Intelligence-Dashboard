@@ -1,0 +1,2405 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>World Cup Match Intelligence Dashboard</title>
+    <style>
+      :root {
+        --bg: #f6f7f2;
+        --panel: #ffffff;
+        --ink: #18201d;
+        --muted: #66706b;
+        --line: #d9dfd8;
+        --green: #147d64;
+        --red: #b83a35;
+        --amber: #a26213;
+        --blue: #245a9c;
+        --shadow: 0 12px 32px rgba(31, 45, 38, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .app {
+        min-height: 100vh;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 28px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(246, 247, 242, 0.94);
+        backdrop-filter: blur(10px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .mark {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #1f6b54, #d5b86c);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      .subhead {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .language-toggle {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .language-toggle button {
+        min-width: 44px;
+        height: 32px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .language-toggle button.active {
+        background: #e8f2ee;
+        color: var(--green);
+      }
+
+      .icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+      }
+
+      .icon-button:hover {
+        border-color: #9fb0a8;
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 22px;
+        padding: 24px 28px 42px;
+      }
+
+      .main {
+        min-width: 0;
+      }
+
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 0 0 12px;
+      }
+
+      .section-title h2 {
+        margin: 0;
+        font-size: 17px;
+        line-height: 1.2;
+      }
+
+      .last-update {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .match-grid {
+        display: block;
+      }
+
+      .match-switcher {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+      }
+
+      .match-tab {
+        flex: 0 0 auto;
+        min-width: 178px;
+        max-width: 240px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .match-tab.active {
+        border-color: #1f6b54;
+        background: #e8f2ee;
+      }
+
+      .match-tab-title {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 750;
+      }
+
+      .match-tab-meta {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .match-panels {
+        display: grid;
+        gap: 16px;
+      }
+
+      .match-panel {
+        display: none;
+      }
+
+      .match-panel.active {
+        display: block;
+      }
+
+      .match-card,
+      .side-panel,
+      .source-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .match-card {
+        padding: 16px;
+      }
+
+      .match-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .teams {
+        min-width: 0;
+      }
+
+      .teams h3 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.25;
+      }
+
+      .meta-line {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #eef3ef;
+        color: #2d493c;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .confidence-panel {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.85fr) minmax(0, 1.15fr);
+        gap: 12px;
+        margin: 14px 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .mode-card {
+        min-width: 0;
+      }
+
+      .mode-label {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        padding: 0 8px;
+        border-radius: 6px;
+        background: #eef3ef;
+        color: #2d493c;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .mode-label.low {
+        background: #fff3dd;
+        color: var(--amber);
+      }
+
+      .mode-label.high {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .confidence-score {
+        margin-top: 8px;
+        font-size: 28px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .prediction-result {
+        margin-top: 8px;
+        font-size: 24px;
+        font-weight: 800;
+        line-height: 1.15;
+      }
+
+      .prediction-prob {
+        margin-top: 4px;
+        color: var(--green);
+        font-size: 28px;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .prediction-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .prediction-prob-card {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .prediction-prob-card strong {
+        display: block;
+        font-size: 18px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .prediction-prob-card span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .prediction-row-label {
+        display: block;
+        font-weight: 760;
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .prediction-market-line {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .prediction-edge {
+        display: block;
+        margin-top: 3px;
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .prediction-edge.good {
+        color: var(--green);
+      }
+
+      .prediction-edge.bad {
+        color: var(--red);
+      }
+
+      .prediction-reasons {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding-left: 16px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .confidence-note {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .completeness-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .data-chip {
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .data-chip-name {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .data-chip-status {
+        margin-top: 3px;
+        font-size: 13px;
+        font-weight: 750;
+      }
+
+      .data-chip-status.synced {
+        color: var(--green);
+      }
+
+      .data-chip-status.stale {
+        color: var(--amber);
+      }
+
+      .data-chip-status.missing {
+        color: var(--red);
+      }
+
+      .odds-board {
+        margin: 16px 0 14px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+
+      .odds-board-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .odds-board-title {
+        font-size: 15px;
+        font-weight: 750;
+      }
+
+      .odds-board-meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .odds-board-tabs,
+      .odds-market-row {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .odds-board-tabs {
+        margin-bottom: 10px;
+      }
+
+      .odds-board-tab {
+        flex: 0 0 auto;
+        height: 32px;
+        padding: 0 11px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .odds-board-tab.active {
+        border-color: #1f6b54;
+        background: #e8f2ee;
+        color: #164b3c;
+      }
+
+      .odds-board-panel {
+        display: none;
+      }
+
+      .odds-board-panel.active {
+        display: block;
+      }
+
+      .odds-pill {
+        flex: 1 0 136px;
+        min-width: 136px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .odds-pill-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .odds-pill-price {
+        font-size: 17px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .odds-pill-detail {
+        grid-column: 1 / -1;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .odds-chart-wrap {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+        padding: 10px;
+      }
+
+      .odds-big-chart {
+        width: 100%;
+        height: 260px;
+        display: block;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 6px;
+        margin: 12px 0;
+      }
+
+      .tab {
+        height: 30px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      .tab.active {
+        border-color: #1f6b54;
+        background: #e8f2ee;
+        color: #164b3c;
+      }
+
+      .tab-content {
+        display: none;
+      }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      .info-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .info-list li {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 8px 0;
+        border-bottom: 1px solid #edf0ec;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .info-list li:last-child {
+        border-bottom: 0;
+      }
+
+      .info-list strong {
+        color: var(--ink);
+        font-weight: 650;
+      }
+
+      .intel-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .intel-block {
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .intel-block.wide {
+        grid-column: 1 / -1;
+      }
+
+      .intel-block h4 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+
+      .lineup-box {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .lineup-team {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .lineup-team-title {
+        font-weight: 750;
+      }
+
+      .lineup-meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .lineup-list {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .framework-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .framework-item {
+        padding: 9px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .framework-item strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+      }
+
+      .framework-item span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .elite-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .elite-stat {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .elite-stat span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .elite-stat strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 19px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .elite-board {
+        display: grid;
+        gap: 8px;
+      }
+
+      .elite-card {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .elite-rank {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: #e8f2ee;
+        color: #164b3c;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .elite-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 750;
+        font-size: 13px;
+      }
+
+      .elite-wallet {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .elite-metrics {
+        text-align: right;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+        white-space: nowrap;
+      }
+
+      .elite-signal-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .elite-signal {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .elite-signal-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .elite-signal-market {
+        min-width: 0;
+        font-weight: 750;
+        font-size: 13px;
+      }
+
+      .elite-signal-meta {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .elite-position-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      .elite-position-table th,
+      .elite-position-table td {
+        padding: 7px 6px;
+      }
+
+      .elite-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 7px;
+        border-radius: 6px;
+        background: #edf0ef;
+        color: #59645f;
+        font-size: 12px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .elite-chip.hot {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .elite-summary-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .elite-arrow {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .elite-inline-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .elite-inline-card {
+        padding: 8px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .elite-inline-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .elite-inline-meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .recommendations {
+        overflow-x: auto;
+      }
+
+      .recommendation-main-row.expandable {
+        cursor: pointer;
+      }
+
+      .recommendation-main-row.expandable:hover td {
+        background: #fbfcfa;
+      }
+
+      .recommendation-main-row.expanded td {
+        background: #f8fbf8;
+      }
+
+      .recommendation-main-row.expanded .elite-arrow {
+        transform: rotate(90deg);
+      }
+
+      .market-cell-main {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .row-detail-cell {
+        padding: 0;
+        background: #fbfcfa;
+      }
+
+      .row-detail-panel {
+        padding: 12px;
+        border-bottom: 1px solid #edf0ec;
+      }
+
+      .row-detail-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+
+      .row-detail-title {
+        font-weight: 760;
+      }
+
+      .row-detail-meta {
+        color: var(--muted);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 9px 8px;
+        text-align: left;
+        border-bottom: 1px solid #edf0ec;
+        vertical-align: middle;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      td.numeric,
+      th.numeric {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .decision {
+        display: inline-flex;
+        align-items: center;
+        min-height: 25px;
+        padding: 0 8px;
+        border-radius: 6px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .decision.BUY,
+      .decision.BUY_SMALL {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .decision.WATCH {
+        background: #f8edda;
+        color: var(--amber);
+      }
+
+      .decision.AVOID_OR_SELL {
+        background: #f8e5e3;
+        color: var(--red);
+      }
+
+      .decision.NO_TRADE,
+      .decision.WAIT,
+      .decision.BASELINE {
+        background: #edf0ef;
+        color: #59645f;
+      }
+
+      .decision-note {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      .sidebar {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+      }
+
+      .side-panel {
+        padding: 16px;
+      }
+
+      .side-panel h2,
+      .source-card h2 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+
+      .source-card {
+        padding: 14px;
+      }
+
+      .source-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 0;
+        border-bottom: 1px solid #edf0ec;
+      }
+
+      .source-row:last-child {
+        border-bottom: 0;
+      }
+
+      .source-name {
+        font-weight: 650;
+      }
+
+      .source-detail {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status {
+        min-width: 62px;
+        text-align: center;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .status.ok {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .status.fail {
+        background: #f8e5e3;
+        color: var(--red);
+      }
+
+      .market-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .market-item {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .market-question {
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.35;
+      }
+
+      .market-meta {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .token-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .token-row {
+        display: grid;
+        grid-template-columns: minmax(84px, 1fr) 58px 120px;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .token-name {
+        color: var(--muted);
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .token-price {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .sparkline {
+        width: 120px;
+        height: 34px;
+        border: 1px solid #e6ebe7;
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .market-sparkline {
+        width: 148px;
+        height: 38px;
+      }
+
+      .chart-cell {
+        min-width: 158px;
+      }
+
+      .chart-source {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .empty,
+      .error {
+        padding: 14px;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .error {
+        border-color: #e6b7b4;
+        color: var(--red);
+        background: #fff8f7;
+      }
+
+      .note {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 1100px) {
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 760px) {
+        .topbar {
+          align-items: flex-start;
+          padding: 16px;
+        }
+
+        .content {
+          padding: 16px;
+        }
+
+        .sidebar {
+          grid-template-columns: 1fr;
+        }
+
+        .match-tab {
+          min-width: 160px;
+        }
+
+        .match-header {
+          flex-direction: column;
+        }
+
+        .confidence-panel,
+        .intel-grid,
+        .lineup-box,
+        .framework-grid,
+        .elite-summary-grid,
+        .completeness-grid {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark" aria-hidden="true"></div>
+          <div>
+            <h1 id="appTitle">世界杯 AI分析平台</h1>
+            <div class="subhead" id="subhead">加载中</div>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="language-toggle" role="group" aria-label="Language">
+            <button type="button" data-lang="zh">中文</button>
+            <button type="button" data-lang="en">EN</button>
+          </div>
+          <button class="icon-button" id="refresh" title="刷新数据" aria-label="刷新数据">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="main">
+          <div class="section-title">
+            <h2 id="matchesTitle">今日比赛与模型信号</h2>
+            <div class="last-update" id="lastUpdate"></div>
+          </div>
+          <div id="matches" class="match-grid"></div>
+        </section>
+
+        <aside class="sidebar">
+          <section class="source-card">
+            <h2 id="sourcesTitle">数据源状态</h2>
+            <div id="sources"></div>
+          </section>
+
+          <section class="side-panel">
+            <h2 id="marketsTitle">世界杯市场池</h2>
+            <div id="polymarket"></div>
+          </section>
+
+          <section class="side-panel">
+            <h2 id="eliteTitle">足球表现 Top 100</h2>
+            <div id="eliteTraders"></div>
+          </section>
+
+          <section class="side-panel">
+            <h2 id="methodTitle">研究方法</h2>
+            <ul class="info-list" id="methodList">
+              <li><strong>概率差</strong><span>模型概率与公开价格差异超过阈值时标记</span></li>
+              <li><strong>置信度</strong><span>阵容、伤停、天气和新闻越完整，信号越可靠</span></li>
+              <li><strong>曲线</strong><span>记录价格变化，观察信息是否已被反映</span></li>
+              <li><strong>复盘</strong><span>保存预测、理由和最终赛果用于校准</span></li>
+            </ul>
+            <p class="note" id="methodNote">页面给的是比赛研究信号和概率辅助。实时源失败时会明确显示，不会隐藏为正常数据。</p>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script>
+      const APP_LABELS = {
+        zh: {
+          appTitle: "世界杯 AI分析平台",
+          loading: "加载中",
+          refreshTitle: "刷新数据",
+          matchesTitle: "今日比赛与模型信号",
+          sourcesTitle: "数据源状态",
+          marketsTitle: "世界杯市场池",
+          eliteTitle: "足球表现 Top 100",
+          methodTitle: "研究方法",
+          methodItems: [
+            ["概率差", "模型概率与公开价格差异超过阈值时标记"],
+            ["置信度", "阵容、伤停、天气和新闻越完整，信号越可靠"],
+            ["曲线", "记录价格变化，观察信息是否已被反映"],
+            ["复盘", "保存预测、理由和最终赛果用于校准"]
+          ],
+          methodNote: "页面给的是比赛研究信号和概率辅助。实时源失败时会明确显示，不会隐藏为正常数据。"
+        },
+        en: {
+          appTitle: "World Cup Match Intelligence Dashboard",
+          loading: "Loading",
+          refreshTitle: "Refresh data",
+          matchesTitle: "Today’s Matches and Model Signals",
+          sourcesTitle: "Data Sources",
+          marketsTitle: "World Cup Market Pool",
+          eliteTitle: "Football Performance Top 100",
+          methodTitle: "Research Method",
+          methodItems: [
+            ["Probability Gap", "Flag outcomes when model probability differs from public prices."],
+            ["Confidence", "Lineups, injuries, weather, and news improve signal reliability."],
+            ["Curves", "Track price movement to see whether new information is reflected."],
+            ["Review", "Store forecasts, reasons, and final scores for calibration."]
+          ],
+          methodNote: "This dashboard provides match research signals and probability context. Failed live sources are shown explicitly."
+        }
+      };
+
+      const UI_TRANSLATIONS = {
+        "世界杯 AI分析平台": "World Cup Match Intelligence Dashboard",
+        "加载中": "Loading",
+        "今日比赛与模型信号": "Today’s Matches and Model Signals",
+        "数据源状态": "Data Sources",
+        "世界杯市场池": "World Cup Market Pool",
+        "足球表现 Top 100": "Football Performance Top 100",
+        "研究方法": "Research Method",
+        "刷新数据": "Refresh data",
+        "正常": "OK",
+        "失败": "Failed",
+        "未知": "Unknown",
+        "已同步": "Synced",
+        "过期/待确认": "Stale / pending",
+        "缺失": "Missing",
+        "高置信": "High confidence",
+        "中置信": "Medium confidence",
+        "低置信": "Low confidence",
+        "观察": "Watch",
+        "等待预测": "Waiting for forecast",
+        "等待": "Wait",
+        "等待价格": "Waiting for price",
+        "无实时价格": "No live price",
+        "无曲线": "No curve",
+        "低置信观察": "Low-confidence watch",
+        "基线观察": "Baseline watch",
+        "回避": "Avoid",
+        "观察价格": "Watch price",
+        "无明确信号": "No clear signal",
+        "正向信号": "Positive signal",
+        "强正向信号": "Strong positive signal",
+        "AI综合预测": "AI Forecast",
+        "盘口": "Public price",
+        "盘口缺失": "Price missing",
+        "限制": "Limits",
+        "无关键限制，按 edge 和价格纪律判断。": "No major limits; use edge and price discipline.",
+        "胜平负": "Match result",
+        "让球盘": "Handicap",
+        "大小球": "Totals",
+        "当前比赛实时盘": "Live Match Markets",
+        "可切换": "switchable",
+        "预计/官方首发": "Projected / Official Lineups",
+        "首发状态": "Lineup status",
+        "伤停停赛": "Injuries and Suspensions",
+        "摘要": "Summary",
+        "球队近况": "Team Form",
+        "球队新闻": "Team News",
+        "战术对位": "Tactical Matchup",
+        "对位判断": "Matchup Read",
+        "天气和场地": "Weather and Venue",
+        "天气": "Weather",
+        "更新时间": "Updated",
+        "AI 综合分析": "AI Analysis",
+        "状态": "Status",
+        "结论": "Summary",
+        "风险点": "Risk Flags",
+        "动态信息对模型的影响": "Dynamic Model Impacts",
+        "基线 xG": "Baseline xG",
+        "动态 xG": "Dynamic xG",
+        "调整": "Adjustment",
+        "研究框架维度": "Research Framework",
+        "来源和置信度": "Sources and Confidence",
+        "情报更新时间": "Intelligence updated",
+        "来源": "Source",
+        "当前盘口高手持仓": "Current highlighted positions",
+        "涉及高手账号": "Highlighted accounts",
+        "当前价值 / 累计参与": "Current value / total participation",
+        "数据口径": "Method",
+        "账号": "Account",
+        "胜率估算": "Win-rate estimate",
+        "足球PNL": "Football PnL",
+        "均价": "Avg price",
+        "当前价值": "Current value",
+        "累计参与": "Total participation",
+        "最近参与": "Recent activity",
+        "高手持仓明细": "Account details",
+        "钱包": "Wallet",
+        "方向": "Outcome",
+        "金额": "Amount",
+        "价格": "Price",
+        "样本": "Sample",
+        "类型": "Type",
+        "市场": "Market",
+        "模型": "Model",
+        "走水": "Push",
+        "传统赔率": "Odds",
+        "建议买价≤": "Reference price ≤",
+        "曲线": "Curve",
+        "动作": "Signal",
+        "建议": "Signals",
+        "比赛情报": "Match Intelligence",
+        "高手": "Accounts",
+        "静态": "Static",
+        "动态": "Dynamic",
+        "第": "Matchday ",
+        "比赛日": "",
+        "组": "Group",
+        "北京时间": "Beijing time",
+        "入场": "Probability Gap",
+        "信号强度": "Signal strength",
+        "执行": "Curves",
+        "复盘": "Review",
+        "盘口来源": "Price source",
+        "盘口更新时间": "Price updated",
+        "大小球": "Totals",
+        "模型 xG": "Model xG",
+        "常见比分": "Likely scores",
+        "让球盘": "Handicap",
+        "伤病": "Injuries",
+        "首发信心": "Lineup confidence",
+        "暂未从 SPORTS 榜单里筛到足球已结算样本。": "No settled football sample found in the SPORTS leaderboard yet.",
+        "没有匹配到世界杯活跃市场。": "No active World Cup markets matched.",
+        "这个市场没有可画曲线的 token。": "No token curve is available for this market.",
+        "当前这些盘口里暂未发现足球高手 Top 100 的公开持仓。": "No highlighted Top 100 football accounts found for these markets yet.",
+        "当前这个盘口暂未发现足球高手 Top 100 的公开持仓。": "No highlighted Top 100 football accounts found for this market yet.",
+        "研究框架未加载。": "Research framework is not loaded.",
+        "未同步": "Not synced",
+        "待确认": "Pending",
+        "未返回": "Not returned",
+        "已分析": "Analyzed",
+        "未启用": "Disabled"
+      };
+
+      const UI_REGEX_TRANSLATIONS = [
+        [/生成/g, "Generated"],
+        [/情报/g, "Intelligence"],
+        [/本地基线/g, "Local baseline"],
+        [/成交量/g, "Volume"],
+        [/流动性/g, "Liquidity"],
+        [/模型/g, "Model"],
+        [/盘口/g, "Public price"],
+        [/限制：/g, "Limits: "],
+        [/平局/g, "Draw"],
+        [/胜/g, " win"],
+        [/小于/g, "Under"],
+        [/大于/g, "Over"],
+        [/球/g, " goals"],
+        [/人/g, " accounts"],
+        [/当前/g, "Current"],
+        [/买入/g, "participation"],
+        [/累计/g, "Total"],
+        [/最近/g, "Recent"],
+        [/阵型/g, "Formation"],
+        [/等待公开源更新。/g, "Waiting for public source updates."],
+        [/等待阵容和赛前 preview/g, "Waiting for lineup and preview updates"],
+        [/等待服务器配置 OPENAI_API_KEY 后定时综合。/g, "Waiting for server-side AI synthesis configuration."],
+        [/暂无可确认动态调整，维持基线模型。/g, "No confirmed dynamic adjustment; keeping the baseline model."],
+        [/仅显示足球表现 Top 100 在当前 Polymarket conditionId\/token 上的公开账户记录；胜率为已结算足球样本估算。/g, "Shows public account records from Top 100 football performers on the current conditionId/token; win rate is estimated from settled football samples."],
+        [/Polymarket 实时源不可用：/g, "Polymarket live source unavailable: "],
+        [/本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。/g, "The current network cannot reach the Polymarket API directly; real curves appear when deployed on a reachable server."],
+        [/足球高手账户不可用：/g, "Football account source unavailable: "],
+        [/等待服务器同步/g, "waiting for server sync"],
+        [/加载失败：/g, "Load failed: "],
+        [/当前是 file:\/\/ 打开的静态文件，请通过 Node 服务或远端 \/worldcup\/ 访问页面，否则 API 数据无法加载。/g, "This page was opened with file://. Use the Node server or remote /worldcup/ path so API data can load."],
+        [/欧赔/g, "Decimal"],
+        [/港赔/g, "HK"],
+        [/美赔/g, "US"],
+        [/赔率/g, "Odds"],
+        [/无/g, "No"],
+        [/缺失/g, "missing"],
+        [/未完全确认/g, "not fully confirmed"],
+        [/动态情报不足/g, "dynamic intelligence incomplete"],
+        [/首发/g, "lineup"],
+        [/伤停/g, "injury report"],
+        [/曲线不足/g, "curve incomplete"]
+      ];
+
+      let currentLang = localStorage.getItem("worldcup-dashboard-lang") || "zh";
+      let currentDashboard = null;
+
+      function translateText(text) {
+        if (currentLang !== "en" || !text) return text;
+        let output = String(text);
+        if (UI_TRANSLATIONS[output]) return UI_TRANSLATIONS[output];
+        for (const [from, to] of Object.entries(UI_TRANSLATIONS)) {
+          output = output.split(from).join(to);
+        }
+        for (const [pattern, replacement] of UI_REGEX_TRANSLATIONS) {
+          output = output.replace(pattern, replacement);
+        }
+        return output;
+      }
+
+      function applyLanguageStatic() {
+        const labels = APP_LABELS[currentLang];
+        document.documentElement.lang = currentLang === "en" ? "en" : "zh-CN";
+        document.title = labels.appTitle;
+        document.getElementById("appTitle").textContent = labels.appTitle;
+        document.getElementById("matchesTitle").textContent = labels.matchesTitle;
+        document.getElementById("sourcesTitle").textContent = labels.sourcesTitle;
+        document.getElementById("marketsTitle").textContent = labels.marketsTitle;
+        document.getElementById("eliteTitle").textContent = labels.eliteTitle;
+        document.getElementById("methodTitle").textContent = labels.methodTitle;
+        document.getElementById("methodList").innerHTML = labels.methodItems.map(([title, body]) => `<li><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></li>`).join("");
+        document.getElementById("methodNote").textContent = labels.methodNote;
+        const refresh = document.getElementById("refresh");
+        refresh.title = labels.refreshTitle;
+        refresh.setAttribute("aria-label", labels.refreshTitle);
+        document.querySelectorAll("[data-lang]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.lang === currentLang);
+        });
+      }
+
+      function translateRenderedContent(scope = document) {
+        if (currentLang !== "en") return;
+        const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+            const parent = node.parentElement;
+            if (!parent || ["SCRIPT", "STYLE", "CANVAS"].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach((node) => {
+          node.nodeValue = translateText(node.nodeValue);
+        });
+        scope.querySelectorAll("[title], [aria-label]").forEach((item) => {
+          if (item.hasAttribute("title")) item.setAttribute("title", translateText(item.getAttribute("title")));
+          if (item.hasAttribute("aria-label")) item.setAttribute("aria-label", translateText(item.getAttribute("aria-label")));
+        });
+      }
+
+      function setLanguage(lang) {
+        currentLang = lang === "en" ? "en" : "zh";
+        localStorage.setItem("worldcup-dashboard-lang", currentLang);
+        applyLanguageStatic();
+        if (currentDashboard) renderDashboard(currentDashboard);
+      }
+
+      const fmtPct = (value) => {
+        if (typeof value !== "number") return "-";
+        return `${(value * 100).toFixed(1)}%`;
+      };
+
+      const fmtPrice = (value) => {
+        if (typeof value !== "number") return "-";
+        return value.toFixed(2);
+      };
+
+      const fmtMoney = (value) => {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        const abs = Math.abs(value);
+        const sign = value < 0 ? "-" : "";
+        if (abs >= 1000000) return `${sign}$${(abs / 1000000).toFixed(2)}M`;
+        if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
+        return `${sign}$${abs.toFixed(0)}`;
+      };
+
+      const shortWallet = (value) => {
+        const wallet = String(value || "");
+        return wallet.length > 12 ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : wallet;
+      };
+
+      const fmtLine = (value) => {
+        if (typeof value !== "number") return "-";
+        return value > 0 ? `+${value}` : `${value}`;
+      };
+
+      const fmtOdds = (odds) => {
+        if (!odds || typeof odds.decimal !== "number") return "赔率 -";
+        const american = typeof odds.american === "number"
+          ? `${odds.american > 0 ? "+" : ""}${Math.round(odds.american)}`
+          : "-";
+        return `欧赔 ${odds.decimal.toFixed(2)} · 港赔 ${odds.hongKong.toFixed(2)} · 美赔 ${american}`;
+      };
+
+      const fmtTime = (value) => {
+        if (!value) return "-";
+        try {
+          return new Intl.DateTimeFormat(currentLang === "en" ? "en-US" : "zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+            timeZone: "Asia/Shanghai"
+          }).format(new Date(value));
+        } catch {
+          return value;
+        }
+      };
+
+      const fmtDateTime = (value) => {
+        if (!value) return currentLang === "en" ? "Not returned" : "未返回";
+        try {
+          return new Intl.DateTimeFormat(currentLang === "en" ? "en-US" : "zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+            timeZone: "Asia/Shanghai"
+          }).format(new Date(value));
+        } catch {
+          return value;
+        }
+      };
+
+      const statusLabel = (status) => ({
+        synced: currentLang === "en" ? "Synced" : "已同步",
+        stale: currentLang === "en" ? "Stale / pending" : "过期/待确认",
+        missing: currentLang === "en" ? "Missing" : "缺失"
+      })[status] || (currentLang === "en" ? "Unknown" : "未知");
+
+      const confidenceLabel = (confidence) => ({
+        high: currentLang === "en" ? "High confidence" : "高置信",
+        medium: currentLang === "en" ? "Medium confidence" : "中置信",
+        low: currentLang === "en" ? "Low confidence" : "低置信"
+      })[confidence] || (currentLang === "en" ? "Low confidence" : "低置信");
+
+      const escapeHtml = (value) => String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+
+      function renderSources(sources) {
+        const root = document.getElementById("sources");
+        root.innerHTML = sources.map((source) => `
+          <div class="source-row">
+            <div>
+              <div class="source-name">${escapeHtml(source.source)}</div>
+              <div class="source-detail">${escapeHtml(source.error || source.lastUpdated || `${source.latencyMs ?? 0} ms`)}</div>
+            </div>
+            <div class="status ${source.ok ? "ok" : "fail"}">${source.ok ? "正常" : "失败"}</div>
+          </div>
+        `).join("");
+      }
+
+      function renderAiPrediction(match) {
+        const prediction = match.aiPrediction || {};
+        const highClass = prediction.confidence === "high" ? "high" : prediction.confidence === "low" ? "low" : "";
+        const rows = prediction.rows || [
+          { key: "home", label: `${match.homeName}胜`, probability: match.probabilities.home },
+          { key: "draw", label: "平局", probability: match.probabilities.draw },
+          { key: "away", label: `${match.awayName}胜`, probability: match.probabilities.away }
+        ];
+        const selectedRow = rows.find((row) => row.key === prediction.key) || rows[0] || {};
+        const selectedMarket = typeof selectedRow.marketPrice === "number" ? `盘口 ${fmtPct(selectedRow.marketPrice)}` : "盘口缺失";
+        const selectedEdge = typeof selectedRow.edge === "number" ? `Edge ${fmtPct(selectedRow.edge)}` : "Edge 缺失";
+        const selectedSource = selectedRow.marketSource ? ` · ${selectedRow.marketSource}` : "";
+        const restrictionText = prediction.restrictions?.length
+          ? `限制：${prediction.restrictions.join("、")}`
+          : "无关键限制，按 edge 和价格纪律判断。";
+        const reasons = (prediction.reasons || []).slice(0, 3);
+        return `
+          <section class="confidence-panel">
+            <div class="mode-card">
+              <span class="mode-label ${highClass}">AI综合预测</span>
+              <div class="prediction-result">${escapeHtml(prediction.label || "等待预测")}</div>
+              <div class="prediction-prob">AI ${fmtPct(prediction.probability)}</div>
+              <div class="confidence-note">${escapeHtml(selectedMarket)} · ${escapeHtml(selectedEdge)}${escapeHtml(selectedSource)}</div>
+              <div class="confidence-note">${confidenceLabel(prediction.confidence)} · ${escapeHtml(prediction.tradeLabel || "观察")} · ${escapeHtml(restrictionText)}</div>
+            </div>
+            <div>
+              <div class="prediction-grid">
+                ${rows.map((row) => `
+                  <div class="prediction-prob-card">
+                    <span class="prediction-row-label">${escapeHtml(row.label)}</span>
+                    <strong>AI ${fmtPct(row.probability)}</strong>
+                    <span class="prediction-market-line">盘口 ${fmtPct(row.marketPrice)}${row.marketSource ? ` · ${escapeHtml(row.marketSource)}` : ""}</span>
+                    <span class="prediction-edge ${typeof row.edge === "number" && row.edge > 0 ? "good" : typeof row.edge === "number" && row.edge < 0 ? "bad" : ""}">Edge ${fmtPct(row.edge)}</span>
+                  </div>
+                `).join("")}
+              </div>
+              ${reasons.length ? `<ul class="prediction-reasons">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderPolymarket(polymarket) {
+        const root = document.getElementById("polymarket");
+        if (!polymarket.ok) {
+          root.innerHTML = `<div class="error">Polymarket 实时源不可用：${escapeHtml(polymarket.error || "未知错误")}。本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。</div>`;
+          return;
+        }
+        if (!polymarket.markets.length) {
+          root.innerHTML = '<div class="empty">没有匹配到世界杯活跃市场。</div>';
+          return;
+        }
+        root.innerHTML = `<div class="market-list">${polymarket.markets.map((market) => {
+          const tokenRows = (market.tokens || []).map((token) => `
+            <div class="token-row">
+              <div class="token-name" title="${escapeHtml(token.label)}">${escapeHtml(token.label)}</div>
+              <div class="token-price">${fmtPrice(token.currentPrice)}</div>
+              <canvas class="sparkline" width="120" height="34" data-series="${encodeURIComponent(JSON.stringify(token.history || []))}" aria-label="${escapeHtml(token.label)} 价格曲线"></canvas>
+            </div>
+          `).join("");
+          return `
+            <div class="market-item">
+              <div class="market-question">${escapeHtml(market.question)}</div>
+              <div class="market-meta">成交量 ${Math.round(market.volume || 0).toLocaleString()} · 流动性 ${Math.round(market.liquidity || 0).toLocaleString()}</div>
+              ${tokenRows ? `<div class="token-list">${tokenRows}</div>` : '<div class="empty">这个市场没有可画曲线的 token。</div>'}
+            </div>
+          `;
+        }).join("")}</div>`;
+        drawSparklines(root);
+      }
+
+      function renderEliteTradersPanel(eliteTraders) {
+        const root = document.getElementById("eliteTraders");
+        if (!root) return;
+        if (!eliteTraders || !eliteTraders.ok) {
+          root.innerHTML = `<div class="error">足球高手账户不可用：${escapeHtml(eliteTraders?.error || "等待服务器同步")}。</div>`;
+          return;
+        }
+        const traders = eliteTraders.traders || [];
+        if (!traders.length) {
+          root.innerHTML = '<div class="empty">暂未从 SPORTS 榜单里筛到足球已结算样本。</div>';
+          return;
+        }
+        root.innerHTML = `
+          <div class="source-detail">${escapeHtml(eliteTraders.rankingBasis || "")}</div>
+          <div class="elite-board">
+            ${traders.slice(0, 100).map((trader) => `
+              <div class="elite-card">
+                <div class="elite-rank">#${escapeHtml(trader.soccerRank)}</div>
+                <div>
+                  <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}</div>
+                  <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
+                </div>
+                <div class="elite-metrics">
+                  <div>足球PNL ${fmtMoney(trader.soccerPnl)}</div>
+                  <div>胜率 ${fmtPct(trader.winRateEstimate)} · 样本 ${escapeHtml(trader.soccerSettledPositions)}</div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      function drawSparklines(scope = document) {
+        scope.querySelectorAll(".sparkline").forEach((canvas) => {
+          let points = [];
+          try {
+            points = JSON.parse(decodeURIComponent(canvas.dataset.series || "[]"));
+          } catch {
+            points = [];
+          }
+          const ctx = canvas.getContext("2d");
+          const width = canvas.width;
+          const height = canvas.height;
+          ctx.clearRect(0, 0, width, height);
+          ctx.strokeStyle = "#d9dfd8";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, height - 1);
+          ctx.lineTo(width, height - 1);
+          ctx.stroke();
+
+          if (!points.length) {
+            ctx.fillStyle = "#8b958f";
+            ctx.font = "11px system-ui, sans-serif";
+            ctx.fillText("无曲线", 40, 21);
+            return;
+          }
+
+          const prices = points.map((point) => point.p);
+          const min = Math.min(...prices, 0);
+          const max = Math.max(...prices, 1);
+          const span = Math.max(0.01, max - min);
+          ctx.strokeStyle = "#147d64";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          points.forEach((point, index) => {
+            const x = points.length === 1 ? width - 2 : (index / (points.length - 1)) * (width - 4) + 2;
+            const y = height - 4 - ((point.p - min) / span) * (height - 8);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        });
+      }
+
+      const chartColors = ["#147d64", "#245a9c", "#a26213", "#b83a35", "#6b7280", "#7c3aed"];
+
+      function drawBigCharts(scope = document) {
+        scope.querySelectorAll(".odds-big-chart").forEach((canvas) => {
+          let series = [];
+          try {
+            series = JSON.parse(decodeURIComponent(canvas.dataset.series || "[]"));
+          } catch {
+            series = [];
+          }
+          const rect = canvas.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          const width = Math.max(320, Math.round(rect.width || 760));
+          const height = Math.max(220, Math.round(rect.height || 260));
+          canvas.width = Math.round(width * dpr);
+          canvas.height = Math.round(height * dpr);
+          const ctx = canvas.getContext("2d");
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, width, height);
+
+          const pad = { left: 42, right: 48, top: 18, bottom: 30 };
+          const plotW = width - pad.left - pad.right;
+          const plotH = height - pad.top - pad.bottom;
+          ctx.fillStyle = "#fbfcfa";
+          ctx.fillRect(0, 0, width, height);
+
+          const values = series.flatMap((item) => (item.history || []).map((point) => point.p));
+          if (!values.length) {
+            ctx.fillStyle = "#66706b";
+            ctx.font = "13px system-ui, sans-serif";
+            ctx.fillText("暂无历史曲线，等待盘口快照更新", pad.left, pad.top + 24);
+            return;
+          }
+
+          const minY = Math.max(0, Math.min(...values) - 0.04);
+          const maxY = Math.min(1, Math.max(...values) + 0.04);
+          const spanY = Math.max(0.01, maxY - minY);
+          const times = series.flatMap((item) => (item.history || []).map((point) => point.t));
+          const minT = Math.min(...times);
+          const maxT = Math.max(...times);
+          const spanT = Math.max(1, maxT - minT);
+
+          ctx.strokeStyle = "#d9dfd8";
+          ctx.lineWidth = 1;
+          ctx.font = "12px system-ui, sans-serif";
+          ctx.fillStyle = "#66706b";
+          [0, 0.25, 0.5, 0.75, 1].forEach((ratio) => {
+            const y = pad.top + plotH * ratio;
+            ctx.beginPath();
+            ctx.moveTo(pad.left, y);
+            ctx.lineTo(width - pad.right, y);
+            ctx.stroke();
+            const label = `${Math.round((maxY - spanY * ratio) * 100)}%`;
+            ctx.fillText(label, width - pad.right + 8, y + 4);
+          });
+
+          series.forEach((item, index) => {
+            const history = item.history || [];
+            if (!history.length) return;
+            const color = chartColors[index % chartColors.length];
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            history.forEach((point, pointIndex) => {
+              const x = pad.left + ((point.t - minT) / spanT) * plotW;
+              const y = pad.top + (1 - (point.p - minY) / spanY) * plotH;
+              if (pointIndex === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            const last = history[history.length - 1];
+            const lastX = pad.left + ((last.t - minT) / spanT) * plotW;
+            const lastY = pad.top + (1 - (last.p - minY) / spanY) * plotH;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        });
+      }
+
+      function renderOddsBoard(match) {
+        const groups = [
+          { type: "moneyline", label: "胜平负" },
+          { type: "handicap", label: "让球盘" },
+          { type: "total", label: "大小球" }
+        ].map((group) => ({
+          ...group,
+          rows: match.recommendations.filter((rec) => rec.marketType === group.type)
+        })).filter((group) => group.rows.length);
+
+        const tabs = groups.map((group, index) => `
+          <button class="odds-board-tab ${index === 0 ? "active" : ""}" data-odds-tab="${escapeHtml(group.type)}" type="button">${escapeHtml(group.label)}</button>
+        `).join("");
+
+        const panels = groups.map((group, index) => {
+          const series = group.rows.map((rec) => ({
+            name: rec.name,
+            price: rec.marketPrice,
+            source: rec.chart?.source,
+            history: rec.chart?.history || []
+          }));
+          return `
+            <div class="odds-board-panel ${index === 0 ? "active" : ""}" data-odds-panel="${escapeHtml(group.type)}">
+              <div class="odds-market-row">
+                ${group.rows.map((rec) => `
+                  <div class="odds-pill">
+                    <div class="odds-pill-name">${escapeHtml(rec.name)}</div>
+                    <div class="odds-pill-price">${Math.round((rec.marketPrice || 0) * 100)}¢</div>
+                    <div class="odds-pill-detail">模型 ${fmtPct(rec.modelProbability)} · Edge ${fmtPct(rec.edge)} · ${fmtOdds(rec.odds)} · ${escapeHtml(rec.decision?.label || "观察")} · ${escapeHtml(rec.chart?.source || "无曲线")}</div>
+                  </div>
+                `).join("")}
+              </div>
+              <div class="odds-chart-wrap">
+                <canvas class="odds-big-chart" data-series="${encodeURIComponent(JSON.stringify(series))}" aria-label="${escapeHtml(group.label)} 盘口曲线"></canvas>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        return `
+          <section class="odds-board">
+            <div class="odds-board-head">
+              <div>
+                <div class="odds-board-title">当前比赛实时盘</div>
+                <div class="odds-board-meta">${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)} · 胜平负、让球盘、大小球可切换</div>
+              </div>
+            </div>
+            <div class="odds-board-tabs" role="tablist" aria-label="盘口切换">${tabs}</div>
+            ${panels}
+          </section>
+        `;
+      }
+
+      function renderLineupTeam(teamName, lineup) {
+        const xi = Array.isArray(lineup?.xi) && lineup.xi.length ? lineup.xi : ["待确认"];
+        return `
+          <div class="lineup-team">
+            <div class="lineup-team-title">${escapeHtml(teamName)}</div>
+            <div class="lineup-meta">阵型：${escapeHtml(lineup?.formation || "待确认")}</div>
+            <ol class="lineup-list">${xi.map((player) => `<li>${escapeHtml(player)}</li>`).join("")}</ol>
+            <div class="lineup-meta">${escapeHtml(lineup?.notes || "等待公开源更新。")}</div>
+          </div>
+        `;
+      }
+
+      function renderResearchFramework(framework) {
+        const dimensions = framework?.staticDimensions || [];
+        if (!dimensions.length) {
+          return '<div class="empty">研究框架未加载。</div>';
+        }
+        return `
+          <div class="framework-grid">
+            ${dimensions.map((item) => `
+              <div class="framework-item">
+                <strong>${escapeHtml(item.label)}</strong>
+                <span>${escapeHtml((item.fields || []).slice(0, 3).join(" / "))}</span>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      function renderMatchIntel(match) {
+        const context = match.context || {};
+        const lineups = context.lineups || {};
+        const dynamicModel = match.dynamicModel || {
+          base: { lambdaHome: match.model?.lambdaHome || 0, lambdaAway: match.model?.lambdaAway || 0 },
+          adjusted: { lambdaHome: match.model?.lambdaHome || 0, lambdaAway: match.model?.lambdaAway || 0 },
+          modelImpacts: []
+        };
+        const impacts = dynamicModel.modelImpacts || [];
+        const ai = context.aiAnalysis || {};
+        const riskFlags = Array.isArray(context.riskFlags) ? context.riskFlags : [];
+        const sources = context.sources || {};
+        const sourceRows = Object.entries(sources).map(([key, source]) => `
+          <li><strong>${escapeHtml(key)}</strong><span>${source.ok ? "正常" : escapeHtml(source.error || "失败")} · ${fmtTime(source.updatedAt)} ${source.url ? `· ${escapeHtml(source.url)}` : ""}</span></li>
+        `).join("");
+        return `
+          <div class="intel-grid">
+            <section class="intel-block wide">
+              <h4>预计/官方首发</h4>
+              <ul class="info-list">
+                <li><strong>首发状态</strong><span>${escapeHtml(lineups.statusLabel || "待确认")}</span></li>
+              </ul>
+              <div class="lineup-box">
+                ${renderLineupTeam(match.homeName, lineups.home)}
+                ${renderLineupTeam(match.awayName, lineups.away)}
+              </div>
+            </section>
+
+            <section class="intel-block">
+              <h4>伤停停赛</h4>
+              <ul class="info-list">
+                <li><strong>摘要</strong><span>${escapeHtml(context.injurySummary || "未同步")}</span></li>
+              </ul>
+            </section>
+
+            <section class="intel-block">
+              <h4>球队近况</h4>
+              <ul class="info-list">
+                <li><strong>${escapeHtml(match.homeName)}</strong><span>${escapeHtml((context.recentForm?.home || []).join(" / ") || "未同步")}</span></li>
+                <li><strong>${escapeHtml(match.awayName)}</strong><span>${escapeHtml((context.recentForm?.away || []).join(" / ") || "未同步")}</span></li>
+                <li><strong>球队新闻</strong><span>${escapeHtml(context.teamNewsSummary || "未同步")}</span></li>
+              </ul>
+            </section>
+
+            <section class="intel-block">
+              <h4>战术对位</h4>
+              <ul class="info-list">
+                <li><strong>对位判断</strong><span>${escapeHtml(context.tacticalMatchup || "等待阵容和赛前 preview")}</span></li>
+              </ul>
+            </section>
+
+            <section class="intel-block">
+              <h4>天气和场地</h4>
+              <ul class="info-list">
+                <li><strong>天气</strong><span>${escapeHtml(context.weather?.summary || "未同步")}</span></li>
+                <li><strong>更新时间</strong><span>${fmtTime(context.weather?.updatedAt)}</span></li>
+              </ul>
+            </section>
+
+            <section class="intel-block wide">
+              <h4>AI 综合分析</h4>
+              <ul class="info-list">
+                <li><strong>状态</strong><span>${ai.ok ? `已分析 · ${escapeHtml(ai.model || "")}` : escapeHtml(ai.error || "未启用")}</span></li>
+                <li><strong>结论</strong><span>${escapeHtml(ai.summary || "等待服务器配置 OPENAI_API_KEY 后定时综合。")}</span></li>
+                ${riskFlags.length ? `<li><strong>风险点</strong><span>${escapeHtml(riskFlags.join(" / "))}</span></li>` : ""}
+              </ul>
+            </section>
+
+            <section class="intel-block wide">
+              <h4>动态信息对模型的影响</h4>
+              <ul class="info-list">
+                <li><strong>基线 xG</strong><span>${dynamicModel.base.lambdaHome.toFixed(2)} - ${dynamicModel.base.lambdaAway.toFixed(2)}</span></li>
+                <li><strong>动态 xG</strong><span>${dynamicModel.adjusted.lambdaHome.toFixed(2)} - ${dynamicModel.adjusted.lambdaAway.toFixed(2)}</span></li>
+                ${impacts.length ? impacts.map((impact) => `<li><strong>${escapeHtml(impact.label)}</strong><span>${escapeHtml(impact.reason)} · xG ${impact.homeXgDelta > 0 ? "+" : ""}${impact.homeXgDelta.toFixed(2)} / ${impact.awayXgDelta > 0 ? "+" : ""}${impact.awayXgDelta.toFixed(2)}</span></li>`).join("") : '<li><strong>调整</strong><span>暂无可确认动态调整，维持基线模型。</span></li>'}
+              </ul>
+            </section>
+
+            <section class="intel-block wide">
+              <h4>研究框架维度</h4>
+              ${renderResearchFramework(window.dashboardResearchFramework)}
+            </section>
+
+            <section class="intel-block wide">
+              <h4>来源和置信度</h4>
+              <ul class="info-list">
+                <li><strong>情报更新时间</strong><span>${fmtTime(context.updatedAt)}</span></li>
+                ${sourceRows || '<li><strong>来源</strong><span>未同步</span></li>'}
+              </ul>
+            </section>
+          </div>
+        `;
+      }
+
+      function renderEliteSignals(match) {
+        const summary = match.eliteSummary || {};
+        const rows = (match.recommendations || []).filter((rec) => rec.eliteSummary?.count > 0);
+        const updated = summary.updatedAt ? fmtTime(summary.updatedAt) : "-";
+        const sourceText = summary.source || "Polymarket Data API /v1/market-positions";
+        return `
+          <div class="elite-summary-grid">
+            <div class="elite-stat"><span>当前盘口高手持仓</span><strong>${escapeHtml(summary.activePositions || 0)}</strong></div>
+            <div class="elite-stat"><span>涉及高手账号</span><strong>${escapeHtml(summary.activeTraders || 0)}</strong></div>
+            <div class="elite-stat"><span>当前价值 / 累计参与</span><strong>${fmtMoney(summary.totalCurrentValue || 0)} / ${fmtMoney(summary.totalBought || 0)}</strong></div>
+          </div>
+          <ul class="info-list">
+            <li><strong>数据口径</strong><span>仅显示足球表现 Top 100 在当前 Polymarket conditionId/token 上的公开账户记录；胜率为已结算足球样本估算。</span></li>
+            <li><strong>来源</strong><span>${escapeHtml(sourceText)} · ${updated}</span></li>
+          </ul>
+          <div class="elite-signal-list">
+            ${rows.length ? rows.map((rec) => `
+              <section class="elite-signal">
+                <div class="elite-signal-head">
+                  <div class="elite-signal-market">${escapeHtml(rec.name)} · ${escapeHtml(rec.marketTypeLabel || "")}</div>
+                  <div class="elite-signal-meta">${escapeHtml(rec.eliteSummary.count)} 人 · 当前 ${fmtMoney(rec.eliteSummary.totalCurrentValue)} · 累计参与 ${fmtMoney(rec.eliteSummary.totalBought)}</div>
+                </div>
+                <table class="elite-position-table">
+                  <thead>
+                    <tr>
+                      <th>账号</th>
+                      <th class="numeric">胜率估算</th>
+                      <th class="numeric">足球PNL</th>
+                      <th class="numeric">均价</th>
+                      <th class="numeric">当前价值</th>
+                      <th class="numeric">累计参与</th>
+                      <th>最近参与</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${(rec.eliteSignals || []).slice(0, 20).map((signal) => `
+                      <tr>
+                        <td>#${escapeHtml(signal.traderRank)} ${escapeHtml(signal.userName)}<div class="source-detail">${escapeHtml(shortWallet(signal.proxyWallet))} · ${escapeHtml(signal.outcome || rec.name)}</div></td>
+                        <td class="numeric">${fmtPct(signal.winRateEstimate)}</td>
+                        <td class="numeric">${fmtMoney(signal.soccerPnl)}</td>
+                        <td class="numeric">${fmtPrice(signal.avgPrice)}</td>
+                        <td class="numeric">${fmtMoney(signal.currentValue)}</td>
+                        <td class="numeric">${fmtMoney(signal.totalBought)}</td>
+                        <td>${signal.recentBuy ? `${fmtDateTime(signal.recentBuy.isoTime)} · ${fmtPrice(signal.recentBuy.price)} · ${fmtMoney(signal.recentBuy.usdcSize)}` : "未返回"}</td>
+                      </tr>
+                    `).join("")}
+                  </tbody>
+                </table>
+              </section>
+            `).join("") : '<div class="empty">当前这些盘口里暂未发现足球高手 Top 100 的公开持仓。</div>'}
+          </div>
+        `;
+      }
+
+      function renderEliteSummaryChip(rec) {
+        if (!rec.eliteSummary?.count) return "";
+        return `<span class="elite-chip hot">${escapeHtml(rec.eliteSummary.count)}人 · ${fmtMoney(rec.eliteSummary.totalCurrentValue)}</span>`;
+      }
+
+      function renderEliteRowDetails(rec) {
+        const signals = rec.eliteSignals || [];
+        if (!rec.eliteSummary?.count) {
+          return '<div class="row-detail-panel"><div class="empty">当前这个盘口暂未发现足球高手 Top 100 的公开持仓。</div></div>';
+        }
+        return `
+          <div class="row-detail-panel">
+            <div class="row-detail-head">
+              <div class="row-detail-title">${escapeHtml(rec.name)} · 高手持仓明细</div>
+              <div class="row-detail-meta">${escapeHtml(rec.eliteSummary.count)} 人 · 当前 ${fmtMoney(rec.eliteSummary.totalCurrentValue)} · 累计参与 ${fmtMoney(rec.eliteSummary.totalBought)} · Top ${escapeHtml(rec.eliteSummary.topTrader || "-")}</div>
+            </div>
+            <div class="elite-inline-list">
+              ${signals.slice(0, 12).map((signal) => `
+                <div class="elite-inline-card">
+                  <div class="elite-inline-head">
+                    <span>#${escapeHtml(signal.traderRank)} ${escapeHtml(signal.userName)}</span>
+                    <span>${fmtMoney(signal.currentValue)}</span>
+                  </div>
+                  <div class="elite-inline-meta">
+                    钱包 ${escapeHtml(shortWallet(signal.proxyWallet))} · 方向 ${escapeHtml(signal.outcome || rec.name)} · 均价 ${fmtPrice(signal.avgPrice)} · 累计参与 ${fmtMoney(signal.totalBought)}
+                  </div>
+                  <div class="elite-inline-meta">
+                    最近参与 ${signal.recentBuy ? `${fmtDateTime(signal.recentBuy.isoTime)} · 价格 ${fmtPrice(signal.recentBuy.price)} · 金额 ${fmtMoney(signal.recentBuy.usdcSize)} · ${escapeHtml(signal.recentBuy.side || "")}` : "未返回"}
+                  </div>
+                  <div class="elite-inline-meta">
+                    足球PNL ${fmtMoney(signal.soccerPnl)} · 胜率 ${fmtPct(signal.winRateEstimate)} · 样本 ${escapeHtml(signal.soccerSettledPositions)}
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        `;
+      }
+
+      function renderMatch(match) {
+        const rows = match.recommendations.map((rec, index) => {
+          const detailId = `rec-detail-${escapeHtml(match.id)}-${index}`;
+          const hasEliteSignals = Boolean(rec.eliteSummary?.count);
+          return `
+          <tr class="recommendation-main-row ${hasEliteSignals ? "expandable" : ""}" data-detail-id="${detailId}" aria-expanded="false" ${hasEliteSignals ? 'tabindex="0"' : ""}>
+            <td>${escapeHtml(rec.marketTypeLabel || "-")}</td>
+            <td>
+              <span class="market-cell-main">
+                ${hasEliteSignals ? '<span class="elite-arrow" aria-hidden="true">›</span>' : ""}
+                <span>${escapeHtml(rec.name)}</span>
+                ${renderEliteSummaryChip(rec)}
+              </span>
+              ${rec.eliteSummary?.count ? `<div class="decision-note">Top: ${escapeHtml(rec.eliteSummary.topTrader || "-")} · 累计参与 ${fmtMoney(rec.eliteSummary.totalBought)}</div>` : ""}
+            </td>
+            <td class="numeric">${fmtPct(rec.modelProbability)}</td>
+            <td class="numeric">${fmtPct(rec.pushProbability)}</td>
+            <td class="numeric">${fmtPrice(rec.marketPrice)}</td>
+            <td>${escapeHtml(fmtOdds(rec.odds))}</td>
+            <td class="numeric">${fmtPct(rec.edge)}</td>
+            <td class="numeric">${rec.decision?.gated ? "等待" : fmtPrice(rec.maxBuyPrice)}</td>
+            <td class="chart-cell">
+              <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(rec.chart?.history || []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
+              <div class="chart-source">${escapeHtml(rec.chart?.source || "无曲线")}</div>
+            </td>
+            <td>
+              <span class="decision ${rec.decision.action}">${escapeHtml(rec.decision.label)}</span>
+              ${rec.decision.reasons?.length ? `<div class="decision-note">${escapeHtml(rec.decision.reasons.join("；"))}</div>` : ""}
+            </td>
+          </tr>
+          ${hasEliteSignals ? `<tr class="recommendation-detail-row" id="${detailId}" hidden>
+            <td class="row-detail-cell" colspan="10">${renderEliteRowDetails(rec)}</td>
+          </tr>` : ""}
+        `;
+        }).join("");
+
+        const staticItems = [
+          ...match.homeTeam.staticSignals.map((signal) => [`${match.homeName}`, signal]),
+          ...match.awayTeam.staticSignals.map((signal) => [`${match.awayName}`, signal])
+        ];
+
+        const watchItems = [
+          ...match.homeTeam.watchItems.map((item) => [`${match.homeName}`, item]),
+          ...match.awayTeam.watchItems.map((item) => [`${match.awayName}`, item])
+        ];
+
+        return `
+          <article class="match-card" data-match="${escapeHtml(match.id)}">
+            <div class="match-header">
+              <div class="teams">
+                <h3>${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</h3>
+                <div class="meta-line">${escapeHtml(match.group)} 组 · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
+              </div>
+              <span class="badge">第 ${escapeHtml(match.matchday)} 比赛日</span>
+            </div>
+
+            ${renderAiPrediction(match)}
+
+            ${renderOddsBoard(match)}
+
+            <div class="tabs" role="tablist">
+              <button class="tab active" data-tab="rec">建议</button>
+              <button class="tab" data-tab="intel">比赛情报</button>
+              <button class="tab" data-tab="elite">高手</button>
+              <button class="tab" data-tab="static">静态</button>
+              <button class="tab" data-tab="dynamic">动态</button>
+              <button class="tab" data-tab="market">盘口</button>
+            </div>
+
+            <div class="tab-content active" data-content="rec">
+              <div class="recommendations">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>类型</th>
+                      <th>市场</th>
+                      <th class="numeric">模型</th>
+                      <th class="numeric">走水</th>
+                      <th class="numeric">盘口</th>
+                      <th>传统赔率</th>
+                      <th class="numeric">Edge</th>
+                      <th class="numeric">建议买价≤</th>
+                      <th>曲线</th>
+                      <th>动作</th>
+                    </tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="tab-content" data-content="intel">
+              ${renderMatchIntel(match)}
+            </div>
+
+            <div class="tab-content" data-content="elite">
+              ${renderEliteSignals(match)}
+            </div>
+
+            <div class="tab-content" data-content="static">
+              <ul class="info-list">
+                ${staticItems.map(([team, item]) => `<li><strong>${escapeHtml(team)}</strong><span>${escapeHtml(item)}</span></li>`).join("")}
+              </ul>
+            </div>
+
+            <div class="tab-content" data-content="dynamic">
+              <ul class="info-list">
+                <li><strong>状态</strong><span>${escapeHtml(match.dynamic.status)}</span></li>
+                <li><strong>伤病</strong><span>${escapeHtml(match.dynamic.injurySummary)}</span></li>
+                <li><strong>天气</strong><span>${escapeHtml(match.dynamic.weatherSummary)}</span></li>
+                <li><strong>首发信心</strong><span>${escapeHtml(match.dynamic.lineupConfidence)}</span></li>
+                ${watchItems.map(([team, item]) => `<li><strong>${escapeHtml(team)}</strong><span>${escapeHtml(item)}</span></li>`).join("")}
+              </ul>
+            </div>
+
+            <div class="tab-content" data-content="market">
+              <ul class="info-list">
+                <li><strong>盘口来源</strong><span>${escapeHtml(match.manualMarkets.source)}</span></li>
+                <li><strong>盘口更新时间</strong><span>${fmtTime(match.manualMarkets.lastUpdated)}</span></li>
+                <li><strong>胜平负</strong><span>${escapeHtml(match.homeName)} ${fmtPrice(match.manualMarkets.moneyline?.home)} / 平局 ${fmtPrice(match.manualMarkets.moneyline?.draw)} / ${escapeHtml(match.awayName)} ${fmtPrice(match.manualMarkets.moneyline?.away)}</span></li>
+                <li><strong>大小球</strong><span>小于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.under25)} / 大于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.over25)}</span></li>
+                <li><strong>模型 xG</strong><span>${match.model.lambdaHome.toFixed(2)} - ${match.model.lambdaAway.toFixed(2)}</span></li>
+                <li><strong>常见比分</strong><span>${match.probabilities.topScores.map((s) => `${s.score} ${(s.probability * 100).toFixed(1)}%`).join(", ")}</span></li>
+                ${(match.recommendations || []).filter((rec) => rec.marketType === "handicap").map((rec) => `<li><strong>让球盘</strong><span>${escapeHtml(rec.name)} @ ${fmtPrice(rec.marketPrice)} · ${escapeHtml(fmtOdds(rec.odds))} · 模型 ${fmtPct(rec.modelProbability)}</span></li>`).join("")}
+                ${match.model.manualAdjustments.map((adj) => `<li><strong>${escapeHtml(adj.label)}</strong><span>${escapeHtml(adj.impact)}</span></li>`).join("")}
+              </ul>
+            </div>
+          </article>
+        `;
+      }
+
+      function renderMatchTabs(matches) {
+        const tabs = matches.map((match, index) => `
+          <button class="match-tab ${index === 0 ? "active" : ""}" data-match-tab="${escapeHtml(match.id)}" type="button">
+            <span class="match-tab-title">${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</span>
+            <span class="match-tab-meta">${escapeHtml(match.group)} 组 · ${fmtTime(match.kickoffShanghai)}</span>
+          </button>
+        `).join("");
+
+        const panels = matches.map((match, index) => `
+          <div class="match-panel ${index === 0 ? "active" : ""}" data-match-panel="${escapeHtml(match.id)}">
+            ${renderMatch(match)}
+          </div>
+        `).join("");
+
+        return `
+          <div class="match-switcher" role="tablist" aria-label="比赛切换">
+            ${tabs}
+          </div>
+          <div class="match-panels">
+            ${panels}
+          </div>
+        `;
+      }
+
+      function wireMatchTabs() {
+        const root = document.getElementById("matches");
+        root.querySelectorAll(".match-tab").forEach((tab) => {
+          tab.addEventListener("click", () => {
+            const id = tab.dataset.matchTab;
+            root.querySelectorAll(".match-tab").forEach((item) => item.classList.toggle("active", item === tab));
+            root.querySelectorAll(".match-panel").forEach((panel) => {
+              panel.classList.toggle("active", panel.dataset.matchPanel === id);
+            });
+            drawBigCharts(root);
+          });
+        });
+      }
+
+      function wireTabs() {
+        document.querySelectorAll(".match-card").forEach((card) => {
+          card.querySelectorAll(".tab").forEach((tab) => {
+            tab.addEventListener("click", () => {
+              const target = tab.dataset.tab;
+              card.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === tab));
+              card.querySelectorAll(".tab-content").forEach((content) => {
+                content.classList.toggle("active", content.dataset.content === target);
+              });
+            });
+          });
+        });
+      }
+
+      function wireOddsTabs() {
+        document.querySelectorAll(".odds-board").forEach((board) => {
+          board.querySelectorAll(".odds-board-tab").forEach((tab) => {
+            tab.addEventListener("click", () => {
+              const target = tab.dataset.oddsTab;
+              board.querySelectorAll(".odds-board-tab").forEach((item) => item.classList.toggle("active", item === tab));
+              board.querySelectorAll(".odds-board-panel").forEach((panel) => {
+                panel.classList.toggle("active", panel.dataset.oddsPanel === target);
+              });
+              drawBigCharts(board);
+            });
+          });
+        });
+      }
+
+      function wireRecommendationRows() {
+        document.querySelectorAll(".recommendation-main-row.expandable").forEach((row) => {
+          const toggle = () => {
+            const detail = document.getElementById(row.dataset.detailId);
+            if (!detail) return;
+            const open = row.getAttribute("aria-expanded") === "true";
+            row.setAttribute("aria-expanded", open ? "false" : "true");
+            row.classList.toggle("expanded", !open);
+            detail.hidden = open;
+            if (!open) drawSparklines(detail);
+          };
+          row.addEventListener("click", (event) => {
+            if (event.target.closest("a, button, canvas")) return;
+            toggle();
+          });
+          row.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            toggle();
+          });
+        });
+      }
+
+      function renderDashboard(data) {
+        currentDashboard = data;
+        applyLanguageStatic();
+        document.getElementById("subhead").textContent = currentLang === "en"
+          ? `${data.meta.tournament} · ${data.meta.timezone}`
+          : `${data.meta.tournament} · ${data.meta.timezone}`;
+        document.getElementById("lastUpdate").textContent = currentLang === "en"
+          ? `Generated ${fmtTime(data.meta.generatedAt)} · Intelligence ${fmtTime(data.contextMeta?.lastUpdated)} · Local baseline ${fmtTime(data.meta.lastManualUpdate)}`
+          : `生成 ${fmtTime(data.meta.generatedAt)} · 情报 ${fmtTime(data.contextMeta?.lastUpdated)} · 本地基线 ${fmtTime(data.meta.lastManualUpdate)}`;
+        renderSources(data.sources);
+        renderPolymarket(data.polymarket);
+        renderEliteTradersPanel(data.eliteTraders);
+        document.getElementById("matches").innerHTML = renderMatchTabs(data.matches);
+        translateRenderedContent(document.body);
+        wireMatchTabs();
+        wireTabs();
+        wireOddsTabs();
+        wireRecommendationRows();
+        drawSparklines(document.getElementById("matches"));
+        drawBigCharts(document.getElementById("matches"));
+      }
+
+      async function loadDashboard(force = false) {
+        const button = document.getElementById("refresh");
+        button.disabled = true;
+        try {
+          if (window.location.protocol === "file:") {
+            throw new Error("当前是 file:// 打开的静态文件，请通过 Node 服务或远端 /worldcup/ 访问页面，否则 API 数据无法加载。");
+          }
+          const basePath = window.location.pathname.endsWith("/")
+            ? window.location.pathname
+            : window.location.pathname.replace(/\/[^/]*$/, "/");
+          const apiPath = `${basePath}api/dashboard${force ? "?force=1" : ""}`;
+          const response = await fetch(apiPath, { cache: "no-store" });
+          const data = await response.json();
+          window.dashboardResearchFramework = data.researchFramework || {};
+          renderDashboard(data);
+        } catch (error) {
+          const message = currentLang === "en" ? `Load failed: ${error.message}` : `加载失败：${error.message}`;
+          document.getElementById("matches").innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      document.querySelectorAll("[data-lang]").forEach((button) => {
+        button.addEventListener("click", () => setLanguage(button.dataset.lang));
+      });
+      document.getElementById("refresh").addEventListener("click", () => loadDashboard(true));
+      applyLanguageStatic();
+      loadDashboard();
+      setInterval(() => loadDashboard(true), 5 * 60 * 1000);
+    </script>
+  </body>
+</html>

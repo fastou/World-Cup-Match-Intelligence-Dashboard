@@ -1,0 +1,13 @@
+{
+  "name": "worldcup-polymarket-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "update:data": "node scripts/update-dashboard-data.js",
+    "sync:context": "node scripts/sync-worldcup-context.js",
+    "archive:dashboard": "node scripts/archive-dashboard.js",
+    "record:result": "node scripts/record-match-result.js"
+  }
+}

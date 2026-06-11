@@ -1,0 +1,25 @@
+.DS_Store
+.claude/
+
+# Unrelated local project kept in this workspace
+app/
+
+# Runtime snapshots and generated state
+data/worldcup-context.json
+data/worldcup-history.sqlite
+data/worldcup-history.sqlite-shm
+data/worldcup-history.sqlite-wal
+
+# Internal research notes not intended for public release
+research/
+
+# Dependencies, logs, and caches
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.*
+*.log
+__pycache__/
+.pytest_cache/

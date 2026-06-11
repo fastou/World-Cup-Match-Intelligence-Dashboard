@@ -1,0 +1,18 @@
+[Unit]
+Description=World Cup Polymarket Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/worldcup-polymarket-dashboard
+Environment=NODE_ENV=production
+Environment=PORT=4174
+Environment=BASE_PATH=/worldcup
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

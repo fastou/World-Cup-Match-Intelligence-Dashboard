@@ -1,0 +1,11 @@
+[Unit]
+Description=Run World Cup dashboard public context sync every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=45s
+Unit=worldcup-context-sync.service
+
+[Install]
+WantedBy=timers.target

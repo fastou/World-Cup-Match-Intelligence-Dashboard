@@ -1,0 +1,11 @@
+[Unit]
+Description=Archive World Cup dashboard history every 15 minutes
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=15min
+RandomizedDelaySec=90s
+Unit=worldcup-history-archive.service
+
+[Install]
+WantedBy=timers.target

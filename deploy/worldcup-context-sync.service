@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync World Cup dashboard public context
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/worldcup-polymarket-dashboard
+EnvironmentFile=-/etc/worldcup-dashboard.env
+ExecStart=/usr/bin/node scripts/sync-worldcup-context.js
