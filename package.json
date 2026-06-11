@@ -8,6 +8,7 @@
     "update:data": "node scripts/update-dashboard-data.js",
     "sync:context": "node scripts/sync-worldcup-context.js",
     "archive:dashboard": "node scripts/archive-dashboard.js",
-    "record:result": "node scripts/record-match-result.js"
+    "record:result": "node scripts/record-match-result.js",
+    "validate:skills": "node scripts/validate-skills.js"
   }
 }

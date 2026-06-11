@@ -1,11 +1,11 @@
 ---
 name: world-cup-match-intelligence
-description: Use when working on this World Cup Match Intelligence Dashboard, including match data collection, public source synchronization, lineup/news/weather context, market probability curves, AI synthesis, confidence downgrades, history archiving, backtesting, bilingual UI updates, and deployment checks for the dashboard.
+description: Use when building or maintaining football match intelligence workflows, including public source synchronization, lineup/news/weather context, market probability curves, AI synthesis, confidence downgrades, history archiving, backtesting, bilingual dashboard UI updates, and deployment checks. This repository includes a reference World Cup dashboard implementation.
 ---
 
 # World Cup Match Intelligence
 
-Use this skill when modifying, operating, or extending the World Cup Match Intelligence Dashboard.
+Use this skill when building, modifying, operating, or extending a football match intelligence workflow. This repository includes a World Cup dashboard as a reference implementation.
 
 ## Core Rules
 

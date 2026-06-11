@@ -2,9 +2,9 @@
 .claude/*
 !.claude/skills/
 !.claude/skills/**
-.codex/*
-!.codex/skills/
-!.codex/skills/**
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 
 # Unrelated local project kept in this workspace
 app/

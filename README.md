@@ -1,16 +1,45 @@
-# World Cup Match Intelligence Dashboard
+# World Cup Match Intelligence Skill
 
-A bilingual dashboard for following World Cup matches with structured team context, live market-style probability curves, model probabilities, lineup/news/weather intelligence, and historical snapshots for later model calibration.
+A reusable Agent Skill for building and maintaining football match intelligence workflows with public match context, lineup/news/weather checks, market-style probability curves, AI synthesis, confidence downgrades, and historical snapshots for later calibration.
 
-The project is designed as a research and monitoring tool. It does not place orders, execute actions, or provide automated financial instructions.
+The repository also includes a bilingual World Cup dashboard as a reference implementation of the skill.
+
+This project is designed for research, information organization, and data visualization. It does not place orders, execute actions, or provide automated financial instructions.
+
+## Skill Files
+
+```text
+.agents/skills/world-cup-match-intelligence/SKILL.md
+.claude/skills/world-cup-match-intelligence/SKILL.md
+```
+
+The two files have the same instructions so the workflow is available to Codex repo skills and Claude Code project skills.
+
+Validate the packaged skill files with:
+
+```bash
+npm run validate:skills
+```
 
 ## Features
 
-- Chinese / English language switcher in the browser.
-- Match tabs for switching between daily fixtures.
-- AI-assisted match probability summary.
-- Public price curves for match result, handicap, and totals markets when a live source is available.
-- Structured match intelligence:
+- Public match data synchronization workflow.
+- Lineup, injury, news, weather, venue, and tactical context handling.
+- AI synthesis rules with explicit missing-data and stale-data downgrades.
+- Market-style curves for match result, handicap, and totals when public data is available.
+- Separation between model probabilities and public market prices.
+- Elite public account position display rules for transparent source-backed panels.
+- SQLite history archiving for calibration and backtesting.
+- Bilingual UI guidance for Chinese / English dashboards.
+- Deployment checks for serving a reference app under `/worldcup`.
+
+The reference dashboard demonstrates:
+
+- Chinese / English language switcher in the browser
+- match tabs for switching between daily fixtures
+- AI-assisted match probability summary
+- public price curves for match result, handicap, and totals markets when a live source is available
+- structured match intelligence:
   - projected or official lineups
   - injuries and suspensions
   - team news
@@ -18,36 +47,22 @@ The project is designed as a research and monitoring tool. It does not place ord
   - tactical matchup notes
   - weather and venue context
   - source timestamps and confidence notes
-- Football account performance panel based on public Polymarket data.
-- SQLite history archive for snapshots, price points, account positions, context updates, and final match results.
-- Bundled Agent Skill for project-specific data sync, match intelligence, AI synthesis, history archiving, and deployment workflows.
+- football account performance panel based on public data
+- SQLite history archive for snapshots, price points, account positions, context updates, and final match results
 
 ## Project Name
 
 Recommended GitHub repository name:
 
 ```text
-world-cup-match-intelligence-dashboard
+world-cup-match-intelligence-skill
 ```
 
-## Included Agent Skill
-
-This repository includes a reusable skill for maintaining and extending the match intelligence workflow:
+Current repository:
 
 ```text
-.codex/skills/world-cup-match-intelligence/SKILL.md
-.claude/skills/world-cup-match-intelligence/SKILL.md
+World-Cup-Match-Intelligence-Dashboard
 ```
-
-The two files have the same instructions so the workflow is available to both Codex and Claude Code style skill loaders. The skill covers:
-
-- public match data synchronization
-- lineup, injury, news, weather, and tactical context handling
-- live market curves for match result, handicap, and totals
-- AI synthesis with confidence downgrades when inputs are missing
-- elite public account position display rules
-- SQLite history archiving for later calibration and backtesting
-- deployment and `/worldcup` path verification
 
 ## Requirements
 
@@ -182,4 +197,4 @@ The repository ignores:
 - environment files
 - caches and logs
 
-This keeps the GitHub repository focused on the dashboard source code and reusable seed data.
+This keeps the GitHub repository focused on the reusable skill, reference dashboard source code, and seed data.
