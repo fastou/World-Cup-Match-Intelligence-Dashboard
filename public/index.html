@@ -1628,7 +1628,7 @@
 
       function formatWorldRanking(team) {
         const ranking = team?.worldRanking;
-        if (!ranking?.rank) return "未同步";
+        if (!ranking?.rank) return ranking?.note || "未同步";
         const updated = ranking.updatedAt ? ` · ${ranking.updatedAt} 更新` : "";
         const source = ranking.source ? ` · ${ranking.source}` : "";
         return `FIFA 男足第 ${ranking.rank}${updated}${source}`;

@@ -7,6 +7,7 @@ const PORT = Number(process.env.PORT || 4173);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || "");
 const ROOT = __dirname;
 const DATA_PATH = path.join(ROOT, "data", "worldcup-dashboard.json");
+const FIFA_RANKINGS_PATH = path.join(ROOT, "data", "fifa-rankings.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -892,7 +893,7 @@ function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.
   return inUpcomingWindow(match.kickoffShanghai, nowMs);
 }
 
-function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, nowMs = Date.now()) {
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !inUpcomingWindow(event.kickoffUtc, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
@@ -900,10 +901,11 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   if (modeledKeys.has(key)) return null;
   if (hasRecordedFinal(event.scheduleId, finalResults)) return null;
 
-  const homeTeam = scheduleTeamRecord(event.home);
-  const awayTeam = scheduleTeamRecord(event.away);
+  const homeTeam = scheduleTeamRecord(event.home, fifaRankings);
+  const awayTeam = scheduleTeamRecord(event.away, fifaRankings);
   const { lambdaHome, lambdaAway } = autoBaselineLambda(homeTeam.rating, awayTeam.rating);
   const id = `schedule-${event.scheduleId || key}`;
+  const syncedContext = contextForMatch(context, id);
   const baseMatch = {
     id,
     autoBaseline: true,
@@ -960,7 +962,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
       sources: [],
       updatedAt: null
     },
-    context: scheduleAutoBaselineContext(event)
+    context: deepMerge(scheduleAutoBaselineContext(event), syncedContext)
   };
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
@@ -972,13 +974,13 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
-    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, nowMs))
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, nowMs))
     .filter(Boolean);
   const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
@@ -1207,10 +1209,36 @@ function teamRatingForScheduleTeam(team) {
   return AUTO_BASELINE_RATINGS[code] || AUTO_BASELINE_DEFAULT_RATING;
 }
 
-function scheduleTeamRecord(team) {
+function rankingForTeam(code, fifaRankings) {
+  const normalizedCode = String(code || "").toUpperCase();
+  const rank = Number(fifaRankings?.rankings?.[normalizedCode]);
+  if (Number.isFinite(rank) && rank > 0) {
+    return {
+      rank,
+      status: "synced",
+      source: fifaRankings.source || "FIFA/Coca-Cola Men's World Ranking",
+      sourceUrl: fifaRankings.sourceUrl || "https://inside.fifa.com/fifa-world-ranking/men",
+      updatedAt: fifaRankings.updatedAt || "",
+      nextUpdateAt: fifaRankings.nextUpdateAt || "",
+      note: fifaRankings.notes || ""
+    };
+  }
+  return {
+    rank: null,
+    status: "missing",
+    source: fifaRankings?.source || "FIFA/Coca-Cola Men's World Ranking",
+    sourceUrl: fifaRankings?.sourceUrl || "https://inside.fifa.com/fifa-world-ranking/men",
+    updatedAt: fifaRankings?.updatedAt || "",
+    nextUpdateAt: fifaRankings?.nextUpdateAt || "",
+    note: "排名快照未覆盖该队，请刷新 data/fifa-rankings.json。"
+  };
+}
+
+function scheduleTeamRecord(team, fifaRankings) {
   const code = String(team?.code || "").toUpperCase();
   const name = TEAM_DISPLAY_NAMES_ZH[code] || team?.name || "TBD";
   const rating = teamRatingForScheduleTeam(team);
+  const worldRanking = rankingForTeam(code, fifaRankings);
   return {
     name,
     englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
@@ -1219,14 +1247,15 @@ function scheduleTeamRecord(team) {
     style: "赛程源自动纳入，等待本地静态研究补齐",
     staticSignals: [
       `自动基线评分：${rating}`,
-      "世界排名、阵容深度、风格标签待同步"
+      worldRanking.rank ? `FIFA 世界排名第 ${worldRanking.rank}` : "世界排名待同步",
+      "阵容深度、风格标签待同步"
     ],
     watchItems: [
       "补齐官方/可靠赛前阵容",
       "补齐伤停和球队新闻",
       "匹配公开盘口和 Polymarket 市场"
     ],
-    worldRanking: null,
+    worldRanking,
     code
   };
 }
@@ -2307,6 +2336,15 @@ async function buildDashboard({ force = false } = {}) {
   }
 
   const local = await readJson(DATA_PATH);
+  const fifaRankings = await readOptionalJson(FIFA_RANKINGS_PATH, {
+    source: "FIFA/Coca-Cola Men's World Ranking",
+    sourceUrl: "https://inside.fifa.com/fifa-world-ranking/men",
+    updatedAt: "",
+    nextUpdateAt: "",
+    rankings: {},
+    ok: false,
+    error: "data/fifa-rankings.json 缺失或未初始化"
+  });
   const researchFramework = await readOptionalJson(RESEARCH_FRAMEWORK_PATH, {
     ok: false,
     dimensions: [],
@@ -2327,7 +2365,7 @@ async function buildDashboard({ force = false } = {}) {
   ]);
   const polymarket = await fetchPolymarket(schedule);
   const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings);
   attachMarketCharts(matches, polymarket);
   const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
   attachAiPredictions(matches);
@@ -2349,6 +2387,13 @@ async function buildDashboard({ force = false } = {}) {
         ok: researchFramework.ok !== false,
         lastUpdated: researchFramework.updatedAt || researchFramework.version || "",
         error: researchFramework.ok === false ? "research-framework.json 缺失或未初始化" : undefined
+      },
+      {
+        source: "FIFA 世界排名",
+        ok: fifaRankings.ok !== false,
+        lastUpdated: fifaRankings.updatedAt || "",
+        error: fifaRankings.error,
+        detail: `${Object.keys(fifaRankings.rankings || {}).length} 队排名快照 · 下一次官方更新 ${fifaRankings.nextUpdateAt || "待确认"}`
       },
       {
         source: "动态情报快照",
@@ -2373,6 +2418,13 @@ async function buildDashboard({ force = false } = {}) {
       polymarket
     ],
     teams: local.teams,
+    fifaRankings: {
+      source: fifaRankings.source,
+      sourceUrl: fifaRankings.sourceUrl,
+      updatedAt: fifaRankings.updatedAt,
+      nextUpdateAt: fifaRankings.nextUpdateAt,
+      count: Object.keys(fifaRankings.rankings || {}).length
+    },
     researchFramework,
     contextMeta: context.meta || {},
     schedule,

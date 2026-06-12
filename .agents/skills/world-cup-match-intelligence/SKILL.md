@@ -52,11 +52,14 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Use public schedule/status sources such as ESPN/FIFA only for fixture timing and status unless full modeling inputs exist.
 - If a fixture is inside the three-day window but lacks local team static data, model parameters, odds, or market mappings, generate a conservative auto-baseline model from schedule/team identifiers. Do not call it pending-model in the user UI.
 - Auto-baseline fixtures may render basic win/draw/loss, total, and handicap probabilities, but must mark missing dynamic context and real markets. Do not render live edge or price advice unless real odds/Polymarket mappings exist.
+- Auto-baseline fixtures must still merge any available generated `worldcup-context.json` dynamic context by schedule id. If the sync produced lineup/news/weather/AI fields, the dashboard should show them instead of default placeholders.
 - Keep full local models and auto-baseline fixtures visually distinct in the UI and API payload.
 
 ## Static Match Context
 
 - Team static data should include world ranking when available, with source name, source URL, and update date.
+- World ranking should use an official/public ranking source or a timestamped local snapshot fallback such as `data/fifa-rankings.json`; it should not remain blank for common national teams.
+- If head-to-head is not yet available for an auto-baseline fixture, show a structured missing/pending status with source target, not a blank value.
 - Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
 - Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.
 - Historical context outside the four-year window may be shown as background only; label it separately from model inputs.
