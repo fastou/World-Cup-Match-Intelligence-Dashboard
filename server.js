@@ -14,6 +14,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 6500;
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
+const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
+const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
+const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const ELITE_LEADERBOARD_CACHE_TTL_MS = 15 * 60 * 1000;
 const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 100);
@@ -166,6 +169,54 @@ function hoursSince(iso, now = Date.now()) {
   const ts = new Date(iso).getTime();
   if (!Number.isFinite(ts)) return Infinity;
   return Math.max(0, (now - ts) / 3600000);
+}
+
+function shanghaiDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}${parts.month}${parts.day}`;
+}
+
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 86400000);
+}
+
+function dateMs(iso) {
+  const ms = new Date(iso || "").getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function statusName(value) {
+  return String(value || "").toLowerCase();
+}
+
+function isFinishedStatus(status) {
+  const normalized = statusName(status);
+  return normalized.includes("final")
+    || normalized.includes("post")
+    || normalized.includes("full_time")
+    || normalized.includes("full-time")
+    || normalized.includes("finished")
+    || normalized.includes("complete");
+}
+
+function inUpcomingWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DAYS) {
+  const kickoffMs = dateMs(kickoffIso);
+  if (!kickoffMs) return false;
+  const hideAfterMs = MATCH_HIDE_AFTER_HOURS * 3600000;
+  const windowEnd = nowMs + days * 86400000;
+  return kickoffMs >= nowMs - hideAfterMs && kickoffMs <= windowEnd;
+}
+
+function hasRecordedFinal(matchId, finalResults) {
+  return Boolean(finalResults && finalResults.has(matchId));
 }
 
 function poisson(lambda, goals) {
@@ -669,8 +720,99 @@ function buildAiPrediction(match) {
 
 function attachAiPredictions(matches) {
   for (const match of matches || []) {
+    if (match.scheduleOnly) continue;
     match.aiPrediction = buildAiPrediction(match);
   }
+}
+
+async function fetchFinalResults() {
+  try {
+    await ensureHistorySchema();
+    const raw = await runSql("SELECT match_id, status, finished_at, result_key, result_label FROM match_results WHERE status = 'final';", [], "all");
+    return new Map((JSON.parse(raw || "[]") || []).map((row) => [row.match_id, row]));
+  } catch (error) {
+    console.error(`Failed to read match results: ${error.message}`);
+    return new Map();
+  }
+}
+
+function matchScheduleKey(homeName, awayName) {
+  const normalize = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return [normalize(homeName), normalize(awayName)].sort().join(":");
+}
+
+function scheduleEventKey(event) {
+  return matchScheduleKey(event.home?.name || event.homeName, event.away?.name || event.awayName);
+}
+
+function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.now()) {
+  if (hasRecordedFinal(match.id, finalResults)) return false;
+  const schedule = scheduleByKey.get(matchScheduleKey(match.homeName, match.awayName));
+  if (schedule?.completed || isFinishedStatus(schedule?.status)) return false;
+  return inUpcomingWindow(match.kickoffShanghai, nowMs);
+}
+
+function schedulePlaceholderFromEvent(event, scheduleByKey, modeledKeys, finalResults, nowMs = Date.now()) {
+  const kickoffMs = dateMs(event.kickoffUtc);
+  if (!kickoffMs || !inUpcomingWindow(event.kickoffUtc, nowMs)) return null;
+  if (event.completed || isFinishedStatus(event.status)) return null;
+  const key = scheduleEventKey(event);
+  if (modeledKeys.has(key)) return null;
+  if (hasRecordedFinal(event.scheduleId, finalResults)) return null;
+  return {
+    id: `schedule-${event.scheduleId || key}`,
+    scheduleOnly: true,
+    scheduleStatus: event.status || "STATUS_SCHEDULED",
+    scheduleStatusDetail: event.statusDetail || "Scheduled",
+    scheduleSource: event.source,
+    homeName: event.home?.name || "TBD",
+    awayName: event.away?.name || "TBD",
+    home: event.home?.code || "",
+    away: event.away?.code || "",
+    group: "待确认",
+    venue: "待确认",
+    matchday: "-",
+    kickoffShanghai: new Date(kickoffMs).toISOString(),
+    aiPrediction: {
+      label: "待建模",
+      probability: null,
+      confidence: "low",
+      tradeLabel: "等待数据",
+      restrictions: ["缺少本地研究基线", "缺少盘口", "缺少动态情报"],
+      rows: [],
+      reasons: ["这场比赛来自三天赛程源，但还没有完整球队静态数据、模型参数和盘口映射。"]
+    },
+    recommendations: []
+  };
+}
+
+function filterAndAugmentMatches(matches, schedule, finalResults) {
+  const nowMs = Date.now();
+  const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
+  const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
+  const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(match.homeName, match.awayName)));
+  const scheduleOnly = (schedule.matches || [])
+    .map((event) => schedulePlaceholderFromEvent(event, scheduleByKey, modeledKeys, finalResults, nowMs))
+    .filter(Boolean);
+  const combined = [...visibleModeled, ...scheduleOnly]
+    .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
+
+  return {
+    matches: combined,
+    visibility: {
+      windowDays: MATCH_WINDOW_DAYS,
+      hideAfterHours: MATCH_HIDE_AFTER_HOURS,
+      modeledTotal: matches.length,
+      modeledVisible: visibleModeled.length,
+      scheduleOnly: scheduleOnly.length,
+      hiddenModeled: matches.length - visibleModeled.length,
+      completedResults: finalResults.size,
+      source: schedule.source,
+      ok: schedule.ok,
+      error: schedule.error,
+      lastUpdated: schedule.lastUpdated
+    }
+  };
 }
 
 function normalizeMatch(match, teams, context, polymarket) {
@@ -911,6 +1053,62 @@ async function fetchPolymarket() {
     })),
     historySource: history,
     markets: normalizedMarkets
+  };
+}
+
+async function fetchScheduleWindow(now = new Date()) {
+  const startedAt = Date.now();
+  const dates = [];
+  for (let offset = 0; offset <= MATCH_WINDOW_DAYS; offset += 1) {
+    dates.push(shanghaiDateKey(addDays(now, offset)));
+  }
+  const url = `${ESPN_WORLDCUP_SCOREBOARD}?dates=${dates[0]}-${dates[dates.length - 1]}`;
+  const result = await timedFetchJson(url);
+  if (!result.ok) {
+    return {
+      ok: false,
+      source: "ESPN FIFA World Cup scoreboard",
+      url,
+      lastUpdated: new Date().toISOString(),
+      latencyMs: result.latencyMs,
+      error: translateError(result.error),
+      matches: []
+    };
+  }
+
+  const events = Array.isArray(result.data?.events) ? result.data.events : [];
+  const matches = events.map((event) => {
+    const competition = event.competitions?.[0] || {};
+    const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
+    const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
+    const away = competitors.find((item) => item.homeAway === "away") || competitors[1] || {};
+    return {
+      scheduleId: String(event.id || ""),
+      name: event.name || event.shortName || "",
+      kickoffUtc: event.date || competition.date || "",
+      status: event.status?.type?.name || "",
+      statusDetail: event.status?.type?.shortDetail || event.status?.type?.detail || "",
+      completed: Boolean(event.status?.type?.completed) || isFinishedStatus(event.status?.type?.name),
+      home: {
+        code: home.team?.abbreviation || "",
+        name: home.team?.displayName || home.team?.name || ""
+      },
+      away: {
+        code: away.team?.abbreviation || "",
+        name: away.team?.displayName || away.team?.name || ""
+      },
+      source: "ESPN FIFA World Cup scoreboard"
+    };
+  });
+
+  return {
+    ok: true,
+    source: "ESPN FIFA World Cup scoreboard",
+    url,
+    lastUpdated: new Date().toISOString(),
+    latencyMs: Date.now() - startedAt,
+    windowDays: MATCH_WINDOW_DAYS,
+    matches
   };
 }
 
@@ -1725,8 +1923,13 @@ async function buildDashboard({ force = false } = {}) {
     },
     matches: {}
   });
-  const polymarket = await fetchPolymarket();
-  const matches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
+  const [polymarket, schedule, finalResults] = await Promise.all([
+    fetchPolymarket(),
+    fetchScheduleWindow(),
+    fetchFinalResults()
+  ]);
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults);
   attachMarketCharts(matches, polymarket);
   const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
   attachAiPredictions(matches);
@@ -1734,7 +1937,8 @@ async function buildDashboard({ force = false } = {}) {
     meta: {
       ...local.meta,
       generatedAt: new Date().toISOString(),
-      cacheTtlSeconds: Math.round(CACHE_TTL_MS / 1000)
+      cacheTtlSeconds: Math.round(CACHE_TTL_MS / 1000),
+      matchWindow: visibility
     },
     sources: [
       {
@@ -1755,6 +1959,13 @@ async function buildDashboard({ force = false } = {}) {
         error: context.meta?.error
       },
       {
+        source: "三天赛程窗口",
+        ok: schedule.ok,
+        lastUpdated: schedule.lastUpdated || "",
+        error: schedule.error,
+        detail: `${visibility.modeledVisible} 场已建模 · ${visibility.scheduleOnly} 场待建模 · ${visibility.hiddenModeled} 场已隐藏`
+      },
+      {
         source: "足球高手账户",
         ok: eliteTraders.ok,
         lastUpdated: eliteTraders.updatedAt || "",
@@ -1766,6 +1977,7 @@ async function buildDashboard({ force = false } = {}) {
     teams: local.teams,
     researchFramework,
     contextMeta: context.meta || {},
+    schedule,
     matches,
     eliteTraders,
     polymarket
