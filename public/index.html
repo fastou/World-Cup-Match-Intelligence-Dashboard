@@ -1190,6 +1190,10 @@
         white-space: nowrap;
       }
 
+      .chart-source.live {
+        color: var(--green);
+      }
+
       .empty,
       .error {
         padding: 14px;
@@ -1938,10 +1942,10 @@
           ctx.lineTo(width, height - 1);
           ctx.stroke();
 
-          if (!points.length) {
+          if (points.length < 2) {
             ctx.fillStyle = "#8b958f";
             ctx.font = "11px system-ui, sans-serif";
-            ctx.fillText("无曲线", 40, 21);
+            ctx.fillText("无实时曲线", 26, 21);
             return;
           }
 
@@ -1988,18 +1992,19 @@
           ctx.fillStyle = "#fbfcfa";
           ctx.fillRect(0, 0, width, height);
 
-          const values = series.flatMap((item) => (item.history || []).map((point) => point.p));
+          const liveSeries = series.filter((item) => Array.isArray(item.history) && item.history.length >= 2);
+          const values = liveSeries.flatMap((item) => item.history.map((point) => point.p));
           if (!values.length) {
             ctx.fillStyle = "#66706b";
             ctx.font = "13px system-ui, sans-serif";
-            ctx.fillText("暂无历史曲线，等待盘口快照更新", pad.left, pad.top + 24);
+            ctx.fillText("未匹配到实时历史曲线；当前只显示价格快照", pad.left, pad.top + 24);
             return;
           }
 
           const minY = Math.max(0, Math.min(...values) - 0.04);
           const maxY = Math.min(1, Math.max(...values) + 0.04);
           const spanY = Math.max(0.01, maxY - minY);
-          const times = series.flatMap((item) => (item.history || []).map((point) => point.t));
+          const times = liveSeries.flatMap((item) => item.history.map((point) => point.t));
           const minT = Math.min(...times);
           const maxT = Math.max(...times);
           const spanT = Math.max(1, maxT - minT);
@@ -2018,9 +2023,8 @@
             ctx.fillText(label, width - pad.right + 8, y + 4);
           });
 
-          series.forEach((item, index) => {
+          liveSeries.forEach((item, index) => {
             const history = item.history || [];
-            if (!history.length) return;
             const color = chartColors[index % chartColors.length];
             ctx.strokeStyle = color;
             ctx.lineWidth = 2.5;
@@ -2063,7 +2067,7 @@
             name: rec.name,
             price: rec.marketPrice,
             source: rec.chart?.source,
-            history: rec.chart?.history || []
+            history: Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2 ? rec.chart.history : []
           }));
           return `
             <div class="odds-board-panel ${index === 0 ? "active" : ""}" data-odds-panel="${escapeHtml(group.type)}">
@@ -2343,8 +2347,8 @@
             <td class="numeric">${fmtPct(rec.edge)}</td>
             <td class="numeric">${rec.decision?.gated ? "等待" : fmtPrice(rec.maxBuyPrice)}</td>
             <td class="chart-cell">
-              <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(rec.chart?.history || []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
-              <div class="chart-source">${escapeHtml(rec.chart?.source || "无曲线")}</div>
+              <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2 ? rec.chart.history : []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
+              <div class="chart-source ${rec.chart?.source === "Polymarket" && rec.chart?.history?.length >= 2 ? "live" : ""}">${escapeHtml(rec.chart?.source === "Polymarket" && rec.chart?.history?.length >= 2 ? "Polymarket 实时曲线" : rec.chart?.source === "本地盘口快照" ? "本地参考价，无实时曲线" : "未匹配实时曲线")}</div>
             </td>
             <td>
               <span class="decision ${rec.decision.action}">${escapeHtml(rec.decision.label)}</span>

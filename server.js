@@ -15,6 +15,8 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 6500;
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
+const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 80);
+const POLYMARKET_HISTORY_BATCH_SIZE = 20;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
@@ -719,13 +721,13 @@ function buildCompleteness(match, polymarket) {
   const sourceUpdatedAt = context.updatedAt;
   const marketUpdatedAt = match.manualMarkets && match.manualMarkets.lastUpdated;
   const hasRealMarket = match.manualMarkets?.sourceType !== "auto-baseline";
-  const chartCount = (match.recommendations || []).filter((rec) => rec.chart && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2).length;
+  const polymarketChartCount = (match.recommendations || []).filter((rec) => rec.chart?.source === "Polymarket" && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2).length;
   const lineupStatus = lineups.status === "confirmed" ? "synced" : lineups.status === "projected" ? "stale" : lineups.queried || sources.lineups?.status === "queried-unconfirmed" ? "queried" : "missing";
   const injuryStatus = sourcedFreshnessStatus(sources.injuries, sourceUpdatedAt, 36);
   const newsStatus = sourcedFreshnessStatus(sources.teamNews, sourceUpdatedAt, 24);
   const weatherStatus = sources.weather?.status === "coordinate-ready" ? "queried" : sources.weather?.ok === false ? "missing" : freshnessStatus(context.weather?.updatedAt || sources.weather?.updatedAt, 12);
   const marketStatus = hasRealMarket ? freshnessStatus(marketUpdatedAt, 6) : "missing";
-  const polymarketStatus = polymarket && polymarket.ok && chartCount > 0 ? "synced" : chartCount > 0 ? "stale" : "missing";
+  const polymarketStatus = polymarket && polymarket.ok && polymarketChartCount > 0 ? "synced" : polymarketChartCount > 0 ? "stale" : "missing";
   const aiStatus = sources.aiAnalysis?.status === "rule-fallback" || context.aiAnalysis?.fallback ? "queried" : sources.aiAnalysis?.ok === false ? "missing" : freshnessStatus(sources.aiAnalysis?.updatedAt || context.aiAnalysis?.updatedAt, 6);
 
   const components = [
@@ -735,7 +737,7 @@ function buildCompleteness(match, polymarket) {
     componentStatus("天气", weatherStatus, context.weather?.summary || "等待球场天气"),
     componentStatus("AI综合", aiStatus, context.aiAnalysis?.summary || sources.aiAnalysis?.error || "等待 OpenAI 综合分析"),
     componentStatus("盘口", marketStatus, match.manualMarkets?.source || "盘口快照缺失"),
-    componentStatus("Polymarket曲线", polymarketStatus, chartCount ? `${chartCount} 条曲线可用` : "未匹配到曲线")
+    componentStatus("Polymarket曲线", polymarketStatus, polymarketChartCount ? `${polymarketChartCount} 条 Polymarket 曲线可用` : "未匹配到 Polymarket 实时曲线")
   ];
 
   const scoreByStatus = { synced: 1, stale: 0.5, queried: 0.35, missing: 0 };
@@ -1100,7 +1102,8 @@ function attachMarketCharts(matches, polymarket) {
           marketQuestion: "本地盘口基线",
           label: recommendation.name,
           currentPrice: recommendation.marketPrice,
-          history: localHistory.length ? localHistory : (typeof recommendation.marketPrice === "number" ? [{ t: now, p: recommendation.marketPrice }] : [])
+          history: localHistory.length >= 2 ? localHistory : [],
+          status: localHistory.length >= 2 ? "local-history" : "price-only"
         };
       }
     }
@@ -1538,10 +1541,10 @@ async function fetchPolymarket(schedule = null) {
   const normalizedMarkets = markets
     .slice(0, 12)
     .map(normalizePolymarketMarket);
-  const tokenIds = normalizedMarkets
+  const tokenIds = [...new Set(normalizedMarkets
     .flatMap((market) => market.tokens.map((token) => token.tokenId))
-    .filter(Boolean)
-    .slice(0, 20);
+    .filter(Boolean))]
+    .slice(0, POLYMARKET_HISTORY_TOKEN_LIMIT);
   const history = tokenIds.length ? await fetchPriceHistory(tokenIds) : emptyHistory("没有可用 token_id");
 
   for (const market of normalizedMarkets) {
@@ -1816,6 +1819,35 @@ function emptyHistory(error) {
 }
 
 async function fetchPriceHistory(tokenIds) {
+  const uniqueTokenIds = [...new Set(tokenIds)].filter(Boolean);
+  if (!uniqueTokenIds.length) return emptyHistory("没有可用 token_id");
+  const batches = [];
+  for (let index = 0; index < uniqueTokenIds.length; index += POLYMARKET_HISTORY_BATCH_SIZE) {
+    batches.push(uniqueTokenIds.slice(index, index + POLYMARKET_HISTORY_BATCH_SIZE));
+  }
+  const batchResults = await Promise.all(batches.map((batch) => fetchPriceHistoryBatch(batch)));
+  const history = {};
+  for (const result of batchResults) {
+    Object.assign(history, result.history || {});
+  }
+  const failures = batchResults.filter((result) => !result.ok);
+  return {
+    source: "Polymarket 批量价格历史 API",
+    ok: failures.length === 0,
+    partial: failures.length > 0 && failures.length < batchResults.length,
+    error: failures.map((result) => result.error).filter(Boolean).join("; "),
+    latencyMs: batchResults.reduce((sum, result) => sum + (result.latencyMs || 0), 0),
+    startTs: batchResults.find((result) => result.startTs)?.startTs || null,
+    endTs: batchResults.find((result) => result.endTs)?.endTs || null,
+    fidelityMinutes: PRICE_HISTORY_FIDELITY_MINUTES,
+    requestedTokens: uniqueTokenIds.length,
+    returnedTokens: Object.keys(history).length,
+    batchCount: batches.length,
+    history
+  };
+}
+
+async function fetchPriceHistoryBatch(tokenIds) {
   const endTs = Math.floor(Date.now() / 1000);
   const startTs = endTs - PRICE_HISTORY_HOURS * 60 * 60;
   const result = await timedFetchJson("https://clob.polymarket.com/batch-prices-history", {
@@ -1859,6 +1891,8 @@ async function fetchPriceHistory(tokenIds) {
     startTs,
     endTs,
     fidelityMinutes: PRICE_HISTORY_FIDELITY_MINUTES,
+    requestedTokens: tokenIds.length,
+    returnedTokens: Object.keys(history).length,
     history
   };
 }
