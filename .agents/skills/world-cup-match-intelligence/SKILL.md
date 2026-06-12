@@ -43,6 +43,23 @@ Use this skill when building, modifying, operating, or extending a football matc
    - observe/wait/reduce/add labels
 6. Persist newly important fields through the archive layer when they matter for later analysis.
 7. Validate with local commands and API checks before committing.
+8. For dashboard changes, deploy after validation and then commit/push. If GitHub push times out, report the local commit and ahead status.
+
+## Match Window And Lifecycle
+
+- Default dashboard scope is the next three days of not-finished matches, not only today's matches.
+- Hide a match when a final result exists in `match_results`, or when the kickoff is more than the configured post-kickoff grace period ago and no live status keeps it active.
+- Use public schedule/status sources such as ESPN/FIFA only for fixture timing and status unless full modeling inputs exist.
+- If a fixture is inside the three-day window but lacks local team static data, model parameters, odds, or market mappings, show it as schedule-only/pending-model. Do not render probabilities, edge, or price advice for it.
+- Keep modeled matches and schedule-only fixtures visually distinct in the UI and API payload.
+
+## Static Match Context
+
+- Team static data should include world ranking when available, with source name, source URL, and update date.
+- Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
+- Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.
+- Historical context outside the four-year window may be shown as background only; label it separately from model inputs.
+- When static context is added, surface it in the Static tab and preserve it in dashboard history if it affects future review.
 
 ## Data Quality Logic
 
@@ -56,6 +73,7 @@ Downgrade output when inputs are incomplete:
 
 - Missing lineups or injuries: no strong confidence or aggressive action label.
 - Missing odds or Polymarket curves: no price guidance.
+- Schedule-only fixtures: no AI signal, no edge, and no max reference price until baseline model, static teams, odds, and dynamic context are available.
 - Stale news, weather, or AI synthesis: show the stale reason and update time.
 - Major changes such as goalkeeper changes, core-player absence, red cards, severe weather, or large market moves should trigger a recomputation and visible reason.
 
@@ -77,6 +95,8 @@ When maintaining public market data:
 - Keep chart controls usable for each market type and each outcome.
 - Track elite football accounts from public data by transparent criteria such as soccer-market realized PnL, win rate, sample size, and recent activity.
 - Show account positions as expandable row details with account, side, amount, average or latest price, timestamp, market, and source status.
+- Fetch and display top holders for relevant Polymarket condition/token pairs when public holder data is available. Mark whether holders match the football Top 100 list.
+- Store holder snapshots separately for recommendation-mapped markets and general World Cup market-pool tokens so later analysis can compare holder behavior to outcomes.
 - If account or position data is unavailable, show unavailable status instead of fallback-looking fake rows.
 
 ## History And Backtesting
@@ -87,6 +107,8 @@ Important dashboard updates should be archived so later strategy analysis can co
 - public market prices and curves
 - dynamic context state
 - elite account positions
+- top holder snapshots
+- static world rankings and head-to-head context
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.
