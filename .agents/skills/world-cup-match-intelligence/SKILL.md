@@ -81,6 +81,16 @@ Downgrade output when inputs are incomplete:
 - Stale news, weather, or AI synthesis: show the stale reason and update time.
 - Major changes such as goalkeeper changes, core-player absence, red cards, severe weather, or large market moves should trigger a recomputation and visible reason.
 
+Every data dimension should use an explicit source chain instead of simply waiting:
+
+- `primary`: official or closest public source for the fact, for example schedule/venue/status from ESPN/FIFA, weather from Open-Meteo, rankings from FIFA snapshots, market curves from Polymarket, and lineups/injuries from official or reputable match previews.
+- `backup`: reputable public search/articles for the same dimension, with source URLs and extraction status preserved.
+- `fallback`: a conservative, clearly labelled low-confidence baseline from already verified facts such as schedule, venue, ranking, team rating, weather availability, and model priors.
+
+Fallbacks may explain uncertainty and keep the page useful, but they must not fabricate unavailable facts. For example, do not create starting XIs, confirmed injuries, holder rows, odds, or head-to-head scores when no source supports them. Show `queried / pending`, `rule fallback`, or `unstructured` instead of blank values when the sync ran but did not produce a verified fact.
+
+Ranking, venue, weather, recent form, tactical matchup, AI synthesis, and four-year head-to-head context should all have either a verified value or a visible low-confidence fallback. A plain `waiting` state should be reserved for source failures, not for dimensions that can be explained from existing baseline inputs.
+
 ## Public Source Sync
 
 When updating source collection:
@@ -90,6 +100,8 @@ When updating source collection:
 - Add multiple sources when a dimension is often missing, but preserve per-source status instead of hiding failures.
 - Keep fetch timeouts bounded; one slow source should not block the whole dashboard.
 - Optional AI synthesis must summarize only retrieved public facts and explicitly state missing inputs.
+- Public sync should generate `worldcup-context.json` fields for lineups, injuries, team news, recent form, tactical matchup, weather, AI synthesis, and head-to-head. If a field cannot be verified, write a structured low-confidence explanation with source status rather than leaving the UI blank.
+- ESPN schedule venue data should be carried into match records and used to drive weather lookup whenever possible.
 
 ## Polymarket And Account Intelligence
 

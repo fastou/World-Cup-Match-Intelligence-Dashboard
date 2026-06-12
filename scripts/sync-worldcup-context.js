@@ -4,19 +4,51 @@ const { recordContextSnapshot } = require("./history-store");
 
 const DASHBOARD_PATH = path.join(__dirname, "..", "data", "worldcup-dashboard.json");
 const CONTEXT_PATH = path.join(__dirname, "..", "data", "worldcup-context.json");
+const FIFA_RANKINGS_PATH = path.join(__dirname, "..", "data", "fifa-rankings.json");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const FETCH_TIMEOUT_MS = 8000;
 const MATCH_SYNC_TIMEOUT_MS = 50000;
 const RUN_TIMEOUT_MS = 90000;
 const OPENAI_TIMEOUT_MS = 30000;
+const WEATHER_REQUEST_SPACING_MS = 350;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 
 const VENUE_COORDINATES = {
+  "BMO Field": { latitude: 43.6332, longitude: -79.4186, label: "BMO Field, Toronto" },
+  "SoFi Stadium": { latitude: 33.9535, longitude: -118.3392, label: "SoFi Stadium, Inglewood" },
+  "Levi's Stadium": { latitude: 37.403, longitude: -121.97, label: "Levi's Stadium, Santa Clara" },
+  "MetLife Stadium": { latitude: 40.8135, longitude: -74.0745, label: "MetLife Stadium, East Rutherford" },
+  "Gillette Stadium": { latitude: 42.0909, longitude: -71.2643, label: "Gillette Stadium, Foxborough" },
+  "BC Place": { latitude: 49.2768, longitude: -123.1119, label: "BC Place, Vancouver" },
+  "NRG Stadium": { latitude: 29.6847, longitude: -95.4107, label: "NRG Stadium, Houston" },
+  "AT&T Stadium": { latitude: 32.7473, longitude: -97.0945, label: "AT&T Stadium, Arlington" },
+  "Lincoln Financial Field": { latitude: 39.9008, longitude: -75.1675, label: "Lincoln Financial Field, Philadelphia" },
+  "Estadio BBVA": { latitude: 25.6689, longitude: -100.2443, label: "Estadio BBVA, Guadalupe" },
+  "Mercedes-Benz Stadium": { latitude: 33.7554, longitude: -84.4008, label: "Mercedes-Benz Stadium, Atlanta" },
+  "Lumen Field": { latitude: 47.5952, longitude: -122.3316, label: "Lumen Field, Seattle" },
+  "Hard Rock Stadium": { latitude: 25.958, longitude: -80.2389, label: "Hard Rock Stadium, Miami Gardens" },
+  "Estadio Azteca": { latitude: 19.3029, longitude: -99.1505, label: "Estadio Azteca, Mexico City" },
   "墨西哥城": { latitude: 19.4326, longitude: -99.1332, label: "墨西哥城" },
   "瓜达拉哈拉/萨波潘": { latitude: 20.6597, longitude: -103.3496, label: "瓜达拉哈拉/萨波潘" },
   "待确认": null
+};
+
+const CITY_COORDINATES = {
+  Toronto: VENUE_COORDINATES["BMO Field"],
+  "Inglewood, California": VENUE_COORDINATES["SoFi Stadium"],
+  "Santa Clara, California": VENUE_COORDINATES["Levi's Stadium"],
+  "East Rutherford, New Jersey": VENUE_COORDINATES["MetLife Stadium"],
+  "Foxborough, Massachusetts": VENUE_COORDINATES["Gillette Stadium"],
+  Vancouver: VENUE_COORDINATES["BC Place"],
+  "Houston, Texas": VENUE_COORDINATES["NRG Stadium"],
+  "Arlington, Texas": VENUE_COORDINATES["AT&T Stadium"],
+  "Philadelphia, Pennsylvania": VENUE_COORDINATES["Lincoln Financial Field"],
+  Guadalupe: VENUE_COORDINATES["Estadio BBVA"],
+  "Atlanta, Georgia": VENUE_COORDINATES["Mercedes-Benz Stadium"],
+  "Seattle, Washington": VENUE_COORDINATES["Lumen Field"],
+  "Miami Gardens, Florida": VENUE_COORDINATES["Hard Rock Stadium"]
 };
 
 const TEAM_SEARCH_NAMES = {
@@ -95,6 +127,17 @@ const ARTICLE_DOMAINS = [
   "si.com",
   "sportingnews.com",
   "sportsmole.co.uk",
+  "rotowire.com",
+  "covers.com",
+  "theanalyst.com",
+  "skysports.com",
+  "sportskeeda.com",
+  "worldsoccer.com",
+  "soccerway.com",
+  "worldfootball.net",
+  "11v11.com",
+  "transfermarkt.com",
+  "fotmob.com",
   "101greatgoals.com",
   "futbolupdate.com",
   "goal.com",
@@ -139,6 +182,12 @@ const DIRECT_MATCH_SOURCES = {
 };
 
 let envFileCache = null;
+let weatherQueue = Promise.resolve();
+const weatherCache = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function readEnvFile() {
   if (envFileCache) return envFileCache;
@@ -309,6 +358,34 @@ function scheduleEventKey(event) {
   return matchScheduleKey(event.home?.name || event.homeName, event.away?.name || event.awayName);
 }
 
+function normalizedVenueInfo(rawVenue = {}) {
+  const address = rawVenue.address || {};
+  return {
+    id: String(rawVenue.id || ""),
+    name: rawVenue.fullName || rawVenue.name || "",
+    city: address.city || "",
+    country: address.country || ""
+  };
+}
+
+function venueLabel(venueInfo = {}) {
+  return [venueInfo.name, venueInfo.city, venueInfo.country].filter(Boolean).join(", ") || "待确认";
+}
+
+function lookupVenueCoordinates(match) {
+  const candidates = [
+    match.venueInfo?.name,
+    match.venue,
+    match.venueInfo?.city,
+    String(match.venue || "").split(",")[0]
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (VENUE_COORDINATES[candidate]) return VENUE_COORDINATES[candidate];
+    if (CITY_COORDINATES[candidate]) return CITY_COORDINATES[candidate];
+  }
+  return null;
+}
+
 async function fetchScheduleWindow(now = new Date()) {
   const dates = [];
   for (let offset = 0; offset <= MATCH_WINDOW_DAYS; offset += 1) {
@@ -335,6 +412,7 @@ async function fetchScheduleWindow(now = new Date()) {
       const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
       const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
       const away = competitors.find((item) => item.homeAway === "away") || competitors[1] || {};
+      const venue = normalizedVenueInfo(competition.venue || event.venue || {});
       return {
         scheduleId: String(event.id || ""),
         kickoffUtc: event.date || competition.date || "",
@@ -348,7 +426,9 @@ async function fetchScheduleWindow(now = new Date()) {
         away: {
           code: away.team?.abbreviation || "",
           name: away.team?.displayName || away.team?.name || ""
-        }
+        },
+        venue,
+        source: "ESPN FIFA World Cup scoreboard"
       };
     })
   };
@@ -371,7 +451,8 @@ function scheduleMatchFromEvent(event) {
     awayEnglishName: TEAM_SEARCH_NAMES[awayCode] || event.away?.name || "",
     kickoffLocal: event.kickoffUtc,
     kickoffShanghai: new Date(kickoffMs).toISOString(),
-    venue: "待确认",
+    venue: venueLabel(event.venue),
+    venueInfo: event.venue || {},
     model: {
       lambdaHome: 1.1,
       lambdaAway: 1.0,
@@ -704,6 +785,104 @@ function summarizeNews(snippets, fallback) {
   return snippets.join(" / ").slice(0, 420);
 }
 
+function teamLabel(match, side) {
+  const code = side === "home" ? match.home : match.away;
+  const zhName = side === "home" ? match.homeName : match.awayName;
+  const enName = side === "home" ? match.homeEnglishName : match.awayEnglishName;
+  return `${zhName || TEAM_DISPLAY_NAMES_ZH[code] || code}（${enName || TEAM_SEARCH_NAMES[code] || code}）`;
+}
+
+function rankingRecord(fifaRankings, code) {
+  const normalized = String(code || "").toUpperCase();
+  const rank = Number(fifaRankings?.rankings?.[normalized]);
+  return Number.isFinite(rank) && rank > 0 ? rank : null;
+}
+
+function baselineRecentForm(match, side, fifaRankings, snippets = []) {
+  const code = side === "home" ? match.home : match.away;
+  const rank = rankingRecord(fifaRankings, code);
+  const name = teamLabel(match, side);
+  const notes = [];
+  if (rank) notes.push(`${name} FIFA 排名第 ${rank}，作为长期实力基线输入。`);
+  notes.push("已检索公开赛前信息；未抓到稳定可核验的近五场战绩接口时，不把近期状态强行加权。");
+  const teamNeedles = [
+    side === "home" ? match.homeName : match.awayName,
+    side === "home" ? match.homeEnglishName : match.awayEnglishName
+  ].filter(Boolean).map((item) => String(item).toLowerCase());
+  const relevant = snippets.find((snippet) => {
+    const lower = snippet.toLowerCase();
+    return teamNeedles.some((needle) => lower.includes(needle)) && !isStrongInjurySnippet(snippet);
+  });
+  if (relevant) notes.push(`公开源摘要：${relevant.slice(0, 160)}`);
+  return notes.slice(0, 3);
+}
+
+function nonWaitingItems(items) {
+  return Array.isArray(items) ? items.filter((item) => item && !/等待|未同步/.test(String(item))) : [];
+}
+
+function baselineTacticalMatchup(match, fifaRankings, aiAnalysis) {
+  if (aiAnalysis.ok && aiAnalysis.tacticalMatchup) return aiAnalysis.tacticalMatchup;
+  const homeRank = rankingRecord(fifaRankings, match.home);
+  const awayRank = rankingRecord(fifaRankings, match.away);
+  const rankingText = homeRank && awayRank
+    ? `FIFA 排名差：${teamLabel(match, "home")}第 ${homeRank}，${teamLabel(match, "away")}第 ${awayRank}。`
+    : "FIFA 排名只作为长期实力基线。";
+  return `${rankingText} 当前未抓到可核验首发和细化战术 preview，模型只按长期强度、赛程场地和天气做低置信对位，不额外加入阵型/球员 matchup。`;
+}
+
+function baselineLineupNote(match, side, aiAnalysis, previousNote) {
+  const aiNote = side === "home" ? aiAnalysis.homeNotes : aiAnalysis.awayNotes;
+  if (aiAnalysis.ok && aiNote) return aiNote;
+  if (previousNote && !/等待/.test(previousNote)) return previousNote;
+  return `${teamLabel(match, side)} 已进入自动检索；未发现官方首发或可靠预计 XI，不生成球员名单。`;
+}
+
+function baselineTeamNewsSummary(match, preview, aiAnalysis, teamNewsSnippets) {
+  if (aiAnalysis.ok && aiAnalysis.summary) return aiAnalysis.summary;
+  if (teamNewsSnippets.length) return summarizeNews(teamNewsSnippets, "");
+  const sourceCount = (preview.searches || []).filter((item) => item.ok).length
+    + (preview.articles || []).filter((item) => item.ok).length
+    + (preview.direct?.results || []).filter((item) => item.ok).length;
+  return `已完成 ${sourceCount} 个公开入口检索；未提取到足够可核验球队新闻，当前只作为低置信基线。`;
+}
+
+function baselineInjurySummary(preview, aiAnalysis, injurySnippets, directInjurySection) {
+  if (aiAnalysis.ok && aiAnalysis.injurySummary) return aiAnalysis.injurySummary;
+  const cleanDirect = cleanInjurySection(directInjurySection);
+  if (cleanDirect) return cleanDirect;
+  if (injurySnippets.length) return summarizeNews(injurySnippets, "");
+  const sourceCount = (preview.searches || []).filter((item) => item.ok).length
+    + (preview.articles || []).filter((item) => item.ok).length
+    + (preview.direct?.results || []).filter((item) => item.ok).length;
+  return `已查询 ${sourceCount} 个公开入口，未发现可确认重大伤停；赛前官方名单公布前仍按低置信处理。`;
+}
+
+function baselineAiAnalysis(match, preview, weather, fifaRankings, aiAnalysis) {
+  if (aiAnalysis.ok) return aiAnalysis;
+  const sourceCount = (preview.searches || []).filter((item) => item.ok).length
+    + (preview.articles || []).filter((item) => item.ok).length
+    + (preview.direct?.results || []).filter((item) => item.ok).length;
+  const homeRank = rankingRecord(fifaRankings, match.home);
+  const awayRank = rankingRecord(fifaRankings, match.away);
+  const rankingText = homeRank && awayRank ? `排名基线 ${match.homeName} ${homeRank} / ${match.awayName} ${awayRank}` : "排名基线部分可用";
+  return {
+    ok: true,
+    fallback: true,
+    updatedAt: shanghaiIso(),
+    model: "rule-based-public-source-fallback",
+    summary: `AI接口本轮不可用或未返回结构化结果；系统已用公开源检索、${rankingText}、天气和基线 xG 生成低置信综合。公开入口 ${sourceCount} 个，${weather.ok ? "天气已同步" : "天气未同步"}。`,
+    injurySummary: "",
+    lineupStatus: "unavailable",
+    lineupConfidence: "low",
+    homeNotes: "",
+    awayNotes: "",
+    tacticalMatchup: "",
+    riskFlags: ["AI结构化综合降级为规则兜底", "首发未确认"],
+    modelImpacts: []
+  };
+}
+
 function safeJsonFromText(text) {
   if (!text) return null;
   const trimmed = text.trim();
@@ -750,6 +929,10 @@ function normalizeAiAnalysis(raw, config) {
     lineupConfidence: ["low", "medium", "high"].includes(raw.lineupConfidence) ? raw.lineupConfidence : "low",
     homeNotes: String(raw.homeNotes || "").slice(0, 240),
     awayNotes: String(raw.awayNotes || "").slice(0, 240),
+    recentForm: {
+      home: Array.isArray(raw.recentForm?.home) ? raw.recentForm.home.map((item) => String(item).slice(0, 180)).slice(0, 3) : [],
+      away: Array.isArray(raw.recentForm?.away) ? raw.recentForm.away.map((item) => String(item).slice(0, 180)).slice(0, 3) : []
+    },
     tacticalMatchup: String(raw.tacticalMatchup || "").slice(0, 360),
     riskFlags: Array.isArray(raw.riskFlags) ? raw.riskFlags.map((item) => String(item).slice(0, 120)).slice(0, 5) : [],
     modelImpacts: impacts.map((impact) => ({
@@ -821,6 +1004,10 @@ async function fetchOpenAiAnalysis(match, preview, weather) {
         lineupConfidence: "low|medium|high",
         homeNotes: "中文",
         awayNotes: "中文",
+        recentForm: {
+          home: ["中文，只写公开摘要中可支持的近况；没有就写低置信基线说明"],
+          away: ["中文，只写公开摘要中可支持的近况；没有就写低置信基线说明"]
+        },
         tacticalMatchup: "中文",
         riskFlags: ["中文风险点"],
         modelImpacts: [
@@ -888,6 +1075,8 @@ function searchQueries(match) {
   return [
     `${homeEn} vs ${awayEn} World Cup preview team news lineups injuries`,
     `${homeEn} ${awayEn} predicted lineups injury news World Cup`,
+    `${homeEn} ${awayEn} head to head recent form`,
+    `${homeEn} ${awayEn} H2H results last meetings football`,
     `${match.homeName} ${match.awayName} 世界杯 伤停 首发 阵容`
   ];
 }
@@ -944,24 +1133,28 @@ async function fetchSearchPreview(match) {
 }
 
 async function fetchWeather(match) {
-  const venue = VENUE_COORDINATES[match.venue];
+  const venue = lookupVenueCoordinates(match);
   if (!venue) {
     return {
       ok: false,
+      updatedAt: shanghaiIso(),
       error: `没有 ${match.venue} 的坐标配置`,
-      summary: "天气源未配置，暂不调整总进球。"
+      summary: `${match.venue || "场馆"} 坐标未配置，天气不参与模型调整。`
     };
   }
 
   const date = new Date(match.kickoffLocal || match.kickoffShanghai);
   const datePart = Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${venue.latitude}&longitude=${venue.longitude}&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,wind_speed_10m&start_date=${datePart}&end_date=${datePart}&timezone=auto`;
-  const result = await withTimeout(timedFetchJson(url), FETCH_TIMEOUT_MS + 1500, "weather");
+  if (weatherCache.has(url)) return weatherCache.get(url);
+  const result = await enqueueWeatherFetch(url);
   if (!result.ok) {
-    return {
+    const failed = {
       ...result,
       summary: "天气源请求失败，暂不调整总进球。"
     };
+    weatherCache.set(url, failed);
+    return failed;
   }
 
   const hourly = result.data && result.data.hourly ? result.data.hourly : {};
@@ -1017,22 +1210,90 @@ async function fetchWeather(match) {
     });
   }
 
-  return {
+  const payload = {
     ok: true,
     url,
     updatedAt: shanghaiIso(),
     summary: `${venue.label} 开赛附近天气：${parts.join("，") || "数据不足"}。`,
     impacts
   };
+  weatherCache.set(url, payload);
+  return payload;
 }
 
-function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, previous = {}) {
+function enqueueWeatherFetch(url) {
+  const request = weatherQueue.then(async () => {
+    await sleep(WEATHER_REQUEST_SPACING_MS);
+    let result = await withTimeout(timedFetchJson(url), FETCH_TIMEOUT_MS + 1500, "weather");
+    if (!result.ok && /429|too many concurrent|too many requests/i.test(String(result.error || ""))) {
+      await sleep(1200);
+      result = await withTimeout(timedFetchJson(url), FETCH_TIMEOUT_MS + 1500, "weather retry");
+    }
+    return result;
+  });
+  weatherQueue = request.catch(() => null);
+  return request;
+}
+
+function buildHeadToHeadContext(match, preview, fifaRankings) {
   const nowIso = shanghaiIso();
-  const effectiveAiAnalysis = aiAnalysis.ok ? aiAnalysis : previous.aiAnalysis?.ok ? {
+  const kickoffYear = new Date(match.kickoffShanghai || match.kickoffLocal || Date.now()).getUTCFullYear();
+  const windowEnd = String(kickoffYear);
+  const windowStart = String(kickoffYear - 4);
+  const snippets = (preview.snippets || []).filter((snippet) => /head.?to.?head|h2h|last meeting|met|交手|历史/i.test(snippet));
+  const articleLinks = Array.isArray(preview.articleLinks) ? preview.articleLinks : [];
+  const homeRank = rankingRecord(fifaRankings, match.home);
+  const awayRank = rankingRecord(fifaRankings, match.away);
+  const rankingText = homeRank && awayRank ? `长期实力基线：${match.homeName} FIFA 第 ${homeRank}，${match.awayName} FIFA 第 ${awayRank}。` : "长期实力基线部分可用。";
+  return {
+    windowYears: 4,
+    windowStart,
+    windowEnd,
+    scope: "近四年公开交手检索",
+    summary: {
+      matches: null,
+      homeWins: null,
+      draws: null,
+      awayWins: null,
+      homeGoals: null,
+      awayGoals: null
+    },
+    latestMeetings: snippets.slice(0, 3).map((snippet) => ({
+      date: "",
+      competition: "公开源摘要",
+      score: snippet.slice(0, 180),
+      source: preview.url || "search preview"
+    })),
+    allTimeNote: snippets.length
+      ? `已抓到交手相关公开摘要 ${snippets.length} 条；未解析成可审计比分前不做数值加权。`
+      : "已纳入 H2H 检索，但本轮未抓到可结构化比分；不把未知交手当成 0 场。",
+    impact: `${rankingText} 四年交手未结构化前不调整模型，只作为赛前复核项。`,
+    sourceStatus: snippets.length ? "partial" : "queried-unstructured",
+    sources: [
+      {
+        name: preview.url ? "公开检索/可读文章" : "公开检索",
+        url: preview.url || "",
+        status: preview.ok ? "queried" : "failed",
+        detail: preview.ok ? "已查询，未完全结构化" : preview.error || "查询失败"
+      },
+      ...articleLinks.slice(0, 3).map((url) => ({
+        name: "候选 H2H/赛前文章",
+        url,
+        status: "candidate"
+      }))
+    ],
+    updatedAt: nowIso
+  };
+}
+
+function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fifaRankings = {}, previous = {}) {
+  const nowIso = shanghaiIso();
+  const aiWithFallback = baselineAiAnalysis(match, preview, weather, fifaRankings, aiAnalysis);
+  const effectiveAiAnalysis = aiWithFallback.ok ? aiWithFallback : previous.aiAnalysis?.ok ? {
     ...previous.aiAnalysis,
     stale: true,
     lastError: aiAnalysis.error || "本轮 AI 综合失败，保留上一次成功分析。"
-  } : aiAnalysis;
+  } : aiWithFallback;
   const snippets = preview.ok ? preview.snippets || [] : [];
   const sourceText = preview.text || "";
   const directSourceNames = (preview.direct?.results || []).filter((result) => result.ok).map((result) => result.name);
@@ -1045,15 +1306,25 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, pr
   const directTeamNewsSection = extractSection(sourceText, ["team news", "possible starting lineup", "projected lineup", "predicted xi"], 850);
   const homeLineupNote = extractTeamLineupNote(sourceText, match.homeName, match.home);
   const awayLineupNote = extractTeamLineupNote(sourceText, match.awayName, match.away);
-  const injurySummary = effectiveAiAnalysis.ok && effectiveAiAnalysis.injurySummary
-    ? effectiveAiAnalysis.injurySummary
-    : cleanInjurySection(directInjurySection) || summarizeNews(injurySnippets, "公开伤停源未发现可确认信息；发布强信号前仍需人工核对。");
-  const teamNewsSummary = effectiveAiAnalysis.ok && effectiveAiAnalysis.summary
-    ? effectiveAiAnalysis.summary
-    : directTeamNewsSection || summarizeNews(teamNewsSnippets, "公开球队新闻源暂未提供足够可用信息。");
+  const injurySummary = baselineInjurySummary(preview, effectiveAiAnalysis, injurySnippets, directInjurySection);
+  const teamNewsSummary = directTeamNewsSection || baselineTeamNewsSummary(match, preview, effectiveAiAnalysis, teamNewsSnippets);
+  const recentForm = {
+    home: effectiveAiAnalysis.recentForm?.home?.length
+      ? effectiveAiAnalysis.recentForm.home
+      : nonWaitingItems(previous.recentForm?.home).length
+        ? nonWaitingItems(previous.recentForm.home)
+        : baselineRecentForm(match, "home", fifaRankings, snippets),
+    away: effectiveAiAnalysis.recentForm?.away?.length
+      ? effectiveAiAnalysis.recentForm.away
+      : nonWaitingItems(previous.recentForm?.away).length
+        ? nonWaitingItems(previous.recentForm.away)
+        : baselineRecentForm(match, "away", fifaRankings, snippets)
+  };
+  const tacticalMatchup = baselineTacticalMatchup(match, fifaRankings, effectiveAiAnalysis);
 
   const lineups = {
     status: confirmedLineup ? "confirmed" : projectedLineup ? "projected" : "unavailable",
+    queried: Boolean(preview.ok || effectiveAiAnalysis.ok),
     statusLabel: confirmedLineup
       ? "公开源出现官方/确认首发字样，仍需人工核对官方比赛中心"
       : projectedLineup
@@ -1062,12 +1333,12 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, pr
     home: {
       formation: previous.lineups?.home?.formation || "待确认",
       xi: playerListFromNote(homeLineupNote),
-      notes: homeLineupNote || (effectiveAiAnalysis.ok && effectiveAiAnalysis.homeNotes ? effectiveAiAnalysis.homeNotes : previous.lineups?.home?.notes || "等待官方比赛中心或可靠赛前源更新。")
+      notes: homeLineupNote || baselineLineupNote(match, "home", effectiveAiAnalysis, previous.lineups?.home?.notes)
     },
     away: {
       formation: previous.lineups?.away?.formation || "待确认",
       xi: playerListFromNote(awayLineupNote),
-      notes: awayLineupNote || (effectiveAiAnalysis.ok && effectiveAiAnalysis.awayNotes ? effectiveAiAnalysis.awayNotes : previous.lineups?.away?.notes || "等待官方比赛中心或可靠赛前源更新。")
+      notes: awayLineupNote || baselineLineupNote(match, "away", effectiveAiAnalysis, previous.lineups?.away?.notes)
     }
   };
 
@@ -1081,13 +1352,11 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, pr
     lineups,
     injurySummary,
     teamNewsSummary,
-    recentForm: {
-      home: previous.recentForm?.home || ["等待公开近期状态源更新"],
-      away: previous.recentForm?.away || ["等待公开近期状态源更新"]
-    },
-    tacticalMatchup: effectiveAiAnalysis.ok && effectiveAiAnalysis.tacticalMatchup ? effectiveAiAnalysis.tacticalMatchup : previous.tacticalMatchup || "等待赛前 preview 和阵容信息后评估战术对位。",
+    recentForm,
+    tacticalMatchup,
     riskFlags: effectiveAiAnalysis.ok ? effectiveAiAnalysis.riskFlags : [],
     aiAnalysis: effectiveAiAnalysis,
+    headToHead: buildHeadToHeadContext(match, preview, fifaRankings),
     weather: {
       summary: weather.summary || "天气源未同步，暂不调整总进球。",
       updatedAt: weather.updatedAt || null
@@ -1095,34 +1364,44 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, pr
     modelImpacts,
     sources: {
       lineups: {
-        ok: confirmedLineup || projectedLineup,
-        updatedAt: preview.ok ? nowIso : null,
+        ok: Boolean(confirmedLineup || projectedLineup || preview.ok || effectiveAiAnalysis.ok),
+        status: confirmedLineup ? "confirmed" : projectedLineup ? "projected" : "queried-unconfirmed",
+        confidence: confirmedLineup ? "high" : projectedLineup ? "medium" : "low",
+        updatedAt: preview.ok || effectiveAiAnalysis.ok ? nowIso : null,
         url: preview.url || "",
         error: confirmedLineup ? "" : projectedLineup ? "媒体预计阵容，不是官方首发" : hasLineupSearchLead ? "仅搜索结果线索，未抓到可核验首发页面" : preview.ok ? "未发现可核验首发页面" : preview.error || "未同步"
       },
       injuries: {
-        ok: (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.ok && effectiveAiAnalysis.injurySummary),
+        ok: Boolean(preview.ok || effectiveAiAnalysis.ok),
+        status: (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.injurySummary) ? "verified-or-summarized" : "queried-unconfirmed",
+        confidence: (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.injurySummary) ? "medium" : "low",
         updatedAt: preview.ok || effectiveAiAnalysis.ok ? nowIso : null,
         url: preview.url || "",
-        error: (preview.ok && (injurySnippets.length || hasUsableInjuryText(sourceText))) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.injurySummary) ? "" : "未发现可确认伤停信息"
+        error: (preview.ok && (injurySnippets.length || hasUsableInjuryText(sourceText))) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.injurySummary) ? "" : "已查询，未发现可确认伤停信息"
       },
       teamNews: {
-        ok: (preview.ok && (teamNewsSnippets.length > 0 || Boolean(directTeamNewsSection))) || Boolean(effectiveAiAnalysis.ok && effectiveAiAnalysis.summary),
+        ok: Boolean(preview.ok || effectiveAiAnalysis.ok),
+        status: (preview.ok && (teamNewsSnippets.length > 0 || Boolean(directTeamNewsSection))) || Boolean(effectiveAiAnalysis.summary) ? "summarized" : "queried-low-signal",
+        confidence: (preview.ok && (teamNewsSnippets.length || directTeamNewsSection)) || Boolean(effectiveAiAnalysis.summary) ? "medium" : "low",
         updatedAt: preview.ok || effectiveAiAnalysis.ok ? nowIso : null,
         url: preview.url || "",
-        error: (preview.ok && (teamNewsSnippets.length || directTeamNewsSection)) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.summary) ? "" : "未发现足够球队新闻"
+        error: (preview.ok && (teamNewsSnippets.length || directTeamNewsSection)) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.summary) ? "" : "已查询，未发现足够球队新闻"
       },
       weather: {
         ok: Boolean(weather.ok),
+        status: weather.ok ? "synced" : "source-unavailable",
+        confidence: weather.ok ? "medium" : "low",
         updatedAt: weather.updatedAt || null,
         url: weather.url || "",
         error: weather.ok ? "" : weather.error || "未同步"
       },
       aiAnalysis: {
         ok: Boolean(effectiveAiAnalysis.ok),
+        status: effectiveAiAnalysis.fallback ? "rule-fallback" : effectiveAiAnalysis.ok ? "synced" : "source-unavailable",
+        confidence: effectiveAiAnalysis.fallback ? "low" : effectiveAiAnalysis.ok ? "medium" : "low",
         updatedAt: effectiveAiAnalysis.updatedAt || null,
         url: `${openAiConfig.baseUrl}/v1/responses`,
-        error: effectiveAiAnalysis.ok ? (effectiveAiAnalysis.stale ? effectiveAiAnalysis.lastError || "" : "") : aiAnalysis.error || "AI 综合分析未启用"
+        error: effectiveAiAnalysis.fallback ? "AI接口不可用，使用公开源/规则低置信兜底" : effectiveAiAnalysis.ok ? (effectiveAiAnalysis.stale ? effectiveAiAnalysis.lastError || "" : "") : aiAnalysis.error || "AI 综合分析未启用"
       }
     }
   };
@@ -1131,6 +1410,7 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, pr
 async function main() {
   const dashboard = await readJson(DASHBOARD_PATH);
   const previous = await readJson(CONTEXT_PATH, { meta: {}, matches: {} });
+  const fifaRankings = await readJson(FIFA_RANKINGS_PATH, {});
 
   const runTimeout = setTimeout(() => {
     console.error(`Context sync exceeded ${RUN_TIMEOUT_MS}ms`);
@@ -1145,7 +1425,7 @@ async function main() {
     ]);
     const openAiConfig = await getOpenAiConfig();
     const aiAnalysis = await fetchOpenAiAnalysis(match, preview, weather);
-    return [match.id, buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, previous.matches?.[match.id] || {})];
+    return [match.id, buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fifaRankings, previous.matches?.[match.id] || {})];
   })(), MATCH_SYNC_TIMEOUT_MS, `match ${match.id}`).then((result) => {
     if (Array.isArray(result)) return result;
     return [match.id, {

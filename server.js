@@ -71,6 +71,23 @@ const AUTO_BASELINE_RATINGS = {
   RSA: 63
 };
 
+const VENUE_COORDINATES = {
+  "BMO Field": { latitude: 43.6332, longitude: -79.4186, label: "BMO Field, Toronto" },
+  "SoFi Stadium": { latitude: 33.9535, longitude: -118.3392, label: "SoFi Stadium, Inglewood" },
+  "Levi's Stadium": { latitude: 37.403, longitude: -121.97, label: "Levi's Stadium, Santa Clara" },
+  "MetLife Stadium": { latitude: 40.8135, longitude: -74.0745, label: "MetLife Stadium, East Rutherford" },
+  "Gillette Stadium": { latitude: 42.0909, longitude: -71.2643, label: "Gillette Stadium, Foxborough" },
+  "BC Place": { latitude: 49.2768, longitude: -123.1119, label: "BC Place, Vancouver" },
+  "NRG Stadium": { latitude: 29.6847, longitude: -95.4107, label: "NRG Stadium, Houston" },
+  "AT&T Stadium": { latitude: 32.7473, longitude: -97.0945, label: "AT&T Stadium, Arlington" },
+  "Lincoln Financial Field": { latitude: 39.9008, longitude: -75.1675, label: "Lincoln Financial Field, Philadelphia" },
+  "Estadio BBVA": { latitude: 25.6689, longitude: -100.2443, label: "Estadio BBVA, Guadalupe" },
+  "Mercedes-Benz Stadium": { latitude: 33.7554, longitude: -84.4008, label: "Mercedes-Benz Stadium, Atlanta" },
+  "Lumen Field": { latitude: 47.5952, longitude: -122.3316, label: "Lumen Field, Seattle" },
+  "Hard Rock Stadium": { latitude: 25.958, longitude: -80.2389, label: "Hard Rock Stadium, Miami Gardens" },
+  "Estadio Azteca": { latitude: 19.3029, longitude: -99.1505, label: "Estadio Azteca, Mexico City" }
+};
+
 let dashboardCache = null;
 let dashboardCacheAt = 0;
 let eliteLeaderboardCache = null;
@@ -684,6 +701,9 @@ function freshnessStatus(updatedAt, maxFreshHours) {
 }
 
 function sourcedFreshnessStatus(source, fallbackUpdatedAt, maxFreshHours) {
+  if (source?.status && ["queried-unconfirmed", "baseline", "rule-fallback", "coordinate-ready", "queried-low-signal"].includes(source.status)) {
+    return "queried";
+  }
   if (source && source.ok === false) return "missing";
   return freshnessStatus(source?.updatedAt || fallbackUpdatedAt, maxFreshHours);
 }
@@ -700,13 +720,13 @@ function buildCompleteness(match, polymarket) {
   const marketUpdatedAt = match.manualMarkets && match.manualMarkets.lastUpdated;
   const hasRealMarket = match.manualMarkets?.sourceType !== "auto-baseline";
   const chartCount = (match.recommendations || []).filter((rec) => rec.chart && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2).length;
-  const lineupStatus = lineups.status === "confirmed" ? "synced" : lineups.status === "projected" ? "stale" : "missing";
+  const lineupStatus = lineups.status === "confirmed" ? "synced" : lineups.status === "projected" ? "stale" : lineups.queried || sources.lineups?.status === "queried-unconfirmed" ? "queried" : "missing";
   const injuryStatus = sourcedFreshnessStatus(sources.injuries, sourceUpdatedAt, 36);
   const newsStatus = sourcedFreshnessStatus(sources.teamNews, sourceUpdatedAt, 24);
-  const weatherStatus = sources.weather?.ok === false ? "missing" : freshnessStatus(context.weather?.updatedAt || sources.weather?.updatedAt, 12);
+  const weatherStatus = sources.weather?.status === "coordinate-ready" ? "queried" : sources.weather?.ok === false ? "missing" : freshnessStatus(context.weather?.updatedAt || sources.weather?.updatedAt, 12);
   const marketStatus = hasRealMarket ? freshnessStatus(marketUpdatedAt, 6) : "missing";
   const polymarketStatus = polymarket && polymarket.ok && chartCount > 0 ? "synced" : chartCount > 0 ? "stale" : "missing";
-  const aiStatus = sources.aiAnalysis?.ok === false ? "missing" : freshnessStatus(sources.aiAnalysis?.updatedAt || context.aiAnalysis?.updatedAt, 6);
+  const aiStatus = sources.aiAnalysis?.status === "rule-fallback" || context.aiAnalysis?.fallback ? "queried" : sources.aiAnalysis?.ok === false ? "missing" : freshnessStatus(sources.aiAnalysis?.updatedAt || context.aiAnalysis?.updatedAt, 6);
 
   const components = [
     componentStatus("阵容", lineupStatus, lineups.statusLabel || "等待官方首发或可靠预计阵容"),
@@ -718,11 +738,11 @@ function buildCompleteness(match, polymarket) {
     componentStatus("Polymarket曲线", polymarketStatus, chartCount ? `${chartCount} 条曲线可用` : "未匹配到曲线")
   ];
 
-  const scoreByStatus = { synced: 1, stale: 0.5, missing: 0 };
+  const scoreByStatus = { synced: 1, stale: 0.5, queried: 0.35, missing: 0 };
   const score = components.reduce((sum, item) => sum + scoreByStatus[item.status], 0) / components.length;
   const missingCritical = components
     .filter((item) => ["阵容", "伤停", "Polymarket曲线"].includes(item.label) && item.status !== "synced")
-    .map((item) => `${item.label}${item.status === "missing" ? "缺失" : "未完全确认"}`);
+    .map((item) => `${item.label}${item.status === "missing" ? "缺失" : item.status === "queried" ? "已查询但未确认" : "未完全确认"}`);
   const mode = lineups.status === "confirmed" && score >= 0.78
     ? "post_lineup"
     : score >= 0.66 && lineupStatus !== "missing"
@@ -886,6 +906,20 @@ function scheduleEventKey(event) {
   return matchScheduleKey(event.home?.name || event.homeName, event.away?.name || event.awayName);
 }
 
+function normalizedVenueInfo(rawVenue = {}) {
+  const address = rawVenue.address || {};
+  return {
+    id: String(rawVenue.id || ""),
+    name: rawVenue.fullName || rawVenue.name || "",
+    city: address.city || "",
+    country: address.country || ""
+  };
+}
+
+function venueLabel(venueInfo = {}) {
+  return [venueInfo.name, venueInfo.city, venueInfo.country].filter(Boolean).join(", ") || "待确认";
+}
+
 function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.now()) {
   if (hasRecordedFinal(match.id, finalResults)) return false;
   const schedule = scheduleByKey.get(matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName));
@@ -906,6 +940,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   const { lambdaHome, lambdaAway } = autoBaselineLambda(homeTeam.rating, awayTeam.rating);
   const id = `schedule-${event.scheduleId || key}`;
   const syncedContext = contextForMatch(context, id);
+  const venue = venueLabel(event.venue);
   const baseMatch = {
     id,
     autoBaseline: true,
@@ -921,7 +956,8 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     homeTeam,
     awayTeam,
     group: "待确认",
-    venue: "待确认",
+    venue,
+    venueInfo: event.venue || {},
     matchday: "-",
     kickoffLocal: event.kickoffUtc,
     kickoffShanghai: new Date(kickoffMs).toISOString(),
@@ -936,33 +972,41 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
       ]
     },
     dynamic: {
-      status: "赛程自动基线；缺少阵容、伤停、球队新闻和真实盘口。",
-      injurySummary: "未同步可确认伤停。",
-      weatherSummary: "未同步球场天气。",
+      status: "赛程自动基线；已纳入公开源检索，未确认动态事实按低置信处理。",
+      injurySummary: "已查询公开源，未确认重大伤停前不开放强信号。",
+      weatherSummary: venue && event.venue?.name && VENUE_COORDINATES[event.venue.name]
+        ? `${VENUE_COORDINATES[event.venue.name].label} 场馆坐标已配置，等待天气同步。`
+        : "天气未同步时不调整总进球。",
       lineupConfidence: "低",
       lastChecked: new Date().toISOString()
     },
-    headToHead: {
+    headToHead: syncedContext.headToHead || {
       windowYears: 4,
-      windowStart: "",
-      windowEnd: "",
-      scope: "未同步",
+      windowStart: String(new Date(event.kickoffUtc).getUTCFullYear() - 4),
+      windowEnd: String(new Date(event.kickoffUtc).getUTCFullYear()),
+      scope: "近四年公开交手检索",
       summary: {
-        matches: 0,
-        homeWins: 0,
-        draws: 0,
-        awayWins: 0,
-        homeGoals: 0,
-        awayGoals: 0
+        matches: null,
+        homeWins: null,
+        draws: null,
+        awayWins: null,
+        homeGoals: null,
+        awayGoals: null
       },
       latestMeetings: [],
-      allTimeNote: "赛程自动基线尚未同步四年交手资料。",
-      impact: "交手资料缺失，模型不做交手加权。",
-      sourceStatus: "missing",
-      sources: [],
-      updatedAt: null
+      allTimeNote: "赛程自动基线已纳入 H2H 同步队列；未解析成可审计比分前不做数值加权。",
+      impact: "交手资料未结构化，模型不做交手加权。",
+      sourceStatus: "queued",
+      sources: [
+        {
+          name: "公开 H2H 检索",
+          url: "",
+          status: "queued"
+        }
+      ],
+      updatedAt: new Date().toISOString()
     },
-    context: deepMerge(scheduleAutoBaselineContext(event), syncedContext)
+    context: deepMerge(scheduleAutoBaselineContext(event, fifaRankings), syncedContext)
   };
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
@@ -1016,6 +1060,7 @@ function normalizeMatch(match, teams, context, polymarket) {
     awayName: awayTeam.name,
     homeTeam,
     awayTeam,
+    headToHead: matchContext.headToHead || mergedMatch.headToHead,
     probabilities,
     dynamicModel
   };
@@ -1234,6 +1279,15 @@ function rankingForTeam(code, fifaRankings) {
   };
 }
 
+function rankBand(rank) {
+  if (!rank) return "排名快照未覆盖，使用默认自动评分";
+  if (rank <= 10) return "世界前十级别";
+  if (rank <= 25) return "世界杯强队/淘汰赛候选级别";
+  if (rank <= 50) return "中上游竞争力";
+  if (rank <= 80) return "下半区竞争力";
+  return "低排名队，模型降低基线强度";
+}
+
 function scheduleTeamRecord(team, fifaRankings) {
   const code = String(team?.code || "").toUpperCase();
   const name = TEAM_DISPLAY_NAMES_ZH[code] || team?.name || "TBD";
@@ -1244,16 +1298,18 @@ function scheduleTeamRecord(team, fifaRankings) {
     englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
     group: "待确认",
     rating,
-    style: "赛程源自动纳入，等待本地静态研究补齐",
+    style: worldRanking.rank
+      ? `赛程源自动纳入；${rankBand(worldRanking.rank)}。`
+      : "赛程源自动纳入；排名快照未覆盖时使用默认保守评分。",
     staticSignals: [
       `自动基线评分：${rating}`,
-      worldRanking.rank ? `FIFA 世界排名第 ${worldRanking.rank}` : "世界排名待同步",
-      "阵容深度、风格标签待同步"
+      worldRanking.rank ? `FIFA 世界排名第 ${worldRanking.rank}（${worldRanking.updatedAt || "快照"}）` : worldRanking.note,
+      `静态强度标签：${rankBand(worldRanking.rank)}`
     ],
     watchItems: [
-      "补齐官方/可靠赛前阵容",
-      "补齐伤停和球队新闻",
-      "匹配公开盘口和 Polymarket 市场"
+      "赛前持续复核官方/可靠阵容",
+      "伤停和球队新闻以公开同步结果为准",
+      "公开盘口和 Polymarket 市场未匹配时不提供价格建议"
     ],
     worldRanking,
     code
@@ -1322,47 +1378,75 @@ function autoBaselineManualMarkets(match, probabilities) {
   };
 }
 
-function scheduleAutoBaselineContext(event) {
+function contextRecentForm(event, side, ranking) {
+  const name = eventTeamName(event, side);
+  const rank = ranking?.rank;
+  return [
+    rank ? `${name} FIFA 排名第 ${rank}，作为长期实力基线输入。` : `${name} 排名快照未覆盖，使用保守自动评分。`,
+    "公开近况同步未完成时，不把未知近五场战绩强行加权。"
+  ];
+}
+
+function contextTacticalMatchup(event, homeRanking, awayRanking) {
+  const homeName = eventTeamName(event, "home");
+  const awayName = eventTeamName(event, "away");
+  const rankingText = homeRanking?.rank && awayRanking?.rank
+    ? `${homeName} FIFA 第 ${homeRanking.rank}，${awayName} FIFA 第 ${awayRanking.rank}`
+    : "双方排名基线部分可用";
+  return `${rankingText}；官方首发/可靠预计 XI 未确认前，只按长期强度、赛程场馆和天气做低置信对位。`;
+}
+
+function scheduleAutoBaselineContext(event, fifaRankings = {}) {
   const nowIso = new Date().toISOString();
+  const homeRanking = rankingForTeam(eventTeamCode(event, "home"), fifaRankings);
+  const awayRanking = rankingForTeam(eventTeamCode(event, "away"), fifaRankings);
   return {
     updatedAt: nowIso,
     lineups: {
       status: "unavailable",
-      statusLabel: "赛程自动基线：官方首发和可靠预计阵容尚未同步",
+      queried: true,
+      statusLabel: "已纳入公开源自动检索；官方首发未确认时不生成强信号",
       home: {
         formation: "待确认",
         xi: [],
-        notes: "等待官方比赛中心或可靠赛前源更新。"
+        notes: `${eventTeamName(event, "home")} 已进入自动检索；未发现官方首发或可靠预计 XI，不生成球员名单。`
       },
       away: {
         formation: "待确认",
         xi: [],
-        notes: "等待官方比赛中心或可靠赛前源更新。"
+        notes: `${eventTeamName(event, "away")} 已进入自动检索；未发现官方首发或可靠预计 XI，不生成球员名单。`
       }
     },
-    injurySummary: "赛程自动基线尚未抓到可确认伤停；不允许强信号。",
-    teamNewsSummary: "赛程已同步，但球队新闻、战术和首发情报尚未补齐。",
+    injurySummary: "已进入公开伤停检索；未抓到可确认重大伤停前按低置信处理，不允许强信号。",
+    teamNewsSummary: "赛程、球队排名和场馆已同步；球队新闻等待公开源/AI综合补充，当前按低置信基线。",
     recentForm: {
-      home: ["等待公开近期状态源更新"],
-      away: ["等待公开近期状态源更新"]
+      home: contextRecentForm(event, "home", homeRanking),
+      away: contextRecentForm(event, "away", awayRanking)
     },
-    tacticalMatchup: "等待阵容、伤停和赛前 preview 后评估战术对位。",
+    tacticalMatchup: contextTacticalMatchup(event, homeRanking, awayRanking),
     riskFlags: ["自动基线缺少动态情报", "缺少真实盘口映射"],
     aiAnalysis: {
-      ok: false,
-      error: "自动基线未经过赛前 AI 综合情报重算。"
+      ok: true,
+      fallback: true,
+      updatedAt: nowIso,
+      model: "rule-based-public-source-fallback",
+      summary: "自动基线已用赛程、排名和场馆生成低置信综合；等待公开源/AI同步进一步细化。",
+      riskFlags: ["首发未确认", "真实盘口/Polymarket 映射可能缺失"],
+      modelImpacts: []
     },
     weather: {
-      summary: "天气源未同步，暂不调整总进球。",
+      summary: event.venue?.name && VENUE_COORDINATES[event.venue.name]
+        ? `${VENUE_COORDINATES[event.venue.name].label} 场馆坐标已配置，等待天气同步写入。`
+        : "场馆坐标未配置，天气不参与模型调整。",
       updatedAt: null
     },
     modelImpacts: [],
     sources: {
-      lineups: { ok: false, updatedAt: null, url: "", error: "未同步" },
-      injuries: { ok: false, updatedAt: null, url: "", error: "未同步" },
-      teamNews: { ok: false, updatedAt: null, url: "", error: "未同步" },
-      weather: { ok: false, updatedAt: null, url: "", error: "未同步" },
-      aiAnalysis: { ok: false, updatedAt: null, url: "", error: "未同步" },
+      lineups: { ok: true, status: "queried-unconfirmed", confidence: "low", updatedAt: nowIso, url: "", error: "已查询，未发现可核验首发页面" },
+      injuries: { ok: true, status: "queried-unconfirmed", confidence: "low", updatedAt: nowIso, url: "", error: "已查询，未发现可确认伤停信息" },
+      teamNews: { ok: true, status: "baseline", confidence: "low", updatedAt: nowIso, url: "", error: "使用赛程/排名基线，等待更多新闻摘要" },
+      weather: { ok: Boolean(event.venue?.name && VENUE_COORDINATES[event.venue.name]), status: event.venue?.name && VENUE_COORDINATES[event.venue.name] ? "coordinate-ready" : "source-unavailable", confidence: "low", updatedAt: null, url: "", error: event.venue?.name && VENUE_COORDINATES[event.venue.name] ? "等待天气同步写入" : "场馆坐标未配置" },
+      aiAnalysis: { ok: true, status: "rule-fallback", confidence: "low", updatedAt: nowIso, url: "", error: "规则低置信兜底" },
       schedule: {
         ok: true,
         updatedAt: nowIso,
@@ -1508,6 +1592,7 @@ async function fetchScheduleWindow(now = new Date()) {
     const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
     const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
     const away = competitors.find((item) => item.homeAway === "away") || competitors[1] || {};
+    const venue = normalizedVenueInfo(competition.venue || event.venue || {});
     return {
       scheduleId: String(event.id || ""),
       name: event.name || event.shortName || "",
@@ -1523,6 +1608,7 @@ async function fetchScheduleWindow(now = new Date()) {
         code: away.team?.abbreviation || "",
         name: away.team?.displayName || away.team?.name || ""
       },
+      venue,
       source: "ESPN FIFA World Cup scoreboard"
     };
   });
