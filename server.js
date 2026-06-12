@@ -17,10 +17,12 @@ const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 80);
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
+const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 10;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
+const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
 const ELITE_LEADERBOARD_CACHE_TTL_MS = 15 * 60 * 1000;
 const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 100);
 const ELITE_TRADER_CANDIDATE_LIMIT = Number(process.env.ELITE_TRADER_CANDIDATE_LIMIT || Math.max(260, ELITE_TRADER_LIMIT * 2));
@@ -567,13 +569,15 @@ function buildRecommendations(match, probabilities) {
   const markets = match.manualMarkets || {};
   const moneyline = markets.moneyline || {};
   const totals = markets.totals || {};
+  const homeMarketAliases = marketTeamAliases(match, "home");
+  const awayMarketAliases = marketTeamAliases(match, "away");
   const rows = [
     {
       key: "home",
       marketType: "moneyline",
       marketTypeLabel: "胜平负",
       name: `${match.homeName}胜`,
-      aliases: [`${match.homeName}胜`, match.homeName, "home"],
+      aliases: [`${match.homeName}胜`, match.homeName, "home", ...homeMarketAliases],
       side: "YES",
       modelProbability: probabilities.home,
       marketPrice: moneyline.home
@@ -593,7 +597,7 @@ function buildRecommendations(match, probabilities) {
       marketType: "moneyline",
       marketTypeLabel: "胜平负",
       name: `${match.awayName}胜`,
-      aliases: [`${match.awayName}胜`, match.awayName, "away"],
+      aliases: [`${match.awayName}胜`, match.awayName, "away", ...awayMarketAliases],
       side: "YES",
       modelProbability: probabilities.away,
       marketPrice: moneyline.away
@@ -630,7 +634,7 @@ function buildRecommendations(match, probabilities) {
       handicap,
       name: formatHandicapName(match.homeName, handicap.homeLine),
       shortName: `${match.homeName} ${formatLine(handicap.homeLine)}`,
-      aliases: [formatHandicapName(match.homeName, handicap.homeLine), `${match.homeName} ${formatLine(handicap.homeLine)}`, `${match.homeName}${formatLine(handicap.homeLine)}`],
+      aliases: handicapAliases(match, "home", handicap.homeLine),
       side: "YES",
       modelProbability: home.win,
       pushProbability: home.push,
@@ -643,7 +647,7 @@ function buildRecommendations(match, probabilities) {
       handicap,
       name: formatHandicapName(match.awayName, handicap.awayLine),
       shortName: `${match.awayName} ${formatLine(handicap.awayLine)}`,
-      aliases: [formatHandicapName(match.awayName, handicap.awayLine), `${match.awayName} ${formatLine(handicap.awayLine)}`, `${match.awayName}${formatLine(handicap.awayLine)}`],
+      aliases: handicapAliases(match, "away", handicap.awayLine),
       side: "YES",
       modelProbability: away.win,
       pushProbability: away.push,
@@ -665,6 +669,38 @@ function buildRecommendations(match, probabilities) {
       };
     })
     .sort((a, b) => (b.edge ?? -9) - (a.edge ?? -9));
+}
+
+function marketTeamAliases(match, side) {
+  const code = side === "home" ? match.home : match.away;
+  const displayName = side === "home" ? match.homeName : match.awayName;
+  const englishName = side === "home" ? match.homeEnglishName : match.awayEnglishName;
+  return [
+    code,
+    displayName,
+    englishName,
+    TEAM_SEARCH_NAMES[code],
+    TEAM_DISPLAY_NAMES_ZH[code],
+    ...teamNameVariants(code, displayName)
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .filter((value, index, values) => values.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index);
+}
+
+function handicapAliases(match, side, line) {
+  const displayName = side === "home" ? match.homeName : match.awayName;
+  const formattedLine = formatLine(line);
+  const aliases = [
+    formatHandicapName(displayName, line),
+    `${displayName} ${formattedLine}`,
+    `${displayName}${formattedLine}`
+  ];
+  for (const teamAlias of marketTeamAliases(match, side)) {
+    aliases.push(`${teamAlias} ${formattedLine}`, `${teamAlias}${formattedLine}`);
+  }
+  return [...new Set(aliases.filter(Boolean))];
 }
 
 function formatLine(value) {
@@ -742,11 +778,12 @@ function buildCompleteness(match, polymarket) {
   const marketUpdatedAt = match.manualMarkets && match.manualMarkets.lastUpdated;
   const hasRealMarket = match.manualMarkets?.sourceType !== "auto-baseline";
   const polymarketChartCount = (match.recommendations || []).filter((rec) => rec.chart?.source === "Polymarket" && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2).length;
+  const livePriceCount = (match.recommendations || []).filter((rec) => rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number").length;
   const lineupStatus = lineups.status === "confirmed" ? "synced" : lineups.status === "projected" ? "stale" : lineups.queried || sources.lineups?.status === "queried-unconfirmed" ? "queried" : "missing";
   const injuryStatus = sourcedFreshnessStatus(sources.injuries, sourceUpdatedAt, 36);
   const newsStatus = sourcedFreshnessStatus(sources.teamNews, sourceUpdatedAt, 24);
   const weatherStatus = sources.weather?.status === "coordinate-ready" ? "queried" : sources.weather?.ok === false ? "missing" : freshnessStatus(context.weather?.updatedAt || sources.weather?.updatedAt, 12);
-  const marketStatus = hasRealMarket ? freshnessStatus(marketUpdatedAt, 6) : "missing";
+  const marketStatus = hasRealMarket || livePriceCount > 0 ? freshnessStatus(marketUpdatedAt || new Date().toISOString(), 6) : "missing";
   const polymarketStatus = polymarket && polymarket.ok && polymarketChartCount > 0 ? "synced" : polymarketChartCount > 0 ? "stale" : "missing";
   const aiStatus = sources.aiAnalysis?.status === "rule-fallback" || context.aiAnalysis?.fallback ? "queried" : sources.aiAnalysis?.ok === false ? "missing" : freshnessStatus(sources.aiAnalysis?.updatedAt || context.aiAnalysis?.updatedAt, 6);
 
@@ -801,6 +838,18 @@ function buildTradingGate(completeness) {
     allowStrongTrade: completeness.mode === "post_lineup" && completeness.confidence === "high" && completeness.missingCritical.length === 0,
     reasons
   };
+}
+
+function marketBelongsToMatch(market, homeAliases, awayAliases, homeCode = "", awayCode = "") {
+  const text = [
+    market.question,
+    market.slug,
+    market.eventTitle,
+    market.eventSlug
+  ].filter(Boolean).join(" ").toLowerCase();
+  const codeNeedle = `${String(homeCode || "").toLowerCase()}-${String(awayCode || "").toLowerCase()}`;
+  if (codeNeedle !== "-" && text.includes(codeNeedle)) return true;
+  return homeAliases.some((alias) => text.includes(alias)) && awayAliases.some((alias) => text.includes(alias));
 }
 
 function probabilityRows(match) {
@@ -1132,6 +1181,11 @@ function attachMarketCharts(matches, polymarket) {
     for (const recommendation of match.recommendations) {
       refreshRecommendationPricing(recommendation, match);
     }
+    match.completeness = buildCompleteness(match, polymarket);
+    match.tradingGate = buildTradingGate(match.completeness);
+    for (const recommendation of match.recommendations) {
+      recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
+    }
   }
 }
 
@@ -1167,11 +1221,8 @@ function buildTokenCatalog(polymarket) {
 }
 
 function findChartToken(match, recommendation, tokens) {
-  const home = match.homeName.toLowerCase();
-  const away = match.awayName.toLowerCase();
   const homeAliases = teamNameVariants(match.home, match.homeName);
   const awayAliases = teamNameVariants(match.away, match.awayName);
-  const recName = recommendation.name.toLowerCase();
   const aliases = (recommendation.aliases || []).map((alias) => String(alias).toLowerCase());
   const sameMatchTokens = tokens.filter((token) => tokenBelongsToMatch(token, homeAliases, awayAliases));
   const matchTokens = tokens.filter((token) => {
@@ -1188,27 +1239,65 @@ function findChartToken(match, recommendation, tokens) {
     if (recommendation.key === "draw") {
       return sameMatchTokens.find((token) => {
         const text = `${token.marketText} ${token.labelText}`;
-        return (text.includes("draw") || text.includes("平")) && token.labelText.includes("yes");
-      }) || sameMatchTokens.find((token) => token.labelText.includes("draw") || token.labelText.includes("平")) || null;
+        return !isSpreadOrTotalToken(token) && (text.includes("draw") || text.includes("平")) && token.labelText.includes("yes");
+      }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && (token.labelText.includes("draw") || token.labelText.includes("平"))) || null;
     }
     const teamAliases = recommendation.key === "home" ? homeAliases : awayAliases;
     return sameMatchTokens.find((token) => {
       const text = `${token.marketQuestionText} ${token.labelText}`;
-      return teamAliases.some((team) => token.marketQuestionText.includes(team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
-    }) || null;
+      return !isSpreadOrTotalToken(token) && teamAliases.some((team) => token.marketQuestionText.includes(team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
+    }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && aliasesMatchText(teamAliases, token.labelText)) || null;
   }
 
   if (recommendation.marketType === "total") {
     const needle = recommendation.key === "under25" ? "under" : "over";
-    return sameMatchTokens.find((token) => `${token.marketText} ${token.labelText}`.includes(needle)) || null;
+    return sameMatchTokens.find((token) => token.labelText.includes(needle))
+      || sameMatchTokens.find((token) => `${token.marketText} ${token.labelText}`.includes(needle)) || null;
   }
 
   if (recommendation.marketType === "handicap") {
-    const line = recommendation.name.toLowerCase().replace(/\s+/g, "");
-    return sameMatchTokens.find((token) => `${token.marketText} ${token.labelText}`.replace(/\s+/g, "").includes(line)) || null;
+    const lineAliases = aliases.map((alias) => alias.replace(/\s+/g, ""));
+    const teamAliases = recommendation.key.endsWith("-home") ? homeAliases : awayAliases;
+    return sameMatchTokens.find((token) => {
+      const compactText = `${token.marketText} ${token.labelText}`.replace(/\s+/g, "");
+      return lineAliases.some((alias) => alias && compactText.includes(alias));
+    }) || sameMatchTokens.find((token) => {
+      const text = `${token.marketText} ${token.labelText}`;
+      return aliasesMatchText(teamAliases, text) && lineMatchesText(recommendation.handicap, recommendation.key, text);
+    }) || null;
   }
 
   return null;
+}
+
+function aliasesMatchText(aliases, text) {
+  const normalizedText = String(text || "").toLowerCase();
+  return (aliases || []).some((alias) => {
+    const normalizedAlias = String(alias || "").toLowerCase().trim();
+    if (!normalizedAlias) return false;
+    return normalizedText === normalizedAlias || normalizedText.includes(normalizedAlias);
+  });
+}
+
+function lineMatchesText(handicap, recommendationKey, text) {
+  if (!handicap) return false;
+  const line = recommendationKey.endsWith("-away") ? handicap.awayLine : handicap.homeLine;
+  if (typeof line !== "number") return false;
+  const normalizedText = String(text || "").toLowerCase().replace(/\s+/g, "");
+  const signed = formatLine(line);
+  const unsigned = String(Math.abs(line));
+  const variants = [
+    signed,
+    signed.replace("+", "plus"),
+    signed.replace("-", "minus"),
+    line < 0 ? `-${unsigned}` : `+${unsigned}`
+  ].map((value) => String(value).toLowerCase().replace(/\s+/g, ""));
+  return variants.some((variant) => variant && normalizedText.includes(variant));
+}
+
+function isSpreadOrTotalToken(token) {
+  const text = `${token?.marketText || ""} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""}`;
+  return text.includes("spread") || text.includes("o/u") || text.includes("-total-") || text.includes("-spread-");
 }
 
 function tokenBelongsToMatch(token, homeAliases, awayAliases) {
@@ -1218,6 +1307,7 @@ function tokenBelongsToMatch(token, homeAliases, awayAliases) {
 
 function teamNameVariants(teamCode, displayName) {
   const base = [
+    teamCode,
     displayName,
     TEAM_SEARCH_NAMES[teamCode]
   ].filter(Boolean).map((item) => String(item).toLowerCase());
@@ -1515,6 +1605,40 @@ async function timedFetchJson(url, options = {}) {
   }
 }
 
+async function timedFetchText(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*",
+        "user-agent": "Mozilla/5.0 worldcup-polymarket-dashboard/0.1",
+        ...(options.headers || {})
+      }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${text.slice(0, 140)}`);
+    }
+    return {
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+      text
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+      error: error.name === "AbortError" ? "timeout" : error.message
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function buildPolymarketSearches(schedule = null) {
   const scheduleSearches = (schedule?.matches || [])
     .filter((event) => !event.completed && !isFinishedStatus(event.status))
@@ -1540,11 +1664,70 @@ function buildPolymarketSearches(schedule = null) {
   });
 }
 
+function buildPolymarketEventSlugSearches(schedule = null) {
+  const searches = [];
+  for (const event of schedule?.matches || []) {
+    if (event.completed || isFinishedStatus(event.status)) continue;
+    const homeCode = polymarketTeamSlug(eventTeamCode(event, "home"));
+    const awayCode = polymarketTeamSlug(eventTeamCode(event, "away"));
+    if (!homeCode || !awayCode || homeCode === "tbd" || awayCode === "tbd") continue;
+    for (const dateKey of polymarketDateCandidates(event.kickoffUtc)) {
+      searches.push({
+        label: `${eventTeamSearchName(event, "home")} vs ${eventTeamSearchName(event, "away")} (${dateKey})`,
+        slug: `fifwc-${homeCode}-${awayCode}-${dateKey}`,
+        teamNeedles: [
+          eventTeamSearchName(event, "home").toLowerCase(),
+          eventTeamSearchName(event, "away").toLowerCase()
+        ]
+      });
+      searches.push({
+        label: `${eventTeamSearchName(event, "away")} vs ${eventTeamSearchName(event, "home")} (${dateKey})`,
+        slug: `fifwc-${awayCode}-${homeCode}-${dateKey}`,
+        teamNeedles: [
+          eventTeamSearchName(event, "away").toLowerCase(),
+          eventTeamSearchName(event, "home").toLowerCase()
+        ]
+      });
+    }
+  }
+  const seen = new Set();
+  return searches.filter((search) => {
+    if (seen.has(search.slug)) return false;
+    seen.add(search.slug);
+    return true;
+  });
+}
+
+function polymarketTeamSlug(code) {
+  return String(code || "").trim().toLowerCase();
+}
+
+function polymarketDateCandidates(kickoffUtc) {
+  const date = new Date(kickoffUtc || "");
+  if (Number.isNaN(date.getTime())) return [];
+  return [
+    dateKeyUtc(addDays(date, -1)),
+    dateKeyUtc(date),
+    dateKeyUtc(addDays(date, 1))
+  ].filter(Boolean).filter((value, index, values) => values.indexOf(value) === index);
+}
+
+function dateKeyUtc(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 async function fetchPolymarket(schedule = null) {
   if (USE_DEMO_POLYMARKET) return demoPolymarket();
 
   const searches = buildPolymarketSearches(schedule);
-  const results = await Promise.all(searches.map((search) => fetchPolymarketSearch(search)));
+  const eventSlugSearches = buildPolymarketEventSlugSearches(schedule);
+  const [eventSlugResults, sportsPageResults, searchResults] = await Promise.all([
+    Promise.all(eventSlugSearches.map((search) => fetchPolymarketEventSlug(search))),
+    Promise.all(eventSlugSearches.map((search) => fetchPolymarketSportsPageMarkets(search))),
+    Promise.all(searches.map((search) => fetchPolymarketSearch(search)))
+  ]);
+  const results = [...eventSlugResults, ...sportsPageResults, ...searchResults];
   const firstOk = results.find((result) => result.ok);
   if (!firstOk) {
     const firstError = results.find((result) => result.error);
@@ -1559,7 +1742,7 @@ async function fetchPolymarket(schedule = null) {
 
   const markets = uniqueMarkets(results.flatMap((result) => result.markets || []));
   const normalizedMarkets = markets
-    .slice(0, 12)
+    .slice(0, 40)
     .map(normalizePolymarketMarket);
   const tokenIds = [...new Set(normalizedMarkets
     .flatMap((market) => market.tokens.map((token) => token.tokenId))
@@ -1579,6 +1762,7 @@ async function fetchPolymarket(schedule = null) {
     latencyMs: results.reduce((sum, result) => sum + (result.latencyMs || 0), 0),
     searches: results.map((result) => ({
       label: result.label,
+      slug: result.slug,
       ok: result.ok,
       eventCount: result.eventCount || 0,
       marketCount: (result.markets || []).length,
@@ -1587,6 +1771,152 @@ async function fetchPolymarket(schedule = null) {
     historySource: history,
     markets: normalizedMarkets
   };
+}
+
+async function fetchPolymarketEventSlug(search) {
+  const url = `${POLYMARKET_GAMMA_API_BASE}/events/slug/${encodeURIComponent(search.slug)}`;
+  const result = await timedFetchJson(url);
+  if (!result.ok) {
+    return {
+      label: search.label,
+      slug: search.slug,
+      ok: false,
+      latencyMs: result.latencyMs,
+      error: translateError(result.error),
+      markets: []
+    };
+  }
+  const event = result.data && !Array.isArray(result.data) ? result.data : null;
+  const markets = event && Array.isArray(event.markets)
+    ? event.markets.map((market) => ({
+      ...market,
+      eventTitle: event.title,
+      eventSlug: event.slug
+    })).filter(isWorldCupSoccerMarket)
+    : [];
+  return {
+    label: search.label,
+    slug: search.slug,
+    ok: true,
+    latencyMs: result.latencyMs,
+    eventCount: event ? 1 : 0,
+    markets
+  };
+}
+
+async function fetchPolymarketSportsPageMarkets(search) {
+  const url = `https://polymarket.com/sports/world-cup/${encodeURIComponent(search.slug)}`;
+  const result = await timedFetchText(url);
+  if (!result.ok) {
+    return {
+      label: `${search.label} sports page`,
+      slug: search.slug,
+      ok: false,
+      latencyMs: result.latencyMs,
+      error: translateError(result.error),
+      markets: []
+    };
+  }
+  const markets = extractSportsPageMarkets(result.text, search.slug)
+    .filter(isWorldCupSoccerMarket)
+    .slice(0, POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT);
+  return {
+    label: `${search.label} sports page`,
+    slug: search.slug,
+    ok: true,
+    latencyMs: result.latencyMs,
+    eventCount: markets.length ? 1 : 0,
+    marketCount: markets.length,
+    markets
+  };
+}
+
+function extractSportsPageMarkets(html, eventSlug) {
+  const text = String(html || "");
+  if (!text || !eventSlug) return [];
+  const marketObjects = [];
+  const slugPattern = new RegExp(`\\\"slug\\\":\\\"${escapeRegExp(eventSlug)}-(?:total-2pt5|spread-(?:home|away)-1pt5)\\\"`, "g");
+  for (const match of text.matchAll(slugPattern)) {
+    const start = findEmbeddedMarketStart(text, match.index || 0);
+    if (start < 0) continue;
+    const objectText = closeJsonObject(text.slice(start));
+    const parsed = parseEmbeddedMarketObject(objectText);
+    if (parsed) marketObjects.push(parsed);
+  }
+  return uniqueMarkets(marketObjects.map((market) => ({
+    ...market,
+    eventTitle: market.eventTitle || market.events?.[0]?.title || "",
+    eventSlug: market.eventSlug || eventSlug
+  })));
+}
+
+function findEmbeddedMarketStart(text, index) {
+  const prefix = text.slice(Math.max(0, index - 5000), index);
+  const localIndex = prefix.lastIndexOf("{\"id\":\"");
+  return localIndex < 0 ? -1 : Math.max(0, index - 5000) + localIndex;
+}
+
+function closeJsonObject(text) {
+  const raw = String(text || "");
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return raw.slice(0, index + 1);
+    }
+  }
+  return raw;
+}
+
+function parseEmbeddedMarketObject(text) {
+  try {
+    const market = JSON.parse(text);
+    if (!market || typeof market !== "object") return null;
+    const slug = String(market.slug || "");
+    if (!slug.includes("-total-2pt5") && !slug.includes("-spread-home-1pt5") && !slug.includes("-spread-away-1pt5")) return null;
+    const outcomes = parseJsonField(market.outcomes);
+    const outcomePrices = parseJsonField(market.outcomePrices);
+    const clobTokenIds = parseJsonField(market.clobTokenIds);
+    if (!Array.isArray(outcomes) || !Array.isArray(outcomePrices) || !Array.isArray(clobTokenIds) || clobTokenIds.length < 2) return null;
+    return {
+      id: market.id,
+      question: market.question,
+      conditionId: market.conditionId,
+      slug: market.slug,
+      resolutionSource: market.resolutionSource,
+      endDate: market.endDate,
+      liquidity: market.liquidity,
+      volume: market.volume,
+      outcomes,
+      outcomePrices,
+      clobTokenIds,
+      eventTitle: market.events?.[0]?.title || "",
+      eventSlug: ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function fetchScheduleWindow(now = new Date()) {
@@ -1649,7 +1979,7 @@ async function fetchScheduleWindow(now = new Date()) {
 
 async function fetchPolymarketSearch(search) {
   const query = encodeURIComponent(search.q);
-  const url = `https://gamma-api.polymarket.com/public-search?q=${query}&limit_per_type=10&events_status=active`;
+  const url = `${POLYMARKET_GAMMA_API_BASE}/public-search?q=${query}&limit_per_type=10&events_status=active`;
   const result = await timedFetchJson(url);
   if (!result.ok) {
     return {
