@@ -1641,12 +1641,12 @@
 
       function formatH2hRecord(match, headToHead) {
         const summary = headToHead?.summary || {};
-        return `${match.homeName} ${summary.homeWins || 0} / 平 ${summary.draws || 0} / ${match.awayName} ${summary.awayWins || 0}`;
+        return `${homeName(match)} ${summary.homeWins || 0} / 平 ${summary.draws || 0} / ${awayName(match)} ${summary.awayWins || 0}`;
       }
 
       function formatH2hGoals(match, headToHead) {
         const summary = headToHead?.summary || {};
-        return `${match.homeName} ${summary.homeGoals || 0} - ${summary.awayGoals || 0} ${match.awayName}`;
+        return `${homeName(match)} ${summary.homeGoals || 0} - ${summary.awayGoals || 0} ${awayName(match)}`;
       }
 
       function renderHeadToHead(match) {
@@ -1726,6 +1726,15 @@
         return `欧赔 ${odds.decimal.toFixed(2)} · 港赔 ${odds.hongKong.toFixed(2)} · 美赔 ${american}`;
       };
 
+      const displayTeamName = (match, side) => {
+        const name = side === "home" ? match.homeName : match.awayName;
+        const englishName = side === "home" ? match.homeEnglishName : match.awayEnglishName;
+        return currentLang === "en" && englishName ? englishName : name;
+      };
+
+      const homeName = (match) => displayTeamName(match, "home");
+      const awayName = (match) => displayTeamName(match, "away");
+
       const fmtTime = (value) => {
         if (!value) return "-";
         try {
@@ -1794,9 +1803,9 @@
         const prediction = match.aiPrediction || {};
         const highClass = prediction.confidence === "high" ? "high" : prediction.confidence === "low" ? "low" : "";
         const rows = prediction.rows || [
-          { key: "home", label: `${match.homeName}胜`, probability: match.probabilities.home },
+          { key: "home", label: `${homeName(match)}胜`, probability: match.probabilities.home },
           { key: "draw", label: "平局", probability: match.probabilities.draw },
-          { key: "away", label: `${match.awayName}胜`, probability: match.probabilities.away }
+          { key: "away", label: `${awayName(match)}胜`, probability: match.probabilities.away }
         ];
         const selectedRow = rows.find((row) => row.key === prediction.key) || rows[0] || {};
         const marketPrefix = match.manualMarkets?.sourceType === "auto-baseline" ? "参考价" : "盘口";
@@ -2066,7 +2075,7 @@
             <div class="odds-board-head">
               <div>
                 <div class="odds-board-title">当前比赛实时盘</div>
-                <div class="odds-board-meta">${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)} · 胜平负、让球盘、大小球可切换</div>
+                <div class="odds-board-meta">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))} · 胜平负、让球盘、大小球可切换</div>
               </div>
             </div>
             <div class="odds-board-tabs" role="tablist" aria-label="盘口切换">${tabs}</div>
@@ -2127,8 +2136,8 @@
                 <li><strong>首发状态</strong><span>${escapeHtml(lineups.statusLabel || "待确认")}</span></li>
               </ul>
               <div class="lineup-box">
-                ${renderLineupTeam(match.homeName, lineups.home)}
-                ${renderLineupTeam(match.awayName, lineups.away)}
+                ${renderLineupTeam(homeName(match), lineups.home)}
+                ${renderLineupTeam(awayName(match), lineups.away)}
               </div>
             </section>
 
@@ -2142,8 +2151,8 @@
             <section class="intel-block">
               <h4>球队近况</h4>
               <ul class="info-list">
-                <li><strong>${escapeHtml(match.homeName)}</strong><span>${escapeHtml((context.recentForm?.home || []).join(" / ") || "未同步")}</span></li>
-                <li><strong>${escapeHtml(match.awayName)}</strong><span>${escapeHtml((context.recentForm?.away || []).join(" / ") || "未同步")}</span></li>
+                <li><strong>${escapeHtml(homeName(match))}</strong><span>${escapeHtml((context.recentForm?.home || []).join(" / ") || "未同步")}</span></li>
+                <li><strong>${escapeHtml(awayName(match))}</strong><span>${escapeHtml((context.recentForm?.away || []).join(" / ") || "未同步")}</span></li>
                 <li><strong>球队新闻</strong><span>${escapeHtml(context.teamNewsSummary || "未同步")}</span></li>
               </ul>
             </section>
@@ -2326,22 +2335,22 @@
         }).join("");
 
         const staticItems = [
-          [match.homeName, `世界排名：${formatWorldRanking(match.homeTeam)}`],
-          [match.awayName, `世界排名：${formatWorldRanking(match.awayTeam)}`],
-          ...match.homeTeam.staticSignals.map((signal) => [`${match.homeName}`, signal]),
-          ...match.awayTeam.staticSignals.map((signal) => [`${match.awayName}`, signal])
+          [homeName(match), `世界排名：${formatWorldRanking(match.homeTeam)}`],
+          [awayName(match), `世界排名：${formatWorldRanking(match.awayTeam)}`],
+          ...match.homeTeam.staticSignals.map((signal) => [`${homeName(match)}`, signal]),
+          ...match.awayTeam.staticSignals.map((signal) => [`${awayName(match)}`, signal])
         ];
 
         const watchItems = [
-          ...match.homeTeam.watchItems.map((item) => [`${match.homeName}`, item]),
-          ...match.awayTeam.watchItems.map((item) => [`${match.awayName}`, item])
+          ...match.homeTeam.watchItems.map((item) => [`${homeName(match)}`, item]),
+          ...match.awayTeam.watchItems.map((item) => [`${awayName(match)}`, item])
         ];
 
         return `
           <article class="match-card" data-match="${escapeHtml(match.id)}">
             <div class="match-header">
               <div class="teams">
-                <h3>${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</h3>
+                <h3>${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</h3>
                 <div class="meta-line">${escapeHtml(match.group)} 组 · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
               </div>
               <span class="badge">${match.autoBaseline ? "赛程自动基线" : `第 ${escapeHtml(match.matchday)} 比赛日`}</span>
@@ -2411,7 +2420,7 @@
                 ${match.scheduleSource ? `<li><strong>赛程来源</strong><span>${escapeHtml(match.scheduleSource)}</span></li>` : ""}
                 <li><strong>盘口来源</strong><span>${escapeHtml(match.manualMarkets.source)}</span></li>
                 <li><strong>盘口更新时间</strong><span>${fmtTime(match.manualMarkets.lastUpdated)}</span></li>
-                <li><strong>胜平负</strong><span>${escapeHtml(match.homeName)} ${fmtPrice(match.manualMarkets.moneyline?.home)} / 平局 ${fmtPrice(match.manualMarkets.moneyline?.draw)} / ${escapeHtml(match.awayName)} ${fmtPrice(match.manualMarkets.moneyline?.away)}</span></li>
+                <li><strong>胜平负</strong><span>${escapeHtml(homeName(match))} ${fmtPrice(match.manualMarkets.moneyline?.home)} / 平局 ${fmtPrice(match.manualMarkets.moneyline?.draw)} / ${escapeHtml(awayName(match))} ${fmtPrice(match.manualMarkets.moneyline?.away)}</span></li>
                 <li><strong>大小球</strong><span>小于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.under25)} / 大于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.over25)}</span></li>
                 <li><strong>模型 xG</strong><span>${match.model.lambdaHome.toFixed(2)} - ${match.model.lambdaAway.toFixed(2)}</span></li>
                 <li><strong>常见比分</strong><span>${match.probabilities.topScores.map((s) => `${s.score} ${(s.probability * 100).toFixed(1)}%`).join(", ")}</span></li>
@@ -2429,7 +2438,7 @@
         }
         const tabs = matches.map((match, index) => `
           <button class="match-tab ${index === 0 ? "active" : ""}" data-match-tab="${escapeHtml(match.id)}" type="button">
-            <span class="match-tab-title">${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</span>
+            <span class="match-tab-title">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</span>
             <span class="match-tab-meta">${match.autoBaseline ? "自动基线 · " : `${escapeHtml(match.group)} 组 · `}${fmtTime(match.kickoffShanghai)}</span>
           </button>
         `).join("");

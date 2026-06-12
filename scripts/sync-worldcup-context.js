@@ -54,6 +54,41 @@ const TEAM_SEARCH_NAMES = {
   NZL: "New Zealand"
 };
 
+const TEAM_DISPLAY_NAMES_ZH = {
+  MEX: "墨西哥",
+  RSA: "南非",
+  KOR: "韩国",
+  CZE: "捷克",
+  CAN: "加拿大",
+  BIH: "波黑",
+  USA: "美国",
+  PAR: "巴拉圭",
+  QAT: "卡塔尔",
+  SUI: "瑞士",
+  BRA: "巴西",
+  MAR: "摩洛哥",
+  HAI: "海地",
+  SCO: "苏格兰",
+  AUS: "澳大利亚",
+  TUR: "土耳其",
+  GER: "德国",
+  CUW: "库拉索",
+  NED: "荷兰",
+  JPN: "日本",
+  CIV: "科特迪瓦",
+  ECU: "厄瓜多尔",
+  SWE: "瑞典",
+  TUN: "突尼斯",
+  ESP: "西班牙",
+  CPV: "佛得角",
+  BEL: "比利时",
+  EGY: "埃及",
+  KSA: "沙特阿拉伯",
+  URU: "乌拉圭",
+  IRN: "伊朗",
+  NZL: "新西兰"
+};
+
 const ARTICLE_DOMAINS = [
   "fifa.com",
   "espn.com",
@@ -330,8 +365,10 @@ function scheduleMatchFromEvent(event) {
     autoBaseline: true,
     home: homeCode,
     away: awayCode,
-    homeName: event.home?.name || TEAM_SEARCH_NAMES[homeCode] || "TBD",
-    awayName: event.away?.name || TEAM_SEARCH_NAMES[awayCode] || "TBD",
+    homeName: TEAM_DISPLAY_NAMES_ZH[homeCode] || event.home?.name || TEAM_SEARCH_NAMES[homeCode] || "TBD",
+    awayName: TEAM_DISPLAY_NAMES_ZH[awayCode] || event.away?.name || TEAM_SEARCH_NAMES[awayCode] || "TBD",
+    homeEnglishName: TEAM_SEARCH_NAMES[homeCode] || event.home?.name || "",
+    awayEnglishName: TEAM_SEARCH_NAMES[awayCode] || event.away?.name || "",
     kickoffLocal: event.kickoffUtc,
     kickoffShanghai: new Date(kickoffMs).toISOString(),
     venue: "待确认",
@@ -354,11 +391,11 @@ async function buildSyncMatches(dashboard) {
       awayName: awayTeam.name || TEAM_SEARCH_NAMES[match.away] || match.away
     };
   });
-  const modeledKeys = new Set(staticMatches.map((match) => matchScheduleKey(match.homeName, match.awayName)));
+  const modeledKeys = new Set(staticMatches.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const scheduleMatches = (schedule.matches || [])
     .map(scheduleMatchFromEvent)
     .filter(Boolean)
-    .filter((match) => !modeledKeys.has(matchScheduleKey(match.homeName, match.awayName)));
+    .filter((match) => !modeledKeys.has(matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName)));
   return {
     schedule,
     matches: [...staticMatches, ...scheduleMatches]
@@ -846,8 +883,8 @@ async function fetchOpenAiAnalysis(match, preview, weather) {
 }
 
 function searchQueries(match) {
-  const homeEn = TEAM_SEARCH_NAMES[match.home] || match.homeName;
-  const awayEn = TEAM_SEARCH_NAMES[match.away] || match.awayName;
+  const homeEn = match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName;
+  const awayEn = match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName;
   return [
     `${homeEn} vs ${awayEn} World Cup preview team news lineups injuries`,
     `${homeEn} ${awayEn} predicted lineups injury news World Cup`,
@@ -892,8 +929,8 @@ async function fetchSearchPreview(match) {
     snippets: extractRelevantSentences(text, [
       match.homeName,
       match.awayName,
-      TEAM_SEARCH_NAMES[match.home] || match.homeName,
-      TEAM_SEARCH_NAMES[match.away] || match.awayName,
+      match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName,
+      match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName,
       "lineup",
       "line-up",
       "injury",

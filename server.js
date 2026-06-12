@@ -110,6 +110,41 @@ const TEAM_SEARCH_NAMES = {
   NZL: "New Zealand"
 };
 
+const TEAM_DISPLAY_NAMES_ZH = {
+  MEX: "墨西哥",
+  RSA: "南非",
+  KOR: "韩国",
+  CZE: "捷克",
+  CAN: "加拿大",
+  BIH: "波黑",
+  USA: "美国",
+  PAR: "巴拉圭",
+  QAT: "卡塔尔",
+  SUI: "瑞士",
+  BRA: "巴西",
+  MAR: "摩洛哥",
+  HAI: "海地",
+  SCO: "苏格兰",
+  AUS: "澳大利亚",
+  TUR: "土耳其",
+  GER: "德国",
+  CUW: "库拉索",
+  NED: "荷兰",
+  JPN: "日本",
+  CIV: "科特迪瓦",
+  ECU: "厄瓜多尔",
+  SWE: "瑞典",
+  TUN: "突尼斯",
+  ESP: "西班牙",
+  CPV: "佛得角",
+  BEL: "比利时",
+  EGY: "埃及",
+  KSA: "沙特阿拉伯",
+  URU: "乌拉圭",
+  IRN: "伊朗",
+  NZL: "新西兰"
+};
+
 const SOCCER_POSITION_KEYWORDS = [
   "soccer",
   "world cup",
@@ -852,7 +887,7 @@ function scheduleEventKey(event) {
 
 function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.now()) {
   if (hasRecordedFinal(match.id, finalResults)) return false;
-  const schedule = scheduleByKey.get(matchScheduleKey(match.homeName, match.awayName));
+  const schedule = scheduleByKey.get(matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName));
   if (schedule?.completed || isFinishedStatus(schedule?.status)) return false;
   return inUpcomingWindow(match.kickoffShanghai, nowMs);
 }
@@ -877,6 +912,8 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     scheduleSource: event.source,
     homeName: eventTeamName(event, "home"),
     awayName: eventTeamName(event, "away"),
+    homeEnglishName: eventTeamSearchName(event, "home"),
+    awayEnglishName: eventTeamSearchName(event, "away"),
     home: eventTeamCode(event, "home"),
     away: eventTeamCode(event, "away"),
     homeTeam,
@@ -939,7 +976,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
-  const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(match.homeName, match.awayName)));
+  const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
     .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, nowMs))
     .filter(Boolean);
@@ -1152,11 +1189,17 @@ function teamNameVariants(teamCode, displayName) {
 }
 
 function eventTeamName(event, side) {
-  return event?.[side]?.name || "TBD";
+  const code = eventTeamCode(event, side);
+  return TEAM_DISPLAY_NAMES_ZH[code] || event?.[side]?.name || "TBD";
+}
+
+function eventTeamSearchName(event, side) {
+  const code = eventTeamCode(event, side);
+  return TEAM_SEARCH_NAMES[code] || event?.[side]?.name || "TBD";
 }
 
 function eventTeamCode(event, side) {
-  return event?.[side]?.code || "";
+  return String(event?.[side]?.code || "").toUpperCase();
 }
 
 function teamRatingForScheduleTeam(team) {
@@ -1165,11 +1208,12 @@ function teamRatingForScheduleTeam(team) {
 }
 
 function scheduleTeamRecord(team) {
-  const name = team?.name || "TBD";
   const code = String(team?.code || "").toUpperCase();
+  const name = TEAM_DISPLAY_NAMES_ZH[code] || team?.name || "TBD";
   const rating = teamRatingForScheduleTeam(team);
   return {
     name,
+    englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
     group: "待确认",
     rating,
     style: "赛程源自动纳入，等待本地静态研究补齐",
@@ -1339,8 +1383,8 @@ function buildPolymarketSearches(schedule = null) {
   const scheduleSearches = (schedule?.matches || [])
     .filter((event) => !event.completed && !isFinishedStatus(event.status))
     .map((event) => {
-      const homeName = eventTeamName(event, "home");
-      const awayName = eventTeamName(event, "away");
+      const homeName = eventTeamSearchName(event, "home");
+      const awayName = eventTeamSearchName(event, "away");
       const homeNeedle = homeName.toLowerCase();
       const awayNeedle = awayName.toLowerCase();
       return {
