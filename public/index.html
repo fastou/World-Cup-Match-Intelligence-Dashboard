@@ -1407,7 +1407,13 @@
         "强正向信号": "Strong positive signal",
         "AI综合预测": "AI Forecast",
         "盘口": "Public price",
+        "参考": "Reference",
         "盘口缺失": "Price missing",
+        "等待真实盘口": "Waiting for real market",
+        "当前为本地参考价，不是真实盘口": "Local reference price, not a real market",
+        "真实盘口不可用": "Real market unavailable",
+        "让": "Giving",
+        "受让": "Receiving",
         "限制": "Limits",
         "无关键限制，按 edge 和价格纪律判断。": "No major limits; use edge and price discipline.",
         "胜平负": "Match result",
@@ -2329,6 +2335,11 @@
           const hasEliteSignals = Boolean(rec.eliteSummary?.count);
           const hasHolderSignals = Boolean(rec.holderSummary?.count);
           const hasExpandableSignals = hasEliteSignals || hasHolderSignals;
+          const isReferencePrice = rec.chart?.source === "本地盘口快照" || match.manualMarkets?.sourceType === "auto-baseline";
+          const priceLabel = `${fmtPrice(rec.marketPrice)}${isReferencePrice ? " 参考" : ""}`;
+          const advicePriceLabel = rec.decision?.gated
+            ? (typeof rec.marketPrice === "number" ? "观察" : "等待")
+            : fmtPrice(rec.maxBuyPrice);
           return `
           <tr class="recommendation-main-row ${hasExpandableSignals ? "expandable" : ""}" data-detail-id="${detailId}" aria-expanded="false" ${hasExpandableSignals ? 'tabindex="0"' : ""}>
             <td>${escapeHtml(rec.marketTypeLabel || "-")}</td>
@@ -2342,10 +2353,10 @@
             </td>
             <td class="numeric">${fmtPct(rec.modelProbability)}</td>
             <td class="numeric">${fmtPct(rec.pushProbability)}</td>
-            <td class="numeric">${fmtPrice(rec.marketPrice)}</td>
+            <td class="numeric">${escapeHtml(priceLabel)}</td>
             <td>${escapeHtml(fmtOdds(rec.odds))}</td>
             <td class="numeric">${fmtPct(rec.edge)}</td>
-            <td class="numeric">${rec.decision?.gated ? "等待" : fmtPrice(rec.maxBuyPrice)}</td>
+            <td class="numeric">${escapeHtml(advicePriceLabel)}</td>
             <td class="chart-cell">
               <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2 ? rec.chart.history : []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
               <div class="chart-source ${rec.chart?.source === "Polymarket" && rec.chart?.history?.length >= 2 ? "live" : ""}">${escapeHtml(rec.chart?.source === "Polymarket" && rec.chart?.history?.length >= 2 ? "Polymarket 实时曲线" : rec.chart?.source === "本地盘口快照" ? "本地参考价，无实时曲线" : "未匹配实时曲线")}</div>

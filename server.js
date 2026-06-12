@@ -504,7 +504,7 @@ function gatedAction(baseDecision, row, match) {
   const hasChart = row.chart && Array.isArray(row.chart.history) && row.chart.history.length >= 2;
   const hasPrice = typeof row.marketPrice === "number";
 
-  if (!gate.allowPriceAdvice || !hasPrice) {
+  if (!hasPrice) {
     return {
       action: "WAIT",
       label: "等待价格",
@@ -514,7 +514,17 @@ function gatedAction(baseDecision, row, match) {
     };
   }
 
-  if (!hasChart) reasons.push("盘口曲线不足");
+  if (!gate.allowPriceAdvice) {
+    return {
+      action: "WATCH",
+      label: match.manualMarkets?.sourceType === "auto-baseline" ? "基线观察" : "等待真实盘口",
+      stake: "none",
+      gated: true,
+      reasons: [match.manualMarkets?.sourceType === "auto-baseline" ? "当前为本地参考价，不是真实盘口" : "真实盘口不可用"]
+    };
+  }
+
+  if (!hasChart) reasons.push("实时曲线不足");
   if (!gate.allowStrongTrade) reasons.push(...(gate.reasons || []));
 
   if (gate.allowStrongTrade && hasChart) {
@@ -618,8 +628,9 @@ function buildRecommendations(match, probabilities) {
       marketType: "handicap",
       marketTypeLabel: "让球",
       handicap,
-      name: `${match.homeName} ${formatLine(handicap.homeLine)}`,
-      aliases: [`${match.homeName} ${formatLine(handicap.homeLine)}`, `${match.homeName}${formatLine(handicap.homeLine)}`],
+      name: formatHandicapName(match.homeName, handicap.homeLine),
+      shortName: `${match.homeName} ${formatLine(handicap.homeLine)}`,
+      aliases: [formatHandicapName(match.homeName, handicap.homeLine), `${match.homeName} ${formatLine(handicap.homeLine)}`, `${match.homeName}${formatLine(handicap.homeLine)}`],
       side: "YES",
       modelProbability: home.win,
       pushProbability: home.push,
@@ -630,8 +641,9 @@ function buildRecommendations(match, probabilities) {
       marketType: "handicap",
       marketTypeLabel: "让球",
       handicap,
-      name: `${match.awayName} ${formatLine(handicap.awayLine)}`,
-      aliases: [`${match.awayName} ${formatLine(handicap.awayLine)}`, `${match.awayName}${formatLine(handicap.awayLine)}`],
+      name: formatHandicapName(match.awayName, handicap.awayLine),
+      shortName: `${match.awayName} ${formatLine(handicap.awayLine)}`,
+      aliases: [formatHandicapName(match.awayName, handicap.awayLine), `${match.awayName} ${formatLine(handicap.awayLine)}`, `${match.awayName}${formatLine(handicap.awayLine)}`],
       side: "YES",
       modelProbability: away.win,
       pushProbability: away.push,
@@ -658,6 +670,14 @@ function buildRecommendations(match, probabilities) {
 function formatLine(value) {
   if (typeof value !== "number") return "";
   return value > 0 ? `+${value}` : `${value}`;
+}
+
+function formatHandicapName(teamName, line) {
+  if (typeof line !== "number") return `${teamName} 让球`;
+  const absLine = Math.abs(line);
+  if (line < 0) return `${teamName} 让 ${absLine} 球`;
+  if (line > 0) return `${teamName} 受让 ${absLine} 球`;
+  return `${teamName} 平手盘`;
 }
 
 function contextForMatch(context, matchId) {
