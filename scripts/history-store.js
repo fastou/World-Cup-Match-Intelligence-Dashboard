@@ -179,6 +179,28 @@ CREATE TABLE IF NOT EXISTS top_holder_snapshots (
   payload_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS head_to_head_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  match_id TEXT NOT NULL,
+  window_years INTEGER,
+  window_start TEXT,
+  window_end TEXT,
+  as_of TEXT,
+  scope TEXT,
+  matches INTEGER,
+  home_wins INTEGER,
+  draws INTEGER,
+  away_wins INTEGER,
+  home_goals INTEGER,
+  away_goals INTEGER,
+  source_status TEXT,
+  impact TEXT,
+  all_time_note TEXT,
+  updated_at TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
+);
+
 CREATE TABLE IF NOT EXISTS polymarket_holder_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
@@ -261,6 +283,7 @@ CREATE INDEX IF NOT EXISTS idx_market_snapshots_match_key ON market_snapshots(ma
 CREATE INDEX IF NOT EXISTS idx_price_points_match_key ON price_points(match_id, recommendation_key, point_time);
 CREATE INDEX IF NOT EXISTS idx_elite_positions_match_key ON elite_position_snapshots(match_id, recommendation_key);
 CREATE INDEX IF NOT EXISTS idx_top_holders_match_key ON top_holder_snapshots(match_id, recommendation_key);
+CREATE INDEX IF NOT EXISTS idx_h2h_match ON head_to_head_snapshots(match_id, window_start, window_end);
 CREATE INDEX IF NOT EXISTS idx_polymarket_holders_market ON polymarket_holder_snapshots(condition_id, token_id);
 CREATE INDEX IF NOT EXISTS idx_results_updated ON match_results(updated_at);
 
@@ -351,6 +374,9 @@ async function recordDashboardSnapshot(payload, options = {}) {
       sql: "DELETE FROM top_holder_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
     }, {
+      sql: "DELETE FROM head_to_head_snapshots WHERE snapshot_id = ?;",
+      params: [snapshotId]
+    }, {
       sql:
       `INSERT OR REPLACE INTO match_snapshots
        (snapshot_id, run_id, match_id, captured_at, prediction_label, prediction_key, prediction_probability,
@@ -376,6 +402,37 @@ async function recordDashboardSnapshot(payload, options = {}) {
         numberOrNull(match.eliteSummary?.totalCurrentValue),
         numberOrNull(match.eliteSummary?.totalBought),
         json(match)
+      ]
+    });
+
+    const h2h = match.headToHead || {};
+    const h2hSummary = h2h.summary || {};
+    operations.push({
+      sql:
+      `INSERT OR REPLACE INTO head_to_head_snapshots
+       (snapshot_id, match_id, window_years, window_start, window_end, as_of, scope, matches,
+        home_wins, draws, away_wins, home_goals, away_goals, source_status, impact,
+        all_time_note, updated_at, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      params: [
+        snapshotId,
+        match.id,
+        numberOrNull(h2h.windowYears),
+        textOrNull(h2h.windowStart),
+        textOrNull(h2h.windowEnd),
+        textOrNull(h2h.asOf),
+        textOrNull(h2h.scope),
+        numberOrNull(h2hSummary.matches),
+        numberOrNull(h2hSummary.homeWins),
+        numberOrNull(h2hSummary.draws),
+        numberOrNull(h2hSummary.awayWins),
+        numberOrNull(h2hSummary.homeGoals),
+        numberOrNull(h2hSummary.awayGoals),
+        textOrNull(h2h.sourceStatus),
+        textOrNull(h2h.impact),
+        textOrNull(h2h.allTimeNote),
+        textOrNull(h2h.updatedAt),
+        json(h2h)
       ]
     });
 

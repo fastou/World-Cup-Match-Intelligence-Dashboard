@@ -607,6 +607,57 @@
         font-weight: 650;
       }
 
+      .static-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+        gap: 12px;
+      }
+
+      .static-block {
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .static-block.wide {
+        grid-column: 1 / -1;
+      }
+
+      .static-block h4 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+
+      .h2h-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .h2h-stat {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .h2h-stat span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .h2h-stat strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 18px;
+        font-variant-numeric: tabular-nums;
+      }
+
       .intel-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1186,6 +1237,8 @@
 
         .confidence-panel,
         .intel-grid,
+        .static-grid,
+        .h2h-summary-grid,
         .lineup-box,
         .framework-grid,
         .elite-summary-grid,
@@ -1396,6 +1449,18 @@
         "比赛情报": "Match Intelligence",
         "高手": "Accounts",
         "静态": "Static",
+        "静态信息": "Static Information",
+        "近四年交手": "Last Four Years Head-to-Head",
+        "直接影响": "Direct impact",
+        "历史背景": "Historical context",
+        "交手来源": "Head-to-head sources",
+        "统计窗口": "Window",
+        "总场次": "Matches",
+        "胜/平/负": "W/D/L",
+        "进球": "Goals",
+        "暂无交手记录": "No meetings found",
+        "近四年无直接交手样本": "No direct head-to-head sample in the last four years",
+        "模型不对胜平负、让球盘或大小球做交手加权": "No head-to-head weighting is applied to match result, handicap, or totals",
         "动态": "Dynamic",
         "世界排名": "World ranking",
         "FIFA 男足": "FIFA men",
@@ -1461,6 +1526,9 @@
         [/等待服务器同步/g, "waiting for server sync"],
         [/加载失败：/g, "Load failed: "],
         [/当前是 file:\/\/ 打开的静态文件，请通过 Node 服务或远端 \/worldcup\/ 访问页面，否则 API 数据无法加载。/g, "This page was opened with file://. Use the Node server or remote /worldcup/ path so API data can load."],
+        [/赛前四年正式 A 级国际赛和友谊赛/g, "Senior international matches and friendlies in the four years before kickoff"],
+        [/两队赛前最近一次公开可核验交手为 2010-06-11 世界杯，墨西哥 1-1 南非；近四年没有可确认交手。/g, "The latest publicly verifiable pre-match meeting was the 2010-06-11 World Cup match, Mexico 1-1 South Africa; no confirmed meeting in the last four years."],
+        [/两队赛前最近一次公开可核验交手为 2016-06-05 友谊赛，韩国 2-1 捷克；近四年没有可确认交手。/g, "The latest publicly verifiable pre-match meeting was the 2016-06-05 friendly, South Korea 2-1 Czech Republic; no confirmed meeting in the last four years."],
         [/欧赔/g, "Decimal"],
         [/港赔/g, "HK"],
         [/美赔/g, "US"],
@@ -1554,6 +1622,64 @@
         const updated = ranking.updatedAt ? ` · ${ranking.updatedAt} 更新` : "";
         const source = ranking.source ? ` · ${ranking.source}` : "";
         return `FIFA 男足第 ${ranking.rank}${updated}${source}`;
+      }
+
+      function formatH2hWindow(headToHead) {
+        if (!headToHead?.windowStart || !headToHead?.windowEnd) return "未同步";
+        return `${headToHead.windowStart} - ${headToHead.windowEnd}`;
+      }
+
+      function formatH2hRecord(match, headToHead) {
+        const summary = headToHead?.summary || {};
+        return `${match.homeName} ${summary.homeWins || 0} / 平 ${summary.draws || 0} / ${match.awayName} ${summary.awayWins || 0}`;
+      }
+
+      function formatH2hGoals(match, headToHead) {
+        const summary = headToHead?.summary || {};
+        return `${match.homeName} ${summary.homeGoals || 0} - ${summary.awayGoals || 0} ${match.awayName}`;
+      }
+
+      function renderHeadToHead(match) {
+        const headToHead = match.headToHead || {};
+        const summary = headToHead.summary || {};
+        const meetings = Array.isArray(headToHead.latestMeetings) ? headToHead.latestMeetings : [];
+        const sources = Array.isArray(headToHead.sources) ? headToHead.sources : [];
+        return `
+          <section class="static-block wide">
+            <h4>近四年交手</h4>
+            <div class="h2h-summary-grid">
+              <div class="h2h-stat"><span>总场次</span><strong>${escapeHtml(summary.matches || 0)}</strong></div>
+              <div class="h2h-stat"><span>胜/平/负</span><strong>${escapeHtml(formatH2hRecord(match, headToHead))}</strong></div>
+              <div class="h2h-stat"><span>进球</span><strong>${escapeHtml(formatH2hGoals(match, headToHead))}</strong></div>
+            </div>
+            <ul class="info-list">
+              <li><strong>统计窗口</strong><span>${escapeHtml(formatH2hWindow(headToHead))} · ${escapeHtml(headToHead.scope || "未同步")}</span></li>
+              <li><strong>直接影响</strong><span>${escapeHtml(headToHead.impact || "未同步")}</span></li>
+              <li><strong>历史背景</strong><span>${escapeHtml(headToHead.allTimeNote || "未同步")}</span></li>
+              ${meetings.length ? meetings.map((meeting) => `<li><strong>${escapeHtml(meeting.date || "日期未知")}</strong><span>${escapeHtml(meeting.competition || "")} · ${escapeHtml(meeting.home || "")} ${escapeHtml(meeting.score || "")} ${escapeHtml(meeting.away || "")}</span></li>`).join("") : '<li><strong>近期交手</strong><span>暂无交手记录</span></li>'}
+              <li><strong>更新时间</strong><span>${fmtTime(headToHead.updatedAt)}</span></li>
+              ${sources.length ? `<li><strong>交手来源</strong><span>${sources.map((source) => source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.name || source.url)}</a>` : escapeHtml(source.name || "来源")).join(" · ")}</span></li>` : ""}
+            </ul>
+          </section>
+        `;
+      }
+
+      function renderStaticInfo(match, staticItems) {
+        return `
+          <div class="static-grid">
+            ${renderHeadToHead(match)}
+            <section class="static-block">
+              <h4>静态信息</h4>
+              <ul class="info-list">
+                ${staticItems.map(([team, item]) => `<li><strong>${escapeHtml(team)}</strong><span>${escapeHtml(item)}</span></li>`).join("")}
+              </ul>
+            </section>
+            <section class="static-block">
+              <h4>研究框架维度</h4>
+              ${renderResearchFramework(window.dashboardResearchFramework)}
+            </section>
+          </div>
+        `;
       }
 
       const fmtMoney = (value) => {
@@ -2254,9 +2380,7 @@
             </div>
 
             <div class="tab-content" data-content="static">
-              <ul class="info-list">
-                ${staticItems.map(([team, item]) => `<li><strong>${escapeHtml(team)}</strong><span>${escapeHtml(item)}</span></li>`).join("")}
-              </ul>
+              ${renderStaticInfo(match, staticItems)}
             </div>
 
             <div class="tab-content" data-content="dynamic">

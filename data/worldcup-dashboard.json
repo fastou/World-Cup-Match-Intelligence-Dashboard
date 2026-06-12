@@ -126,6 +126,40 @@
         "lineupConfidence": "中等",
         "lastChecked": "2026-06-12T09:01:07+08:00"
       },
+      "headToHead": {
+        "windowYears": 4,
+        "windowStart": "2022-06-11",
+        "windowEnd": "2026-06-11",
+        "asOf": "2026-06-11T13:59:59-05:00",
+        "scope": "赛前四年正式 A 级国际赛和友谊赛",
+        "summary": {
+          "matches": 0,
+          "homeWins": 0,
+          "draws": 0,
+          "awayWins": 0,
+          "homeGoals": 0,
+          "awayGoals": 0
+        },
+        "latestMeetings": [],
+        "allTimeNote": "两队赛前最近一次公开可核验交手为 2010-06-11 世界杯，墨西哥 1-1 南非；近四年没有可确认交手。",
+        "impact": "近四年无直接交手样本，模型不对胜平负、让球盘或大小球做交手加权。",
+        "sourceStatus": "verified-no-pre-match-meetings",
+        "sources": [
+          {
+            "name": "Wikipedia - Mexico national football team results",
+            "url": "https://en.wikipedia.org/wiki/Mexico_national_football_team_results_(2020%E2%80%93present)"
+          },
+          {
+            "name": "Wikipedia - South Africa national football team results",
+            "url": "https://en.wikipedia.org/wiki/South_Africa_national_football_team_results_(2020%E2%80%93present)"
+          },
+          {
+            "name": "Wikipedia - 2010 FIFA World Cup Group A",
+            "url": "https://en.wikipedia.org/wiki/2010_FIFA_World_Cup_Group_A"
+          }
+        ],
+        "updatedAt": "2026-06-12T09:42:55+08:00"
+      },
       "manualMarkets": {
         "moneyline": {
           "home": 0.68,
@@ -335,6 +369,40 @@
         "weatherSummary": "开赛前 6 小时再次确认天气。",
         "lineupConfidence": "中等",
         "lastChecked": "2026-06-12T09:01:07+08:00"
+      },
+      "headToHead": {
+        "windowYears": 4,
+        "windowStart": "2022-06-12",
+        "windowEnd": "2026-06-12",
+        "asOf": "2026-06-12T10:59:59+08:00",
+        "scope": "赛前四年正式 A 级国际赛和友谊赛",
+        "summary": {
+          "matches": 0,
+          "homeWins": 0,
+          "draws": 0,
+          "awayWins": 0,
+          "homeGoals": 0,
+          "awayGoals": 0
+        },
+        "latestMeetings": [],
+        "allTimeNote": "两队赛前最近一次公开可核验交手为 2016-06-05 友谊赛，韩国 2-1 捷克；近四年没有可确认交手。",
+        "impact": "近四年无直接交手样本，模型不对胜平负、让球盘或大小球做交手加权。",
+        "sourceStatus": "verified-no-pre-match-meetings",
+        "sources": [
+          {
+            "name": "Wikipedia - South Korea national football team results",
+            "url": "https://en.wikipedia.org/wiki/South_Korea_national_football_team_results_(2020%E2%80%93present)"
+          },
+          {
+            "name": "Wikipedia - Czech Republic national football team results",
+            "url": "https://en.wikipedia.org/wiki/Czech_Republic_national_football_team_results_(2020%E2%80%93present)"
+          },
+          {
+            "name": "TNT Sports - South Korea vs Czechia preview",
+            "url": "https://www.tntsports.co.uk/betting/south-korea-vs-czechia-prediction-tips-and-odds-world-cup-2026/"
+          }
+        ],
+        "updatedAt": "2026-06-12T09:42:55+08:00"
       },
       "manualMarkets": {
         "moneyline": {
