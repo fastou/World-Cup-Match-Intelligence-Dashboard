@@ -1365,6 +1365,10 @@
         "来源": "Source",
         "当前盘口高手持仓": "Current highlighted positions",
         "涉及高手账号": "Highlighted accounts",
+        "顶级持仓者": "Top holders",
+        "持仓账号": "Holder accounts",
+        "份额": "Shares",
+        "命中Top100": "Top 100 match",
         "当前价值 / 累计参与": "Current value / total participation",
         "数据口径": "Method",
         "账号": "Account",
@@ -1393,6 +1397,9 @@
         "高手": "Accounts",
         "静态": "Static",
         "动态": "Dynamic",
+        "世界排名": "World ranking",
+        "FIFA 男足": "FIFA men",
+        "更新": "updated",
         "第": "Matchday ",
         "比赛日": "",
         "组": "Group",
@@ -1431,6 +1438,7 @@
         [/模型/g, "Model"],
         [/盘口/g, "Public price"],
         [/限制：/g, "Limits: "],
+        [/第\s*([0-9]+)/g, "#$1"],
         [/平局/g, "Draw"],
         [/胜/g, " win"],
         [/小于/g, "Under"],
@@ -1540,6 +1548,14 @@
         return value.toFixed(2);
       };
 
+      function formatWorldRanking(team) {
+        const ranking = team?.worldRanking;
+        if (!ranking?.rank) return "未同步";
+        const updated = ranking.updatedAt ? ` · ${ranking.updatedAt} 更新` : "";
+        const source = ranking.source ? ` · ${ranking.source}` : "";
+        return `FIFA 男足第 ${ranking.rank}${updated}${source}`;
+      }
+
       const fmtMoney = (value) => {
         if (typeof value !== "number" || !Number.isFinite(value)) return "-";
         const abs = Math.abs(value);
@@ -1547,6 +1563,13 @@
         if (abs >= 1000000) return `${sign}$${(abs / 1000000).toFixed(2)}M`;
         if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
         return `${sign}$${abs.toFixed(0)}`;
+      };
+
+      const fmtShares = (value) => {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        return new Intl.NumberFormat(currentLang === "en" ? "en-US" : "zh-CN", {
+          maximumFractionDigits: value >= 1000 ? 0 : 2
+        }).format(value);
       };
 
       const shortWallet = (value) => {
@@ -1690,6 +1713,9 @@
               <div class="token-price">${fmtPrice(token.currentPrice)}</div>
               <canvas class="sparkline" width="120" height="34" data-series="${encodeURIComponent(JSON.stringify(token.history || []))}" aria-label="${escapeHtml(token.label)} 价格曲线"></canvas>
             </div>
+            ${(token.topHolders || []).length ? `
+              <div class="source-detail">顶级持仓者：${(token.topHolders || []).slice(0, 5).map((holder) => `#${holder.holderRank} ${escapeHtml(holder.userName)} ${fmtShares(holder.size)}${holder.isElite ? " · Top100" : ""}`).join("；")}</div>
+            ` : ""}
           `).join("");
           return `
             <div class="market-item">
@@ -2036,17 +2062,18 @@
 
       function renderEliteSignals(match) {
         const summary = match.eliteSummary || {};
-        const rows = (match.recommendations || []).filter((rec) => rec.eliteSummary?.count > 0);
+        const rows = (match.recommendations || []).filter((rec) => rec.eliteSummary?.count > 0 || rec.holderSummary?.count > 0);
         const updated = summary.updatedAt ? fmtTime(summary.updatedAt) : "-";
         const sourceText = summary.source || "Polymarket Data API /v1/market-positions";
         return `
           <div class="elite-summary-grid">
             <div class="elite-stat"><span>当前盘口高手持仓</span><strong>${escapeHtml(summary.activePositions || 0)}</strong></div>
             <div class="elite-stat"><span>涉及高手账号</span><strong>${escapeHtml(summary.activeTraders || 0)}</strong></div>
+            <div class="elite-stat"><span>顶级持仓者</span><strong>${escapeHtml(summary.topHolderPositions || 0)}</strong></div>
             <div class="elite-stat"><span>当前价值 / 累计参与</span><strong>${fmtMoney(summary.totalCurrentValue || 0)} / ${fmtMoney(summary.totalBought || 0)}</strong></div>
           </div>
           <ul class="info-list">
-            <li><strong>数据口径</strong><span>仅显示足球表现 Top 100 在当前 Polymarket conditionId/token 上的公开账户记录；胜率为已结算足球样本估算。</span></li>
+            <li><strong>数据口径</strong><span>顶级持仓者来自当前 token 的公开 holder 列表；高手标记表示该账号同时命中足球表现 Top 100。</span></li>
             <li><strong>来源</strong><span>${escapeHtml(sourceText)} · ${updated}</span></li>
           </ul>
           <div class="elite-signal-list">
@@ -2054,74 +2081,70 @@
               <section class="elite-signal">
                 <div class="elite-signal-head">
                   <div class="elite-signal-market">${escapeHtml(rec.name)} · ${escapeHtml(rec.marketTypeLabel || "")}</div>
-                  <div class="elite-signal-meta">${escapeHtml(rec.eliteSummary.count)} 人 · 当前 ${fmtMoney(rec.eliteSummary.totalCurrentValue)} · 累计参与 ${fmtMoney(rec.eliteSummary.totalBought)}</div>
+                  <div class="elite-signal-meta">持仓 ${escapeHtml(rec.holderSummary?.count || 0)} 人 · 高手 ${escapeHtml(rec.eliteSummary?.count || 0)} 人 · 份额 ${fmtShares(rec.holderSummary?.totalShares || 0)}</div>
                 </div>
                 <table class="elite-position-table">
                   <thead>
                     <tr>
                       <th>账号</th>
-                      <th class="numeric">胜率估算</th>
-                      <th class="numeric">足球PNL</th>
+                      <th class="numeric">份额</th>
                       <th class="numeric">均价</th>
                       <th class="numeric">当前价值</th>
                       <th class="numeric">累计参与</th>
-                      <th>最近参与</th>
+                      <th>命中Top100</th>
                     </tr>
                   </thead>
                   <tbody>
-                    ${(rec.eliteSignals || []).slice(0, 20).map((signal) => `
+                    ${(rec.topHolders || []).slice(0, 25).map((holder) => `
                       <tr>
-                        <td>#${escapeHtml(signal.traderRank)} ${escapeHtml(signal.userName)}<div class="source-detail">${escapeHtml(shortWallet(signal.proxyWallet))} · ${escapeHtml(signal.outcome || rec.name)}</div></td>
-                        <td class="numeric">${fmtPct(signal.winRateEstimate)}</td>
-                        <td class="numeric">${fmtMoney(signal.soccerPnl)}</td>
-                        <td class="numeric">${fmtPrice(signal.avgPrice)}</td>
-                        <td class="numeric">${fmtMoney(signal.currentValue)}</td>
-                        <td class="numeric">${fmtMoney(signal.totalBought)}</td>
-                        <td>${signal.recentBuy ? `${fmtDateTime(signal.recentBuy.isoTime)} · ${fmtPrice(signal.recentBuy.price)} · ${fmtMoney(signal.recentBuy.usdcSize)}` : "未返回"}</td>
+                        <td>#${escapeHtml(holder.holderRank)} ${escapeHtml(holder.userName)}<div class="source-detail">${escapeHtml(shortWallet(holder.proxyWallet))} · ${escapeHtml(holder.outcome || rec.name)}</div></td>
+                        <td class="numeric">${fmtShares(holder.size)}</td>
+                        <td class="numeric">${fmtPrice(holder.avgPrice)}</td>
+                        <td class="numeric">${fmtMoney(holder.currentValue)}</td>
+                        <td class="numeric">${fmtMoney(holder.totalBought)}</td>
+                        <td>${holder.isElite ? `#${escapeHtml(holder.traderRank)} · 胜率 ${fmtPct(holder.winRateEstimate)} · PNL ${fmtMoney(holder.soccerPnl)}` : "否"}</td>
                       </tr>
                     `).join("")}
                   </tbody>
                 </table>
               </section>
-            `).join("") : '<div class="empty">当前这些盘口里暂未发现足球高手 Top 100 的公开持仓。</div>'}
+            `).join("") : '<div class="empty">当前这些盘口暂未返回公开持仓。</div>'}
           </div>
         `;
       }
 
       function renderEliteSummaryChip(rec) {
-        if (!rec.eliteSummary?.count) return "";
-        return `<span class="elite-chip hot">${escapeHtml(rec.eliteSummary.count)}人 · ${fmtMoney(rec.eliteSummary.totalCurrentValue)}</span>`;
+        if (rec.eliteSummary?.count) return `<span class="elite-chip hot">高手 ${escapeHtml(rec.eliteSummary.count)}人 · ${fmtMoney(rec.eliteSummary.totalCurrentValue)}</span>`;
+        if (rec.holderSummary?.count) return `<span class="elite-chip">${escapeHtml(rec.holderSummary.count)}持仓者 · ${fmtShares(rec.holderSummary.totalShares)}</span>`;
+        return "";
       }
 
       function renderEliteRowDetails(rec) {
         const signals = rec.eliteSignals || [];
-        if (!rec.eliteSummary?.count) {
-          return '<div class="row-detail-panel"><div class="empty">当前这个盘口暂未发现足球高手 Top 100 的公开持仓。</div></div>';
-        }
+        const holders = rec.topHolders || [];
+        if (!rec.eliteSummary?.count && !rec.holderSummary?.count) return '<div class="row-detail-panel"><div class="empty">当前这个盘口暂未返回公开持仓。</div></div>';
         return `
           <div class="row-detail-panel">
             <div class="row-detail-head">
-              <div class="row-detail-title">${escapeHtml(rec.name)} · 高手持仓明细</div>
-              <div class="row-detail-meta">${escapeHtml(rec.eliteSummary.count)} 人 · 当前 ${fmtMoney(rec.eliteSummary.totalCurrentValue)} · 累计参与 ${fmtMoney(rec.eliteSummary.totalBought)} · Top ${escapeHtml(rec.eliteSummary.topTrader || "-")}</div>
+              <div class="row-detail-title">${escapeHtml(rec.name)} · 顶级持仓者</div>
+              <div class="row-detail-meta">持仓 ${escapeHtml(rec.holderSummary?.count || 0)} 人 · 份额 ${fmtShares(rec.holderSummary?.totalShares || 0)} · 高手 ${escapeHtml(rec.eliteSummary?.count || 0)} 人 · Top ${escapeHtml(rec.holderSummary?.topHolder || rec.eliteSummary?.topTrader || "-")}</div>
             </div>
             <div class="elite-inline-list">
-              ${signals.slice(0, 12).map((signal) => `
+              ${holders.slice(0, 20).map((holder) => `
                 <div class="elite-inline-card">
                   <div class="elite-inline-head">
-                    <span>#${escapeHtml(signal.traderRank)} ${escapeHtml(signal.userName)}</span>
-                    <span>${fmtMoney(signal.currentValue)}</span>
+                    <span>#${escapeHtml(holder.holderRank)} ${escapeHtml(holder.userName)}</span>
+                    <span>${fmtShares(holder.size)}</span>
                   </div>
                   <div class="elite-inline-meta">
-                    钱包 ${escapeHtml(shortWallet(signal.proxyWallet))} · 方向 ${escapeHtml(signal.outcome || rec.name)} · 均价 ${fmtPrice(signal.avgPrice)} · 累计参与 ${fmtMoney(signal.totalBought)}
+                    钱包 ${escapeHtml(shortWallet(holder.proxyWallet))} · 方向 ${escapeHtml(holder.outcome || rec.name)} · 均价 ${fmtPrice(holder.avgPrice)} · 当前 ${fmtMoney(holder.currentValue)} · 累计参与 ${fmtMoney(holder.totalBought)}
                   </div>
                   <div class="elite-inline-meta">
-                    最近参与 ${signal.recentBuy ? `${fmtDateTime(signal.recentBuy.isoTime)} · 价格 ${fmtPrice(signal.recentBuy.price)} · 金额 ${fmtMoney(signal.recentBuy.usdcSize)} · ${escapeHtml(signal.recentBuy.side || "")}` : "未返回"}
-                  </div>
-                  <div class="elite-inline-meta">
-                    足球PNL ${fmtMoney(signal.soccerPnl)} · 胜率 ${fmtPct(signal.winRateEstimate)} · 样本 ${escapeHtml(signal.soccerSettledPositions)}
+                    ${holder.isElite ? `命中足球 Top100 #${escapeHtml(holder.traderRank)} · 胜率 ${fmtPct(holder.winRateEstimate)} · 足球PNL ${fmtMoney(holder.soccerPnl)} · 样本 ${escapeHtml(holder.soccerSettledPositions)}` : "未命中足球 Top100"}
                   </div>
                 </div>
               `).join("")}
+              ${signals.length ? `<div class="source-detail">足球 Top100 命中账号：${signals.slice(0, 12).map((signal) => `#${signal.traderRank} ${signal.userName}`).join("，")}</div>` : ""}
             </div>
           </div>
         `;
@@ -2131,16 +2154,18 @@
         const rows = match.recommendations.map((rec, index) => {
           const detailId = `rec-detail-${escapeHtml(match.id)}-${index}`;
           const hasEliteSignals = Boolean(rec.eliteSummary?.count);
+          const hasHolderSignals = Boolean(rec.holderSummary?.count);
+          const hasExpandableSignals = hasEliteSignals || hasHolderSignals;
           return `
-          <tr class="recommendation-main-row ${hasEliteSignals ? "expandable" : ""}" data-detail-id="${detailId}" aria-expanded="false" ${hasEliteSignals ? 'tabindex="0"' : ""}>
+          <tr class="recommendation-main-row ${hasExpandableSignals ? "expandable" : ""}" data-detail-id="${detailId}" aria-expanded="false" ${hasExpandableSignals ? 'tabindex="0"' : ""}>
             <td>${escapeHtml(rec.marketTypeLabel || "-")}</td>
             <td>
               <span class="market-cell-main">
-                ${hasEliteSignals ? '<span class="elite-arrow" aria-hidden="true">›</span>' : ""}
+                ${hasExpandableSignals ? '<span class="elite-arrow" aria-hidden="true">›</span>' : ""}
                 <span>${escapeHtml(rec.name)}</span>
                 ${renderEliteSummaryChip(rec)}
               </span>
-              ${rec.eliteSummary?.count ? `<div class="decision-note">Top: ${escapeHtml(rec.eliteSummary.topTrader || "-")} · 累计参与 ${fmtMoney(rec.eliteSummary.totalBought)}</div>` : ""}
+              ${rec.holderSummary?.count ? `<div class="decision-note">Top holder: ${escapeHtml(rec.holderSummary.topHolder || "-")} · 份额 ${fmtShares(rec.holderSummary.totalShares)}</div>` : ""}
             </td>
             <td class="numeric">${fmtPct(rec.modelProbability)}</td>
             <td class="numeric">${fmtPct(rec.pushProbability)}</td>
@@ -2157,13 +2182,15 @@
               ${rec.decision.reasons?.length ? `<div class="decision-note">${escapeHtml(rec.decision.reasons.join("；"))}</div>` : ""}
             </td>
           </tr>
-          ${hasEliteSignals ? `<tr class="recommendation-detail-row" id="${detailId}" hidden>
+          ${hasExpandableSignals ? `<tr class="recommendation-detail-row" id="${detailId}" hidden>
             <td class="row-detail-cell" colspan="10">${renderEliteRowDetails(rec)}</td>
           </tr>` : ""}
         `;
         }).join("");
 
         const staticItems = [
+          [match.homeName, `世界排名：${formatWorldRanking(match.homeTeam)}`],
+          [match.awayName, `世界排名：${formatWorldRanking(match.awayTeam)}`],
           ...match.homeTeam.staticSignals.map((signal) => [`${match.homeName}`, signal]),
           ...match.awayTeam.staticSignals.map((signal) => [`${match.awayName}`, signal])
         ];

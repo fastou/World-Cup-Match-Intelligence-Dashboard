@@ -21,6 +21,7 @@ const ELITE_TRADER_CANDIDATE_LIMIT = Number(process.env.ELITE_TRADER_CANDIDATE_L
 const ELITE_LEADERBOARD_PAGE_SIZE = 100;
 const ELITE_CLOSED_POSITION_LIMIT = 160;
 const ELITE_MARKET_POSITION_LIMIT = 100;
+const TOP_HOLDER_LIMIT = Number(process.env.TOP_HOLDER_LIMIT || 50);
 const ELITE_ACTIVITY_LIMIT = 300;
 const USE_DEMO_POLYMARKET = process.env.DEMO_POLYMARKET === "1";
 const DISABLE_HISTORY_RECORDING = process.env.WORLDCUP_DISABLE_HISTORY === "1";
@@ -1490,6 +1491,58 @@ function normalizeEliteMarketPosition(position, trader) {
   };
 }
 
+function displayUserName(position) {
+  return position.userName
+    || position.name
+    || position.username
+    || position.pseudonym
+    || shortWalletServer(position.proxyWallet || position.owner || position.address || "");
+}
+
+function shortWalletServer(value) {
+  const wallet = String(value || "");
+  return wallet.length > 12 ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : wallet;
+}
+
+function normalizeTopHolderPosition(position, trader = null) {
+  const size = Number(position.size || position.shares || position.balance || 0);
+  const currentValue = Number(position.currentValue || 0);
+  if (size <= 0.000001 && currentValue <= 0.01) return null;
+  return {
+    userName: trader?.userName || displayUserName(position),
+    proxyWallet: position.proxyWallet || position.owner || position.address || "",
+    outcome: position.outcome || "",
+    avgPrice: numericOrNull(position.avgPrice),
+    size,
+    currentValue,
+    totalBought: Number(position.totalBought || 0),
+    cashPnl: Number(position.cashPnl || 0),
+    totalPnl: Number(position.totalPnl || position.realizedPnl || 0),
+    currPrice: numericOrNull(position.currPrice),
+    isElite: Boolean(trader),
+    traderRank: trader?.soccerRank || null,
+    winRateEstimate: trader?.winRateEstimate ?? null,
+    soccerPnl: trader?.soccerPnl ?? null,
+    soccerSettledPositions: trader?.soccerSettledPositions ?? null
+  };
+}
+
+function normalizeTopHoldersForToken(positions, traderMap = new Map()) {
+  return (positions || [])
+    .map((position) => normalizeTopHolderPosition(position, traderMap.get(walletKey(position.proxyWallet))))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const sizeDiff = b.size - a.size;
+      if (Math.abs(sizeDiff) > 0.000001) return sizeDiff;
+      return b.currentValue - a.currentValue;
+    })
+    .slice(0, TOP_HOLDER_LIMIT)
+    .map((holder, index) => ({
+      ...holder,
+      holderRank: index + 1
+    }));
+}
+
 async function enrichSignalsWithActivity(signals) {
   const wallets = [...new Set((signals || []).map((signal) => walletKey(signal.proxyWallet)).filter(Boolean))];
   if (!wallets.length) return signals;
@@ -1505,24 +1558,29 @@ async function enrichSignalsWithActivity(signals) {
   }));
 }
 
-async function attachEliteSignals(matches, { force = false } = {}) {
+async function attachEliteSignals(matches, polymarket, { force = false } = {}) {
   const leaderboard = await fetchEliteLeaderboard({ force });
   const traderMap = new Map((leaderboard.traders || []).map((trader) => [walletKey(trader.proxyWallet), trader]));
   const catalog = recommendationMarketCatalog(matches);
-  const conditionIds = [...new Set(catalog.map((item) => item.conditionId))];
+  const marketPoolConditionIds = (polymarket?.markets || []).map((market) => market.conditionId).filter(Boolean);
+  const conditionIds = [...new Set([...catalog.map((item) => item.conditionId), ...marketPoolConditionIds].filter(Boolean))];
   let marketPositionResults = [];
   let marketError = "";
 
-  if (leaderboard.ok && traderMap.size && conditionIds.length) {
+  if (conditionIds.length) {
     marketPositionResults = await mapLimit(conditionIds, 4, (conditionId) => fetchMarketPositions(conditionId));
     marketError = marketPositionResults.find((item) => !item.ok)?.error || "";
   }
 
   const positionsByCondition = new Map(marketPositionResults.map((item) => [item.conditionId, item]));
   const signalMap = new Map();
+  const holderMap = new Map();
   for (const item of catalog) {
     const marketPositions = positionsByCondition.get(item.conditionId);
     const tokenPositions = marketPositions?.positionsByToken?.[String(item.tokenId)] || [];
+    const topHolders = normalizeTopHoldersForToken(tokenPositions, traderMap);
+    holderMap.set(`${item.matchId}:${item.recommendationKey}`, topHolders);
+
     const elitePositions = tokenPositions
       .map((position) => {
         const trader = traderMap.get(walletKey(position.proxyWallet));
@@ -1559,8 +1617,12 @@ async function attachEliteSignals(matches, { force = false } = {}) {
     let matchCurrentValue = 0;
     let matchTotalBought = 0;
     const activeTraderWallets = new Set();
+    const activeHolderWallets = new Set();
+    let matchHolderCount = 0;
+    let matchHolderShares = 0;
     for (const recommendation of match.recommendations || []) {
       const signals = signalMap.get(`${match.id}:${recommendation.key}`) || [];
+      const topHolders = holderMap.get(`${match.id}:${recommendation.key}`) || [];
       recommendation.eliteSignals = signals;
       recommendation.eliteSummary = {
         count: signals.length,
@@ -1568,20 +1630,65 @@ async function attachEliteSignals(matches, { force = false } = {}) {
         totalBought: signals.reduce((sum, signal) => sum + signal.totalBought, 0),
         topTrader: signals[0]?.userName || ""
       };
+      recommendation.topHolders = topHolders;
+      recommendation.holderSummary = {
+        count: topHolders.length,
+        totalShares: topHolders.reduce((sum, holder) => sum + holder.size, 0),
+        totalCurrentValue: topHolders.reduce((sum, holder) => sum + holder.currentValue, 0),
+        eliteCount: topHolders.filter((holder) => holder.isElite).length,
+        topHolder: topHolders[0]?.userName || ""
+      };
       if (signals.length) tokensWithElitePositions += 1;
       matchCount += signals.length;
       matchCurrentValue += recommendation.eliteSummary.totalCurrentValue;
       matchTotalBought += recommendation.eliteSummary.totalBought;
       signals.forEach((signal) => activeTraderWallets.add(walletKey(signal.proxyWallet)));
+      matchHolderCount += topHolders.length;
+      matchHolderShares += recommendation.holderSummary.totalShares;
+      topHolders.forEach((holder) => activeHolderWallets.add(walletKey(holder.proxyWallet)));
     }
     match.eliteSummary = {
       activePositions: matchCount,
       activeTraders: activeTraderWallets.size,
       totalCurrentValue: matchCurrentValue,
       totalBought: matchTotalBought,
+      topHolderPositions: matchHolderCount,
+      topHolderAccounts: activeHolderWallets.size,
+      topHolderShares: matchHolderShares,
       updatedAt: new Date().toISOString(),
       source: "Polymarket Data API /v1/market-positions"
     };
+  }
+
+  const positionsByTokenKey = new Map();
+  for (const item of marketPositionResults) {
+    for (const [tokenId, positions] of Object.entries(item.positionsByToken || {})) {
+      positionsByTokenKey.set(`${item.conditionId}:${tokenId}`, positions);
+    }
+  }
+  for (const match of matches || []) {
+    for (const recommendation of match.recommendations || []) {
+      if (!recommendation.chart?.conditionId || !recommendation.chart?.tokenId) continue;
+      const holders = holderMap.get(`${match.id}:${recommendation.key}`) || normalizeTopHoldersForToken(
+        positionsByTokenKey.get(`${recommendation.chart.conditionId}:${recommendation.chart.tokenId}`) || [],
+        traderMap
+      );
+      recommendation.chart.topHolders = holders;
+    }
+  }
+  for (const market of polymarket?.markets || []) {
+    const marketPositions = positionsByCondition.get(market.conditionId);
+    for (const token of market.tokens || []) {
+      const tokenPositions = marketPositions?.positionsByToken?.[String(token.tokenId)] || [];
+      token.topHolders = normalizeTopHoldersForToken(tokenPositions, traderMap);
+      token.holderSummary = {
+        count: token.topHolders.length,
+        totalShares: token.topHolders.reduce((sum, holder) => sum + holder.size, 0),
+        totalCurrentValue: token.topHolders.reduce((sum, holder) => sum + holder.currentValue, 0),
+        eliteCount: token.topHolders.filter((holder) => holder.isElite).length,
+        topHolder: token.topHolders[0]?.userName || ""
+      };
+    }
   }
 
   return {
@@ -1621,7 +1728,7 @@ async function buildDashboard({ force = false } = {}) {
   const polymarket = await fetchPolymarket();
   const matches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
   attachMarketCharts(matches, polymarket);
-  const eliteTraders = await attachEliteSignals(matches, { force });
+  const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
   attachAiPredictions(matches);
   const payload = {
     meta: {

@@ -158,6 +158,52 @@ CREATE TABLE IF NOT EXISTS elite_position_snapshots (
   payload_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS top_holder_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id TEXT NOT NULL,
+  match_id TEXT NOT NULL,
+  recommendation_key TEXT NOT NULL,
+  proxy_wallet TEXT,
+  user_name TEXT,
+  holder_rank INTEGER,
+  outcome TEXT,
+  avg_price REAL,
+  current_value REAL,
+  total_bought REAL,
+  size REAL,
+  is_elite INTEGER,
+  trader_rank INTEGER,
+  soccer_pnl REAL,
+  win_rate_estimate REAL,
+  soccer_settled_positions INTEGER,
+  payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS polymarket_holder_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  condition_id TEXT,
+  token_id TEXT,
+  market_question TEXT,
+  market_slug TEXT,
+  token_label TEXT,
+  proxy_wallet TEXT,
+  user_name TEXT,
+  holder_rank INTEGER,
+  outcome TEXT,
+  avg_price REAL,
+  current_value REAL,
+  total_bought REAL,
+  size REAL,
+  is_elite INTEGER,
+  trader_rank INTEGER,
+  soccer_pnl REAL,
+  win_rate_estimate REAL,
+  soccer_settled_positions INTEGER,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES dashboard_runs(run_id)
+);
+
 CREATE TABLE IF NOT EXISTS elite_trader_rankings (
   run_id TEXT NOT NULL,
   proxy_wallet TEXT NOT NULL,
@@ -214,6 +260,8 @@ CREATE INDEX IF NOT EXISTS idx_match_snapshots_match_time ON match_snapshots(mat
 CREATE INDEX IF NOT EXISTS idx_market_snapshots_match_key ON market_snapshots(match_id, recommendation_key);
 CREATE INDEX IF NOT EXISTS idx_price_points_match_key ON price_points(match_id, recommendation_key, point_time);
 CREATE INDEX IF NOT EXISTS idx_elite_positions_match_key ON elite_position_snapshots(match_id, recommendation_key);
+CREATE INDEX IF NOT EXISTS idx_top_holders_match_key ON top_holder_snapshots(match_id, recommendation_key);
+CREATE INDEX IF NOT EXISTS idx_polymarket_holders_market ON polymarket_holder_snapshots(condition_id, token_id);
 CREATE INDEX IF NOT EXISTS idx_results_updated ON match_results(updated_at);
 
 CREATE VIEW IF NOT EXISTS v_moneyline_backtest AS
@@ -300,6 +348,9 @@ async function recordDashboardSnapshot(payload, options = {}) {
       sql: "DELETE FROM elite_position_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
     }, {
+      sql: "DELETE FROM top_holder_snapshots WHERE snapshot_id = ?;",
+      params: [snapshotId]
+    }, {
       sql:
       `INSERT OR REPLACE INTO match_snapshots
        (snapshot_id, run_id, match_id, captured_at, prediction_label, prediction_key, prediction_probability,
@@ -357,6 +408,47 @@ async function recordDashboardSnapshot(payload, options = {}) {
         json(trader)
       ]
     });
+  }
+
+  operations.push({
+    sql: "DELETE FROM polymarket_holder_snapshots WHERE run_id = ?;",
+    params: [id]
+  });
+  for (const market of payload.polymarket?.markets || []) {
+    for (const token of market.tokens || []) {
+      for (const holder of token.topHolders || []) {
+        operations.push({
+          sql:
+          `INSERT INTO polymarket_holder_snapshots
+           (run_id, condition_id, token_id, market_question, market_slug, token_label, proxy_wallet,
+            user_name, holder_rank, outcome, avg_price, current_value, total_bought, size,
+            is_elite, trader_rank, soccer_pnl, win_rate_estimate, soccer_settled_positions, payload_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          params: [
+            id,
+            market.conditionId || "",
+            token.tokenId || "",
+            market.question || "",
+            market.slug || "",
+            token.label || "",
+            holder.proxyWallet || "",
+            holder.userName || "",
+            numberOrNull(holder.holderRank),
+            holder.outcome || token.label || "",
+            numberOrNull(holder.avgPrice),
+            numberOrNull(holder.currentValue),
+            numberOrNull(holder.totalBought),
+            numberOrNull(holder.size),
+            holder.isElite ? 1 : 0,
+            numberOrNull(holder.traderRank),
+            numberOrNull(holder.soccerPnl),
+            numberOrNull(holder.winRateEstimate),
+            numberOrNull(holder.soccerSettledPositions),
+            json(holder)
+          ]
+        });
+      }
+    }
   }
 
   await runOperations(operations);
@@ -441,6 +533,36 @@ function pushMarketSnapshotOps(operations, snapshotId, matchId, rec) {
         numberOrNull(signal.recentBuy?.price),
         numberOrNull(signal.recentBuy?.usdcSize),
         json(signal)
+      ]
+    });
+  }
+
+  for (const holder of rec.topHolders || []) {
+    operations.push({
+      sql:
+      `INSERT INTO top_holder_snapshots
+       (snapshot_id, match_id, recommendation_key, proxy_wallet, user_name, holder_rank, outcome,
+        avg_price, current_value, total_bought, size, is_elite, trader_rank, soccer_pnl,
+        win_rate_estimate, soccer_settled_positions, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      params: [
+        snapshotId,
+        matchId,
+        rec.key,
+        holder.proxyWallet || "",
+        holder.userName || "",
+        numberOrNull(holder.holderRank),
+        holder.outcome || "",
+        numberOrNull(holder.avgPrice),
+        numberOrNull(holder.currentValue),
+        numberOrNull(holder.totalBought),
+        numberOrNull(holder.size),
+        holder.isElite ? 1 : 0,
+        numberOrNull(holder.traderRank),
+        numberOrNull(holder.soccerPnl),
+        numberOrNull(holder.winRateEstimate),
+        numberOrNull(holder.soccerSettledPositions),
+        json(holder)
       ]
     });
   }
