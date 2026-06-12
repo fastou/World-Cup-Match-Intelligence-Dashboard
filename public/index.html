@@ -240,14 +240,6 @@
         border-bottom: 1px solid var(--line);
       }
 
-      .schedule-only-panel {
-        margin-top: 14px;
-        padding: 12px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #fbfcfa;
-      }
-
       .teams {
         min-width: 0;
       }
@@ -1365,9 +1357,10 @@
         "加载中": "Loading",
         "今日比赛与模型信号": "Today’s Matches and Model Signals",
         "未来三天比赛与模型信号": "Next Three Days: Matches and Model Signals",
-        "待建模赛程": "Schedule Pending Model",
-        "已纳入三天赛程窗口，但缺少本地研究基线、盘口映射和动态情报。": "Included in the three-day schedule window, but missing local research baseline, market mapping, and dynamic intelligence.",
-        "不会生成 AI 买入建议，直到静态数据、模型参数和盘口数据补齐。": "No AI signal is generated until static data, model parameters, and market data are added.",
+        "自动基线": "Auto Baseline",
+        "赛程自动基线": "Schedule Auto Baseline",
+        "已纳入三天赛程窗口，并用保守球队评分生成基础概率。": "Included in the three-day schedule window with conservative team-rating baseline probabilities.",
+        "缺少真实盘口或动态情报时，只显示观察，不给价格建议。": "When live markets or dynamic intelligence are missing, only watch-level context is shown.",
         "赛程来源": "Schedule source",
         "比赛状态": "Match status",
         "待确认": "Pending",
@@ -1538,6 +1531,8 @@
         [/Polymarket 实时源不可用：/g, "Polymarket live source unavailable: "],
         [/本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。/g, "The current network cannot reach the Polymarket API directly; real curves appear when deployed on a reachable server."],
         [/足球高手账户不可用：/g, "Football account source unavailable: "],
+        [/自动基线/g, "auto baseline"],
+        [/赛程自动基线/g, "schedule auto baseline"],
         [/等待服务器同步/g, "waiting for server sync"],
         [/加载失败：/g, "Load failed: "],
         [/当前是 file:\/\/ 打开的静态文件，请通过 Node 服务或远端 \/worldcup\/ 访问页面，否则 API 数据无法加载。/g, "This page was opened with file://. Use the Node server or remote /worldcup/ path so API data can load."],
@@ -1804,7 +1799,8 @@
           { key: "away", label: `${match.awayName}胜`, probability: match.probabilities.away }
         ];
         const selectedRow = rows.find((row) => row.key === prediction.key) || rows[0] || {};
-        const selectedMarket = typeof selectedRow.marketPrice === "number" ? `盘口 ${fmtPct(selectedRow.marketPrice)}` : "盘口缺失";
+        const marketPrefix = match.manualMarkets?.sourceType === "auto-baseline" ? "参考价" : "盘口";
+        const selectedMarket = typeof selectedRow.marketPrice === "number" ? `${marketPrefix} ${fmtPct(selectedRow.marketPrice)}` : "盘口缺失";
         const selectedEdge = typeof selectedRow.edge === "number" ? `Edge ${fmtPct(selectedRow.edge)}` : "Edge 缺失";
         const selectedSource = selectedRow.marketSource ? ` · ${selectedRow.marketSource}` : "";
         const restrictionText = prediction.restrictions?.length
@@ -1826,7 +1822,7 @@
                   <div class="prediction-prob-card">
                     <span class="prediction-row-label">${escapeHtml(row.label)}</span>
                     <strong>AI ${fmtPct(row.probability)}</strong>
-                    <span class="prediction-market-line">盘口 ${fmtPct(row.marketPrice)}${row.marketSource ? ` · ${escapeHtml(row.marketSource)}` : ""}</span>
+                    <span class="prediction-market-line">${escapeHtml(marketPrefix)} ${fmtPct(row.marketPrice)}${row.marketSource ? ` · ${escapeHtml(row.marketSource)}` : ""}</span>
                     <span class="prediction-edge ${typeof row.edge === "number" && row.edge > 0 ? "good" : typeof row.edge === "number" && row.edge < 0 ? "bad" : ""}">Edge ${fmtPct(row.edge)}</span>
                   </div>
                 `).join("")}
@@ -2291,30 +2287,7 @@
         `;
       }
 
-      function renderScheduleOnlyMatch(match) {
-        return `
-          <article class="match-card schedule-only" data-match="${escapeHtml(match.id)}">
-            <div class="match-header">
-              <div class="teams">
-                <h3>${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</h3>
-                <div class="meta-line">${escapeHtml(match.group || "待确认")} 组 · ${escapeHtml(match.venue || "待确认")} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
-              </div>
-              <span class="badge">待建模赛程</span>
-            </div>
-            <div class="schedule-only-panel">
-              <ul class="info-list">
-                <li><strong>状态</strong><span>已纳入三天赛程窗口，但缺少本地研究基线、盘口映射和动态情报。</span></li>
-                <li><strong>比赛状态</strong><span>${escapeHtml(match.scheduleStatusDetail || match.scheduleStatus || "待确认")}</span></li>
-                <li><strong>赛程来源</strong><span>${escapeHtml(match.scheduleSource || "未同步")}</span></li>
-                <li><strong>AI综合预测</strong><span>不会生成 AI 买入建议，直到静态数据、模型参数和盘口数据补齐。</span></li>
-              </ul>
-            </div>
-          </article>
-        `;
-      }
-
       function renderMatch(match) {
-        if (match.scheduleOnly) return renderScheduleOnlyMatch(match);
         const rows = match.recommendations.map((rec, index) => {
           const detailId = `rec-detail-${escapeHtml(match.id)}-${index}`;
           const hasEliteSignals = Boolean(rec.eliteSummary?.count);
@@ -2371,7 +2344,7 @@
                 <h3>${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</h3>
                 <div class="meta-line">${escapeHtml(match.group)} 组 · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
               </div>
-              <span class="badge">第 ${escapeHtml(match.matchday)} 比赛日</span>
+              <span class="badge">${match.autoBaseline ? "赛程自动基线" : `第 ${escapeHtml(match.matchday)} 比赛日`}</span>
             </div>
 
             ${renderAiPrediction(match)}
@@ -2433,6 +2406,9 @@
 
             <div class="tab-content" data-content="market">
               <ul class="info-list">
+                ${match.autoBaseline ? '<li><strong>基线状态</strong><span>已纳入三天赛程窗口，并用保守球队评分生成基础概率；缺少真实盘口或动态情报时，只显示观察，不给价格建议。</span></li>' : ""}
+                ${match.scheduleStatusDetail || match.scheduleStatus ? `<li><strong>比赛状态</strong><span>${escapeHtml(match.scheduleStatusDetail || match.scheduleStatus)}</span></li>` : ""}
+                ${match.scheduleSource ? `<li><strong>赛程来源</strong><span>${escapeHtml(match.scheduleSource)}</span></li>` : ""}
                 <li><strong>盘口来源</strong><span>${escapeHtml(match.manualMarkets.source)}</span></li>
                 <li><strong>盘口更新时间</strong><span>${fmtTime(match.manualMarkets.lastUpdated)}</span></li>
                 <li><strong>胜平负</strong><span>${escapeHtml(match.homeName)} ${fmtPrice(match.manualMarkets.moneyline?.home)} / 平局 ${fmtPrice(match.manualMarkets.moneyline?.draw)} / ${escapeHtml(match.awayName)} ${fmtPrice(match.manualMarkets.moneyline?.away)}</span></li>
@@ -2454,7 +2430,7 @@
         const tabs = matches.map((match, index) => `
           <button class="match-tab ${index === 0 ? "active" : ""}" data-match-tab="${escapeHtml(match.id)}" type="button">
             <span class="match-tab-title">${escapeHtml(match.homeName)} vs ${escapeHtml(match.awayName)}</span>
-            <span class="match-tab-meta">${match.scheduleOnly ? "待建模 · " : `${escapeHtml(match.group)} 组 · `}${fmtTime(match.kickoffShanghai)}</span>
+            <span class="match-tab-meta">${match.autoBaseline ? "自动基线 · " : `${escapeHtml(match.group)} 组 · `}${fmtTime(match.kickoffShanghai)}</span>
           </button>
         `).join("");
 

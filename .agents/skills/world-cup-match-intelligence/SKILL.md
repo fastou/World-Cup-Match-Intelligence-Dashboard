@@ -50,8 +50,9 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Default dashboard scope is the next three days of not-finished matches, not only today's matches.
 - Hide a match when a final result exists in `match_results`, or when the kickoff is more than the configured post-kickoff grace period ago and no live status keeps it active.
 - Use public schedule/status sources such as ESPN/FIFA only for fixture timing and status unless full modeling inputs exist.
-- If a fixture is inside the three-day window but lacks local team static data, model parameters, odds, or market mappings, show it as schedule-only/pending-model. Do not render probabilities, edge, or price advice for it.
-- Keep modeled matches and schedule-only fixtures visually distinct in the UI and API payload.
+- If a fixture is inside the three-day window but lacks local team static data, model parameters, odds, or market mappings, generate a conservative auto-baseline model from schedule/team identifiers. Do not call it pending-model in the user UI.
+- Auto-baseline fixtures may render basic win/draw/loss, total, and handicap probabilities, but must mark missing dynamic context and real markets. Do not render live edge or price advice unless real odds/Polymarket mappings exist.
+- Keep full local models and auto-baseline fixtures visually distinct in the UI and API payload.
 
 ## Static Match Context
 
@@ -73,7 +74,7 @@ Downgrade output when inputs are incomplete:
 
 - Missing lineups or injuries: no strong confidence or aggressive action label.
 - Missing odds or Polymarket curves: no price guidance.
-- Schedule-only fixtures: no AI signal, no edge, and no max reference price until baseline model, static teams, odds, and dynamic context are available.
+- Auto-baseline fixtures: only low-confidence AI context and observation labels until static teams, real odds, Polymarket curves, and dynamic context are available.
 - Stale news, weather, or AI synthesis: show the stale reason and update time.
 - Major changes such as goalkeeper changes, core-player absence, red cards, severe weather, or large market moves should trigger a recomputation and visible reason.
 

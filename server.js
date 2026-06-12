@@ -28,6 +28,47 @@ const TOP_HOLDER_LIMIT = Number(process.env.TOP_HOLDER_LIMIT || 50);
 const ELITE_ACTIVITY_LIMIT = 300;
 const USE_DEMO_POLYMARKET = process.env.DEMO_POLYMARKET === "1";
 const DISABLE_HISTORY_RECORDING = process.env.WORLDCUP_DISABLE_HISTORY === "1";
+const AUTO_BASELINE_DEFAULT_RATING = 68;
+const AUTO_BASELINE_RATINGS = {
+  ARG: 86,
+  BRA: 85,
+  ESP: 84,
+  FRA: 84,
+  ENG: 83,
+  GER: 82,
+  NED: 81,
+  POR: 81,
+  BEL: 80,
+  URU: 79,
+  CRO: 78,
+  ITA: 78,
+  USA: 76,
+  MAR: 76,
+  SUI: 76,
+  JPN: 75,
+  MEX: 76,
+  IRN: 73,
+  KOR: 72,
+  CAN: 72,
+  AUS: 71,
+  ECU: 74,
+  PAR: 71,
+  CZE: 69,
+  SWE: 72,
+  SCO: 70,
+  TUR: 73,
+  QAT: 64,
+  KSA: 66,
+  EGY: 72,
+  TUN: 69,
+  CIV: 72,
+  HAI: 58,
+  BIH: 67,
+  CPV: 63,
+  CUW: 57,
+  NZL: 61,
+  RSA: 63
+};
 
 let dashboardCache = null;
 let dashboardCacheAt = 0;
@@ -38,7 +79,35 @@ const TEAM_SEARCH_NAMES = {
   MEX: "Mexico",
   RSA: "South Africa",
   KOR: "South Korea",
-  CZE: "Czechia"
+  CZE: "Czechia",
+  CAN: "Canada",
+  BIH: "Bosnia-Herzegovina",
+  USA: "United States",
+  PAR: "Paraguay",
+  QAT: "Qatar",
+  SUI: "Switzerland",
+  BRA: "Brazil",
+  MAR: "Morocco",
+  HAI: "Haiti",
+  SCO: "Scotland",
+  AUS: "Australia",
+  TUR: "Türkiye",
+  GER: "Germany",
+  CUW: "Curaçao",
+  NED: "Netherlands",
+  JPN: "Japan",
+  CIV: "Ivory Coast",
+  ECU: "Ecuador",
+  SWE: "Sweden",
+  TUN: "Tunisia",
+  ESP: "Spain",
+  CPV: "Cape Verde",
+  BEL: "Belgium",
+  EGY: "Egypt",
+  KSA: "Saudi Arabia",
+  URU: "Uruguay",
+  IRN: "Iran",
+  NZL: "New Zealand"
 };
 
 const SOCCER_POSITION_KEYWORDS = [
@@ -73,7 +142,37 @@ const SOCCER_POSITION_KEYWORDS = [
   "mexico",
   "south africa",
   "south korea",
-  "czech"
+  "czech",
+  "canada",
+  "bosnia",
+  "united states",
+  "paraguay",
+  "qatar",
+  "switzerland",
+  "brazil",
+  "morocco",
+  "haiti",
+  "scotland",
+  "australia",
+  "turkiye",
+  "türkiye",
+  "germany",
+  "curacao",
+  "curaçao",
+  "netherlands",
+  "japan",
+  "ivory coast",
+  "ecuador",
+  "sweden",
+  "tunisia",
+  "spain",
+  "cape verde",
+  "belgium",
+  "egypt",
+  "saudi arabia",
+  "uruguay",
+  "iran",
+  "new zealand"
 ];
 
 const WORLDCUP_MARKET_SEARCHES = [
@@ -162,6 +261,11 @@ function deepMerge(base, override) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function roundTo(value, digits = 2) {
+  const factor = Math.pow(10, digits);
+  return Math.round(value * factor) / factor;
 }
 
 function hoursSince(iso, now = Date.now()) {
@@ -558,12 +662,13 @@ function buildCompleteness(match, polymarket) {
   const sources = context.sources || {};
   const sourceUpdatedAt = context.updatedAt;
   const marketUpdatedAt = match.manualMarkets && match.manualMarkets.lastUpdated;
+  const hasRealMarket = match.manualMarkets?.sourceType !== "auto-baseline";
   const chartCount = (match.recommendations || []).filter((rec) => rec.chart && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2).length;
   const lineupStatus = lineups.status === "confirmed" ? "synced" : lineups.status === "projected" ? "stale" : "missing";
   const injuryStatus = sourcedFreshnessStatus(sources.injuries, sourceUpdatedAt, 36);
   const newsStatus = sourcedFreshnessStatus(sources.teamNews, sourceUpdatedAt, 24);
   const weatherStatus = sources.weather?.ok === false ? "missing" : freshnessStatus(context.weather?.updatedAt || sources.weather?.updatedAt, 12);
-  const marketStatus = freshnessStatus(marketUpdatedAt, 6);
+  const marketStatus = hasRealMarket ? freshnessStatus(marketUpdatedAt, 6) : "missing";
   const polymarketStatus = polymarket && polymarket.ok && chartCount > 0 ? "synced" : chartCount > 0 ? "stale" : "missing";
   const aiStatus = sources.aiAnalysis?.ok === false ? "missing" : freshnessStatus(sources.aiAnalysis?.updatedAt || context.aiAnalysis?.updatedAt, 6);
 
@@ -609,10 +714,11 @@ function buildTradingGate(completeness) {
   const reasons = [];
   if (completeness.mode === "baseline") reasons.push("动态情报不足");
   if (completeness.missingCritical.length) reasons.push(...completeness.missingCritical);
+  const marketComponent = completeness.components.find((item) => item.label === "盘口");
 
   return {
     mode: completeness.mode,
-    allowPriceAdvice: completeness.components.some((item) => item.label === "盘口" && item.status !== "missing"),
+    allowPriceAdvice: marketComponent?.status !== "missing",
     allowSmallTrade: completeness.mode !== "baseline" && completeness.confidence !== "low",
     allowStrongTrade: completeness.mode === "post_lineup" && completeness.confidence === "high" && completeness.missingCritical.length === 0,
     reasons
@@ -720,7 +826,6 @@ function buildAiPrediction(match) {
 
 function attachAiPredictions(matches) {
   for (const match of matches || []) {
-    if (match.scheduleOnly) continue;
     match.aiPrediction = buildAiPrediction(match);
   }
 }
@@ -752,49 +857,93 @@ function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.
   return inUpcomingWindow(match.kickoffShanghai, nowMs);
 }
 
-function schedulePlaceholderFromEvent(event, scheduleByKey, modeledKeys, finalResults, nowMs = Date.now()) {
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !inUpcomingWindow(event.kickoffUtc, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
   const key = scheduleEventKey(event);
   if (modeledKeys.has(key)) return null;
   if (hasRecordedFinal(event.scheduleId, finalResults)) return null;
-  return {
-    id: `schedule-${event.scheduleId || key}`,
-    scheduleOnly: true,
+
+  const homeTeam = scheduleTeamRecord(event.home);
+  const awayTeam = scheduleTeamRecord(event.away);
+  const { lambdaHome, lambdaAway } = autoBaselineLambda(homeTeam.rating, awayTeam.rating);
+  const id = `schedule-${event.scheduleId || key}`;
+  const baseMatch = {
+    id,
+    autoBaseline: true,
     scheduleStatus: event.status || "STATUS_SCHEDULED",
     scheduleStatusDetail: event.statusDetail || "Scheduled",
     scheduleSource: event.source,
-    homeName: event.home?.name || "TBD",
-    awayName: event.away?.name || "TBD",
-    home: event.home?.code || "",
-    away: event.away?.code || "",
+    homeName: eventTeamName(event, "home"),
+    awayName: eventTeamName(event, "away"),
+    home: eventTeamCode(event, "home"),
+    away: eventTeamCode(event, "away"),
+    homeTeam,
+    awayTeam,
     group: "待确认",
     venue: "待确认",
     matchday: "-",
+    kickoffLocal: event.kickoffUtc,
     kickoffShanghai: new Date(kickoffMs).toISOString(),
-    aiPrediction: {
-      label: "待建模",
-      probability: null,
-      confidence: "low",
-      tradeLabel: "等待数据",
-      restrictions: ["缺少本地研究基线", "缺少盘口", "缺少动态情报"],
-      rows: [],
-      reasons: ["这场比赛来自三天赛程源，但还没有完整球队静态数据、模型参数和盘口映射。"]
+    model: {
+      lambdaHome,
+      lambdaAway,
+      manualAdjustments: [
+        {
+          label: "赛程自动基线",
+          impact: "用保守球队评分生成初始 xG；待静态研究、动态情报和盘口映射补齐后替换。"
+        }
+      ]
     },
-    recommendations: []
+    dynamic: {
+      status: "赛程自动基线；缺少阵容、伤停、球队新闻和真实盘口。",
+      injurySummary: "未同步可确认伤停。",
+      weatherSummary: "未同步球场天气。",
+      lineupConfidence: "低",
+      lastChecked: new Date().toISOString()
+    },
+    headToHead: {
+      windowYears: 4,
+      windowStart: "",
+      windowEnd: "",
+      scope: "未同步",
+      summary: {
+        matches: 0,
+        homeWins: 0,
+        draws: 0,
+        awayWins: 0,
+        homeGoals: 0,
+        awayGoals: 0
+      },
+      latestMeetings: [],
+      allTimeNote: "赛程自动基线尚未同步四年交手资料。",
+      impact: "交手资料缺失，模型不做交手加权。",
+      sourceStatus: "missing",
+      sources: [],
+      updatedAt: null
+    },
+    context: scheduleAutoBaselineContext(event)
   };
+  baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
+  baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
+  baseMatch.manualMarkets = autoBaselineManualMarkets(baseMatch, baseMatch.probabilities);
+  baseMatch.recommendations = [];
+  baseMatch.completeness = buildCompleteness(baseMatch, polymarket);
+  baseMatch.tradingGate = buildTradingGate(baseMatch.completeness);
+  baseMatch.recommendations = buildRecommendations(baseMatch, baseMatch.probabilities);
+  return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(match.homeName, match.awayName)));
-  const scheduleOnly = (schedule.matches || [])
-    .map((event) => schedulePlaceholderFromEvent(event, scheduleByKey, modeledKeys, finalResults, nowMs))
+  const autoBaseline = (schedule.matches || [])
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, nowMs))
     .filter(Boolean);
-  const combined = [...visibleModeled, ...scheduleOnly]
+  const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
 
   return {
@@ -804,7 +953,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults) {
       hideAfterHours: MATCH_HIDE_AFTER_HOURS,
       modeledTotal: matches.length,
       modeledVisible: visibleModeled.length,
-      scheduleOnly: scheduleOnly.length,
+      autoBaseline: autoBaseline.length,
       hiddenModeled: matches.length - visibleModeled.length,
       completedResults: finalResults.size,
       source: schedule.source,
@@ -969,9 +1118,187 @@ function teamNameVariants(teamCode, displayName) {
     MEX: ["mexico"],
     RSA: ["south africa"],
     KOR: ["south korea", "korea"],
-    CZE: ["czechia", "czech republic", "czech"]
+    CZE: ["czechia", "czech republic", "czech"],
+    USA: ["united states", "usa", "usmnt"],
+    BIH: ["bosnia-herzegovina", "bosnia and herzegovina", "bosnia"],
+    SUI: ["switzerland", "swiss"],
+    TUR: ["turkiye", "türkiye", "turkey"],
+    CUW: ["curacao", "curaçao"],
+    CIV: ["ivory coast", "cote d'ivoire", "côte d'ivoire"],
+    KSA: ["saudi arabia", "saudi"],
+    CPV: ["cape verde"],
+    NED: ["netherlands", "holland"],
+    GER: ["germany"],
+    BRA: ["brazil"],
+    MAR: ["morocco"],
+    CAN: ["canada"],
+    PAR: ["paraguay"],
+    QAT: ["qatar"],
+    HAI: ["haiti"],
+    SCO: ["scotland"],
+    AUS: ["australia"],
+    JPN: ["japan"],
+    ECU: ["ecuador"],
+    SWE: ["sweden"],
+    TUN: ["tunisia"],
+    ESP: ["spain"],
+    BEL: ["belgium"],
+    EGY: ["egypt"],
+    URU: ["uruguay"],
+    IRN: ["iran"],
+    NZL: ["new zealand"]
   }[teamCode] || [];
   return [...new Set([...base, ...extra].filter(Boolean))];
+}
+
+function eventTeamName(event, side) {
+  return event?.[side]?.name || "TBD";
+}
+
+function eventTeamCode(event, side) {
+  return event?.[side]?.code || "";
+}
+
+function teamRatingForScheduleTeam(team) {
+  const code = String(team?.code || "").toUpperCase();
+  return AUTO_BASELINE_RATINGS[code] || AUTO_BASELINE_DEFAULT_RATING;
+}
+
+function scheduleTeamRecord(team) {
+  const name = team?.name || "TBD";
+  const code = String(team?.code || "").toUpperCase();
+  const rating = teamRatingForScheduleTeam(team);
+  return {
+    name,
+    group: "待确认",
+    rating,
+    style: "赛程源自动纳入，等待本地静态研究补齐",
+    staticSignals: [
+      `自动基线评分：${rating}`,
+      "世界排名、阵容深度、风格标签待同步"
+    ],
+    watchItems: [
+      "补齐官方/可靠赛前阵容",
+      "补齐伤停和球队新闻",
+      "匹配公开盘口和 Polymarket 市场"
+    ],
+    worldRanking: null,
+    code
+  };
+}
+
+function autoBaselineLambda(homeRating, awayRating) {
+  const diff = clamp((homeRating - awayRating) / 20, -1.1, 1.1);
+  return {
+    lambdaHome: roundTo(clamp(1.18 + diff * 0.3, 0.55, 2.25), 2),
+    lambdaAway: roundTo(clamp(1.02 - diff * 0.24, 0.45, 2.05), 2)
+  };
+}
+
+function impliedMoneylineFromModel(probabilities, margin = 0.04) {
+  const keys = ["home", "draw", "away"];
+  const raw = keys.map((key) => Math.max(0.01, probabilities[key] || 0));
+  const total = raw.reduce((sum, value) => sum + value, 0) || 1;
+  return Object.fromEntries(keys.map((key, index) => [
+    key,
+    roundTo(clamp((raw[index] / total) * (1 - margin), 0.01, 0.98), 2)
+  ]));
+}
+
+function impliedTotalsFromModel(probabilities, margin = 0.04) {
+  return {
+    under25: roundTo(clamp((probabilities.under25 || 0) * (1 - margin), 0.01, 0.98), 2),
+    over25: roundTo(clamp((probabilities.over25 || 0) * (1 - margin), 0.01, 0.98), 2)
+  };
+}
+
+function impliedHandicapFromModel(probabilities, homeLine, margin = 0.04) {
+  const home = handicapProbability(probabilities.topScoresFull || [], homeLine, "home");
+  const away = handicapProbability(probabilities.topScoresFull || [], homeLine, "away");
+  const homePrice = clamp(home.win * (1 - margin), 0.01, 0.98);
+  const awayPrice = clamp(away.win * (1 - margin), 0.01, 0.98);
+  return {
+    homePrice: roundTo(homePrice, 2),
+    awayPrice: roundTo(awayPrice, 2)
+  };
+}
+
+function autoBaselineManualMarkets(match, probabilities) {
+  const moneyline = impliedMoneylineFromModel(probabilities);
+  const totals = impliedTotalsFromModel(probabilities);
+  const homeLine = probabilities.home >= 0.57 ? -1.5 : probabilities.home <= 0.25 ? 1.5 : -0.5;
+  const handicapPrices = impliedHandicapFromModel(probabilities, homeLine);
+  const nowIso = new Date().toISOString();
+  return {
+    moneyline,
+    totals,
+    handicaps: [
+      {
+        id: `${match.id}-auto-handicap`,
+        homeLine,
+        awayLine: -homeLine,
+        homePrice: handicapPrices.homePrice,
+        awayPrice: handicapPrices.awayPrice,
+        source: "自动基线参考价；不是实时盘口。"
+      }
+    ],
+    history: {},
+    source: "赛程自动基线参考价；缺少真实盘口和 Polymarket 映射时仅用于概率展示，不给价格建议。",
+    sourceType: "auto-baseline",
+    lastUpdated: nowIso
+  };
+}
+
+function scheduleAutoBaselineContext(event) {
+  const nowIso = new Date().toISOString();
+  return {
+    updatedAt: nowIso,
+    lineups: {
+      status: "unavailable",
+      statusLabel: "赛程自动基线：官方首发和可靠预计阵容尚未同步",
+      home: {
+        formation: "待确认",
+        xi: [],
+        notes: "等待官方比赛中心或可靠赛前源更新。"
+      },
+      away: {
+        formation: "待确认",
+        xi: [],
+        notes: "等待官方比赛中心或可靠赛前源更新。"
+      }
+    },
+    injurySummary: "赛程自动基线尚未抓到可确认伤停；不允许强信号。",
+    teamNewsSummary: "赛程已同步，但球队新闻、战术和首发情报尚未补齐。",
+    recentForm: {
+      home: ["等待公开近期状态源更新"],
+      away: ["等待公开近期状态源更新"]
+    },
+    tacticalMatchup: "等待阵容、伤停和赛前 preview 后评估战术对位。",
+    riskFlags: ["自动基线缺少动态情报", "缺少真实盘口映射"],
+    aiAnalysis: {
+      ok: false,
+      error: "自动基线未经过赛前 AI 综合情报重算。"
+    },
+    weather: {
+      summary: "天气源未同步，暂不调整总进球。",
+      updatedAt: null
+    },
+    modelImpacts: [],
+    sources: {
+      lineups: { ok: false, updatedAt: null, url: "", error: "未同步" },
+      injuries: { ok: false, updatedAt: null, url: "", error: "未同步" },
+      teamNews: { ok: false, updatedAt: null, url: "", error: "未同步" },
+      weather: { ok: false, updatedAt: null, url: "", error: "未同步" },
+      aiAnalysis: { ok: false, updatedAt: null, url: "", error: "未同步" },
+      schedule: {
+        ok: true,
+        updatedAt: nowIso,
+        url: "",
+        error: "",
+        source: event.source || "赛程源"
+      }
+    }
+  };
 }
 
 async function timedFetchJson(url, options = {}) {
@@ -1008,10 +1335,36 @@ async function timedFetchJson(url, options = {}) {
   }
 }
 
-async function fetchPolymarket() {
+function buildPolymarketSearches(schedule = null) {
+  const scheduleSearches = (schedule?.matches || [])
+    .filter((event) => !event.completed && !isFinishedStatus(event.status))
+    .map((event) => {
+      const homeName = eventTeamName(event, "home");
+      const awayName = eventTeamName(event, "away");
+      const homeNeedle = homeName.toLowerCase();
+      const awayNeedle = awayName.toLowerCase();
+      return {
+        label: `${homeName} vs ${awayName}`,
+        q: `${homeName} ${awayName}`,
+        teamNeedles: [homeNeedle, awayNeedle]
+      };
+    })
+    .filter((search) => search.teamNeedles.every((needle) => needle && needle !== "tbd"));
+  const combined = [...WORLDCUP_MARKET_SEARCHES, ...scheduleSearches];
+  const seen = new Set();
+  return combined.filter((search) => {
+    const key = `${search.q}:${(search.teamNeedles || []).join("|")}:${search.worldCupOnly ? "worldcup" : ""}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function fetchPolymarket(schedule = null) {
   if (USE_DEMO_POLYMARKET) return demoPolymarket();
 
-  const results = await Promise.all(WORLDCUP_MARKET_SEARCHES.map((search) => fetchPolymarketSearch(search)));
+  const searches = buildPolymarketSearches(schedule);
+  const results = await Promise.all(searches.map((search) => fetchPolymarketSearch(search)));
   const firstOk = results.find((result) => result.ok);
   if (!firstOk) {
     const firstError = results.find((result) => result.error);
@@ -1191,6 +1544,7 @@ function isWorldCupSoccerMarket(market) {
     "fifa",
     "soccer",
     "football",
+    ...Object.values(TEAM_SEARCH_NAMES).map((name) => String(name).toLowerCase()),
     "mexico",
     "south africa",
     "south korea",
@@ -1923,13 +2277,13 @@ async function buildDashboard({ force = false } = {}) {
     },
     matches: {}
   });
-  const [polymarket, schedule, finalResults] = await Promise.all([
-    fetchPolymarket(),
+  const [schedule, finalResults] = await Promise.all([
     fetchScheduleWindow(),
     fetchFinalResults()
   ]);
+  const polymarket = await fetchPolymarket(schedule);
   const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket);
   attachMarketCharts(matches, polymarket);
   const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
   attachAiPredictions(matches);
@@ -1963,7 +2317,7 @@ async function buildDashboard({ force = false } = {}) {
         ok: schedule.ok,
         lastUpdated: schedule.lastUpdated || "",
         error: schedule.error,
-        detail: `${visibility.modeledVisible} 场已建模 · ${visibility.scheduleOnly} 场待建模 · ${visibility.hiddenModeled} 场已隐藏`
+        detail: `${visibility.modeledVisible} 场完整模型 · ${visibility.autoBaseline} 场自动基线 · ${visibility.hiddenModeled} 场已隐藏`
       },
       {
         source: "足球高手账户",

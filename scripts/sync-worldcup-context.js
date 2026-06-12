@@ -9,17 +9,49 @@ const FETCH_TIMEOUT_MS = 8000;
 const MATCH_SYNC_TIMEOUT_MS = 50000;
 const RUN_TIMEOUT_MS = 90000;
 const OPENAI_TIMEOUT_MS = 30000;
+const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
+const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
+const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 
 const VENUE_COORDINATES = {
   "墨西哥城": { latitude: 19.4326, longitude: -99.1332, label: "墨西哥城" },
-  "瓜达拉哈拉/萨波潘": { latitude: 20.6597, longitude: -103.3496, label: "瓜达拉哈拉/萨波潘" }
+  "瓜达拉哈拉/萨波潘": { latitude: 20.6597, longitude: -103.3496, label: "瓜达拉哈拉/萨波潘" },
+  "待确认": null
 };
 
 const TEAM_SEARCH_NAMES = {
   MEX: "Mexico",
   RSA: "South Africa",
   KOR: "South Korea",
-  CZE: "Czech Republic"
+  CZE: "Czech Republic",
+  CAN: "Canada",
+  BIH: "Bosnia-Herzegovina",
+  USA: "United States",
+  PAR: "Paraguay",
+  QAT: "Qatar",
+  SUI: "Switzerland",
+  BRA: "Brazil",
+  MAR: "Morocco",
+  HAI: "Haiti",
+  SCO: "Scotland",
+  AUS: "Australia",
+  TUR: "Türkiye",
+  GER: "Germany",
+  CUW: "Curaçao",
+  NED: "Netherlands",
+  JPN: "Japan",
+  CIV: "Ivory Coast",
+  ECU: "Ecuador",
+  SWE: "Sweden",
+  TUN: "Tunisia",
+  ESP: "Spain",
+  CPV: "Cape Verde",
+  BEL: "Belgium",
+  EGY: "Egypt",
+  KSA: "Saudi Arabia",
+  URU: "Uruguay",
+  IRN: "Iran",
+  NZL: "New Zealand"
 };
 
 const ARTICLE_DOMAINS = [
@@ -121,6 +153,50 @@ function shanghaiIso(now = new Date()) {
   return `${shifted.toISOString().slice(0, 19)}+08:00`;
 }
 
+function shanghaiDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}${parts.month}${parts.day}`;
+}
+
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 86400000);
+}
+
+function dateMs(iso) {
+  const ms = new Date(iso || "").getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function statusName(value) {
+  return String(value || "").toLowerCase();
+}
+
+function isFinishedStatus(status) {
+  const normalized = statusName(status);
+  return normalized.includes("final")
+    || normalized.includes("post")
+    || normalized.includes("full_time")
+    || normalized.includes("full-time")
+    || normalized.includes("finished")
+    || normalized.includes("complete");
+}
+
+function inUpcomingWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DAYS) {
+  const kickoffMs = dateMs(kickoffIso);
+  if (!kickoffMs) return false;
+  const hideAfterMs = MATCH_HIDE_AFTER_HOURS * 3600000;
+  const windowEnd = nowMs + days * 86400000;
+  return kickoffMs >= nowMs - hideAfterMs && kickoffMs <= windowEnd;
+}
+
 async function readJson(filePath, fallback = null) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -187,6 +263,106 @@ async function timedFetchJson(url, options = {}) {
   } catch (error) {
     return { ok: false, latencyMs: result.latencyMs, error: `JSON parse failed: ${error.message}`, url };
   }
+}
+
+function matchScheduleKey(homeName, awayName) {
+  const normalize = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return [normalize(homeName), normalize(awayName)].sort().join(":");
+}
+
+function scheduleEventKey(event) {
+  return matchScheduleKey(event.home?.name || event.homeName, event.away?.name || event.awayName);
+}
+
+async function fetchScheduleWindow(now = new Date()) {
+  const dates = [];
+  for (let offset = 0; offset <= MATCH_WINDOW_DAYS; offset += 1) {
+    dates.push(shanghaiDateKey(addDays(now, offset)));
+  }
+  const url = `${ESPN_WORLDCUP_SCOREBOARD}?dates=${dates[0]}-${dates[dates.length - 1]}`;
+  const result = await timedFetchJson(url);
+  if (!result.ok) {
+    return {
+      ok: false,
+      source: "ESPN FIFA World Cup scoreboard",
+      url,
+      error: result.error,
+      matches: []
+    };
+  }
+  const events = Array.isArray(result.data?.events) ? result.data.events : [];
+  return {
+    ok: true,
+    source: "ESPN FIFA World Cup scoreboard",
+    url,
+    matches: events.map((event) => {
+      const competition = event.competitions?.[0] || {};
+      const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
+      const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
+      const away = competitors.find((item) => item.homeAway === "away") || competitors[1] || {};
+      return {
+        scheduleId: String(event.id || ""),
+        kickoffUtc: event.date || competition.date || "",
+        status: event.status?.type?.name || "",
+        statusDetail: event.status?.type?.shortDetail || event.status?.type?.detail || "",
+        completed: Boolean(event.status?.type?.completed) || isFinishedStatus(event.status?.type?.name),
+        home: {
+          code: home.team?.abbreviation || "",
+          name: home.team?.displayName || home.team?.name || ""
+        },
+        away: {
+          code: away.team?.abbreviation || "",
+          name: away.team?.displayName || away.team?.name || ""
+        }
+      };
+    })
+  };
+}
+
+function scheduleMatchFromEvent(event) {
+  const kickoffMs = dateMs(event.kickoffUtc);
+  if (!kickoffMs || !inUpcomingWindow(event.kickoffUtc)) return null;
+  if (event.completed || isFinishedStatus(event.status)) return null;
+  const homeCode = String(event.home?.code || "").toUpperCase();
+  const awayCode = String(event.away?.code || "").toUpperCase();
+  return {
+    id: `schedule-${event.scheduleId || scheduleEventKey(event)}`,
+    autoBaseline: true,
+    home: homeCode,
+    away: awayCode,
+    homeName: event.home?.name || TEAM_SEARCH_NAMES[homeCode] || "TBD",
+    awayName: event.away?.name || TEAM_SEARCH_NAMES[awayCode] || "TBD",
+    kickoffLocal: event.kickoffUtc,
+    kickoffShanghai: new Date(kickoffMs).toISOString(),
+    venue: "待确认",
+    model: {
+      lambdaHome: 1.1,
+      lambdaAway: 1.0,
+      manualAdjustments: []
+    }
+  };
+}
+
+async function buildSyncMatches(dashboard) {
+  const schedule = await fetchScheduleWindow();
+  const staticMatches = (dashboard.matches || []).map((match) => {
+    const homeTeam = dashboard.teams[match.home] || {};
+    const awayTeam = dashboard.teams[match.away] || {};
+    return {
+      ...match,
+      homeName: homeTeam.name || TEAM_SEARCH_NAMES[match.home] || match.home,
+      awayName: awayTeam.name || TEAM_SEARCH_NAMES[match.away] || match.away
+    };
+  });
+  const modeledKeys = new Set(staticMatches.map((match) => matchScheduleKey(match.homeName, match.awayName)));
+  const scheduleMatches = (schedule.matches || [])
+    .map(scheduleMatchFromEvent)
+    .filter(Boolean)
+    .filter((match) => !modeledKeys.has(matchScheduleKey(match.homeName, match.awayName)));
+  return {
+    schedule,
+    matches: [...staticMatches, ...scheduleMatches]
+  };
 }
 
 function stripHtml(html) {
@@ -924,21 +1100,15 @@ async function main() {
     process.exit(2);
   }, RUN_TIMEOUT_MS);
 
-  const matchEntries = await Promise.all(dashboard.matches.map((match) => withTimeout((async () => {
-    const homeTeam = dashboard.teams[match.home];
-    const awayTeam = dashboard.teams[match.away];
-    const enrichedMatch = {
-      ...match,
-      homeName: homeTeam.name,
-      awayName: awayTeam.name
-    };
+  const syncPlan = await buildSyncMatches(dashboard);
+  const matchEntries = await Promise.all(syncPlan.matches.map((match) => withTimeout((async () => {
     const [preview, weather] = await Promise.all([
-      fetchSearchPreview(enrichedMatch),
-      fetchWeather(enrichedMatch)
+      fetchSearchPreview(match),
+      fetchWeather(match)
     ]);
     const openAiConfig = await getOpenAiConfig();
-    const aiAnalysis = await fetchOpenAiAnalysis(enrichedMatch, preview, weather);
-    return [match.id, buildMatchContext(enrichedMatch, preview, weather, aiAnalysis, openAiConfig, previous.matches?.[match.id] || {})];
+    const aiAnalysis = await fetchOpenAiAnalysis(match, preview, weather);
+    return [match.id, buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, previous.matches?.[match.id] || {})];
   })(), MATCH_SYNC_TIMEOUT_MS, `match ${match.id}`).then((result) => {
     if (Array.isArray(result)) return result;
     return [match.id, {
@@ -962,7 +1132,14 @@ async function main() {
       ok: true,
       source: "公开情报同步快照",
       lastUpdated: shanghaiIso(),
-      notes: "公开抓取结果。缺失或低置信字段不会伪造成事实。"
+      notes: "公开抓取结果。缺失或低置信字段不会伪造成事实。",
+      schedule: {
+        ok: syncPlan.schedule.ok,
+        source: syncPlan.schedule.source,
+        url: syncPlan.schedule.url,
+        error: syncPlan.schedule.error || "",
+        matchesInWindow: syncPlan.matches.length
+      }
     },
     matches
   };
