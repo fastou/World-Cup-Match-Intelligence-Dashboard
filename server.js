@@ -15,11 +15,14 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 6500;
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
-const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 80);
+const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
+const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 240);
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
 const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 10;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
+const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
+const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
@@ -374,6 +377,23 @@ function inUpcomingWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DA
   const hideAfterMs = MATCH_HIDE_AFTER_HOURS * 3600000;
   const windowEnd = nowMs + days * 86400000;
   return kickoffMs >= nowMs - hideAfterMs && kickoffMs <= windowEnd;
+}
+
+function inScheduleWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DAYS, lookbackDays = MATCH_SCHEDULE_LOOKBACK_DAYS) {
+  const kickoffMs = dateMs(kickoffIso);
+  if (!kickoffMs) return false;
+  const windowStart = nowMs - lookbackDays * 86400000;
+  const windowEnd = nowMs + days * 86400000;
+  return kickoffMs >= windowStart && kickoffMs <= windowEnd;
+}
+
+function shouldKeepScheduledMatch(kickoffIso, schedule = null, nowMs = Date.now()) {
+  const kickoffMs = dateMs(kickoffIso);
+  if (!kickoffMs) return false;
+  if (schedule?.completed || isFinishedStatus(schedule?.status)) return false;
+  if (!inScheduleWindow(kickoffIso, nowMs)) return false;
+  if (kickoffMs >= nowMs - MATCH_HIDE_AFTER_HOURS * 3600000) return true;
+  return Boolean(schedule) && kickoffMs >= nowMs - MATCH_LIVE_GRACE_HOURS * 3600000;
 }
 
 function hasRecordedFinal(matchId, finalResults) {
@@ -995,12 +1015,12 @@ function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.
   if (hasRecordedFinal(match.id, finalResults)) return false;
   const schedule = scheduleByKey.get(matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName));
   if (schedule?.completed || isFinishedStatus(schedule?.status)) return false;
-  return inUpcomingWindow(match.kickoffShanghai, nowMs);
+  return shouldKeepScheduledMatch(match.kickoffShanghai, schedule, nowMs);
 }
 
 function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
-  if (!kickoffMs || !inUpcomingWindow(event.kickoffUtc, nowMs)) return null;
+  if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
   const key = scheduleEventKey(event);
   if (modeledKeys.has(key)) return null;
@@ -1105,6 +1125,8 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
     visibility: {
       windowDays: MATCH_WINDOW_DAYS,
       hideAfterHours: MATCH_HIDE_AFTER_HOURS,
+      liveGraceHours: MATCH_LIVE_GRACE_HOURS,
+      scheduleLookbackDays: MATCH_SCHEDULE_LOOKBACK_DAYS,
       modeledTotal: matches.length,
       modeledVisible: visibleModeled.length,
       autoBaseline: autoBaseline.length,
@@ -1727,7 +1749,13 @@ async function fetchPolymarket(schedule = null) {
     Promise.all(eventSlugSearches.map((search) => fetchPolymarketSportsPageMarkets(search))),
     Promise.all(searches.map((search) => fetchPolymarketSearch(search)))
   ]);
-  const results = [...eventSlugResults, ...sportsPageResults, ...searchResults];
+  const prioritizedResults = [
+    ...eventSlugResults,
+    ...sportsPageResults,
+    ...searchResults.filter((result) => !result.worldCupOnly),
+    ...searchResults.filter((result) => result.worldCupOnly)
+  ];
+  const results = prioritizedResults;
   const firstOk = results.find((result) => result.ok);
   if (!firstOk) {
     const firstError = results.find((result) => result.error);
@@ -1742,7 +1770,7 @@ async function fetchPolymarket(schedule = null) {
 
   const markets = uniqueMarkets(results.flatMap((result) => result.markets || []));
   const normalizedMarkets = markets
-    .slice(0, 40)
+    .slice(0, POLYMARKET_MARKET_LIMIT)
     .map(normalizePolymarketMarket);
   const tokenIds = [...new Set(normalizedMarkets
     .flatMap((market) => market.tokens.map((token) => token.tokenId))
@@ -1922,7 +1950,7 @@ function escapeRegExp(value) {
 async function fetchScheduleWindow(now = new Date()) {
   const startedAt = Date.now();
   const dates = [];
-  for (let offset = 0; offset <= MATCH_WINDOW_DAYS; offset += 1) {
+  for (let offset = -MATCH_SCHEDULE_LOOKBACK_DAYS; offset <= MATCH_WINDOW_DAYS; offset += 1) {
     dates.push(shanghaiDateKey(addDays(now, offset)));
   }
   const url = `${ESPN_WORLDCUP_SCOREBOARD}?dates=${dates[0]}-${dates[dates.length - 1]}`;
@@ -1984,6 +2012,7 @@ async function fetchPolymarketSearch(search) {
   if (!result.ok) {
     return {
       label: search.label,
+      worldCupOnly: Boolean(search.worldCupOnly),
       ok: false,
       latencyMs: result.latencyMs,
       error: translateError(result.error),
@@ -2003,6 +2032,7 @@ async function fetchPolymarketSearch(search) {
 
   return {
     label: search.label,
+    worldCupOnly: Boolean(search.worldCupOnly),
     ok: true,
     latencyMs: result.latencyMs,
     eventCount: selectedEvents.length,
