@@ -60,6 +60,8 @@ Use this skill when building, modifying, operating, or extending a football matc
 
 - Team static data should include world ranking when available, with source name, source URL, and update date.
 - World ranking should use an official/public ranking source or a timestamped local snapshot fallback such as `data/fifa-rankings.json`; it should not remain blank for common national teams.
+- Each team should include recent match form against other opponents when a public results feed is available: date, opponent, score, W/D/L, competition, source URL, update time, and a compact W/D/L plus goals summary.
+- Recent form belongs in the Static tab as historical context. It can inform low-weight model review, but missing or stale recent-form data must not be invented or treated as confirmed team news.
 - If head-to-head is not yet available for an auto-baseline fixture, show a structured missing/pending status with source target, not a blank value.
 - Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
 - Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.
@@ -126,7 +128,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - dynamic context state
 - elite account positions
 - top holder snapshots
-- static world rankings and head-to-head context
+- static world rankings, team recent form, and head-to-head context
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.

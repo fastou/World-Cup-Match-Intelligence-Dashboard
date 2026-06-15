@@ -201,6 +201,27 @@ CREATE TABLE IF NOT EXISTS head_to_head_snapshots (
   FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
 );
 
+CREATE TABLE IF NOT EXISTS recent_form_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id TEXT NOT NULL,
+  match_id TEXT NOT NULL,
+  side TEXT NOT NULL,
+  team_code TEXT,
+  team_name TEXT,
+  source TEXT,
+  source_url TEXT,
+  status TEXT,
+  updated_at TEXT,
+  matches INTEGER,
+  wins INTEGER,
+  draws INTEGER,
+  losses INTEGER,
+  goals_for INTEGER,
+  goals_against INTEGER,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
+);
+
 CREATE TABLE IF NOT EXISTS polymarket_holder_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
@@ -284,6 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_price_points_match_key ON price_points(match_id, 
 CREATE INDEX IF NOT EXISTS idx_elite_positions_match_key ON elite_position_snapshots(match_id, recommendation_key);
 CREATE INDEX IF NOT EXISTS idx_top_holders_match_key ON top_holder_snapshots(match_id, recommendation_key);
 CREATE INDEX IF NOT EXISTS idx_h2h_match ON head_to_head_snapshots(match_id, window_start, window_end);
+CREATE INDEX IF NOT EXISTS idx_recent_form_match ON recent_form_snapshots(match_id, side, updated_at);
 CREATE INDEX IF NOT EXISTS idx_polymarket_holders_market ON polymarket_holder_snapshots(condition_id, token_id);
 CREATE INDEX IF NOT EXISTS idx_results_updated ON match_results(updated_at);
 
@@ -377,6 +399,9 @@ async function recordDashboardSnapshot(payload, options = {}) {
       sql: "DELETE FROM head_to_head_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
     }, {
+      sql: "DELETE FROM recent_form_snapshots WHERE snapshot_id = ?;",
+      params: [snapshotId]
+    }, {
       sql:
       `INSERT OR REPLACE INTO match_snapshots
        (snapshot_id, run_id, match_id, captured_at, prediction_label, prediction_key, prediction_probability,
@@ -435,6 +460,37 @@ async function recordDashboardSnapshot(payload, options = {}) {
         json(h2h)
       ]
     });
+
+    const recentFormRecords = match.recentFormRecords || match.context?.recentFormRecords || {};
+    for (const side of ["home", "away"]) {
+      const record = recentFormRecords[side] || {};
+      const summary = record.summary || {};
+      operations.push({
+        sql:
+        `INSERT INTO recent_form_snapshots
+         (snapshot_id, match_id, side, team_code, team_name, source, source_url, status, updated_at,
+          matches, wins, draws, losses, goals_for, goals_against, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        params: [
+          snapshotId,
+          match.id,
+          side,
+          textOrNull(record.teamCode || (side === "home" ? match.home : match.away)),
+          textOrNull(record.teamName || (side === "home" ? match.homeName : match.awayName)),
+          textOrNull(record.source),
+          textOrNull(record.sourceUrl),
+          textOrNull(record.status),
+          textOrNull(record.updatedAt),
+          numberOrNull(summary.matches),
+          numberOrNull(summary.wins),
+          numberOrNull(summary.draws),
+          numberOrNull(summary.losses),
+          numberOrNull(summary.goalsFor),
+          numberOrNull(summary.goalsAgainst),
+          json(record)
+        ]
+      });
+    }
 
     for (const rec of match.recommendations || []) {
       pushMarketSnapshotOps(operations, snapshotId, match.id, rec);

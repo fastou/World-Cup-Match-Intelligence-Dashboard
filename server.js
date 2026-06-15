@@ -10,6 +10,7 @@ const DATA_PATH = path.join(ROOT, "data", "worldcup-dashboard.json");
 const FIFA_RANKINGS_PATH = path.join(ROOT, "data", "fifa-rankings.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
+const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 6500;
@@ -132,7 +133,23 @@ const TEAM_SEARCH_NAMES = {
   KSA: "Saudi Arabia",
   URU: "Uruguay",
   IRN: "Iran",
-  NZL: "New Zealand"
+  NZL: "New Zealand",
+  FRA: "France",
+  SEN: "Senegal",
+  IRQ: "Iraq",
+  NOR: "Norway",
+  ARG: "Argentina",
+  ALG: "Algeria",
+  AUT: "Austria",
+  JOR: "Jordan",
+  POR: "Portugal",
+  COD: "Congo DR",
+  CRO: "Croatia",
+  ENG: "England",
+  GHA: "Ghana",
+  PAN: "Panama",
+  COL: "Colombia",
+  UZB: "Uzbekistan"
 };
 
 const TEAM_DISPLAY_NAMES_ZH = {
@@ -167,8 +184,29 @@ const TEAM_DISPLAY_NAMES_ZH = {
   KSA: "沙特阿拉伯",
   URU: "乌拉圭",
   IRN: "伊朗",
-  NZL: "新西兰"
+  NZL: "新西兰",
+  FRA: "法国",
+  SEN: "塞内加尔",
+  IRQ: "伊拉克",
+  NOR: "挪威",
+  ARG: "阿根廷",
+  ALG: "阿尔及利亚",
+  AUT: "奥地利",
+  JOR: "约旦",
+  POR: "葡萄牙",
+  COD: "刚果（金）",
+  CRO: "克罗地亚",
+  ENG: "英格兰",
+  GHA: "加纳",
+  PAN: "巴拿马",
+  COL: "哥伦比亚",
+  UZB: "乌兹别克斯坦"
 };
+
+function teamDisplayName(code, fallback = "") {
+  const normalized = String(code || "").toUpperCase();
+  return TEAM_DISPLAY_NAMES_ZH[normalized] || TEAM_SEARCH_NAMES[normalized] || fallback || normalized;
+}
 
 const SOCCER_POSITION_KEYWORDS = [
   "soccer",
@@ -1018,7 +1056,134 @@ function isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs = Date.
   return shouldKeepScheduledMatch(match.kickoffShanghai, schedule, nowMs);
 }
 
-function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, nowMs = Date.now()) {
+function h2hPairKeys(home, away) {
+  const homeCode = String(home || "").toUpperCase();
+  const awayCode = String(away || "").toUpperCase();
+  return [`${homeCode}-${awayCode}`, `${awayCode}-${homeCode}`, [homeCode, awayCode].sort().join("-")].filter(Boolean);
+}
+
+function findH2hOverride(home, away, h2hOverrides = {}) {
+  const pairs = h2hOverrides?.pairs || {};
+  for (const key of h2hPairKeys(home, away)) {
+    if (pairs[key]) return pairs[key];
+  }
+  return null;
+}
+
+function h2hDateMs(date) {
+  const ms = new Date(`${date || ""}T12:00:00Z`).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function h2hWindow(kickoffIso) {
+  const kickoff = new Date(kickoffIso || Date.now());
+  const kickoffMs = Number.isFinite(kickoff.getTime()) ? kickoff.getTime() : Date.now();
+  const windowEnd = new Date(kickoffMs);
+  const windowStart = new Date(kickoffMs);
+  windowStart.setUTCFullYear(windowStart.getUTCFullYear() - 4);
+  return {
+    startMs: windowStart.getTime(),
+    endMs: kickoffMs,
+    windowStart: windowStart.toISOString().slice(0, 10),
+    windowEnd: windowEnd.toISOString().slice(0, 10),
+    asOf: new Date(kickoffMs - 1000).toISOString()
+  };
+}
+
+function h2hTeamName(code) {
+  const normalized = String(code || "").toUpperCase();
+  return TEAM_DISPLAY_NAMES_ZH[normalized] || TEAM_SEARCH_NAMES[normalized] || normalized;
+}
+
+function h2hMeetingGoalsFor(meeting, code) {
+  const normalized = String(code || "").toUpperCase();
+  if (String(meeting.home || "").toUpperCase() === normalized) return Number(meeting.homeGoals);
+  if (String(meeting.away || "").toUpperCase() === normalized) return Number(meeting.awayGoals);
+  return null;
+}
+
+function uniqueSources(sources) {
+  const seen = new Set();
+  return sources.filter((source) => {
+    const key = `${source.url || ""}|${source.name || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function h2hFromOverride(event, h2hOverrides, fifaRankings) {
+  const home = eventTeamCode(event, "home");
+  const away = eventTeamCode(event, "away");
+  const override = findH2hOverride(home, away, h2hOverrides);
+  if (!override) return null;
+
+  const window = h2hWindow(event.kickoffUtc);
+  const allMeetings = (Array.isArray(override.meetings) ? override.meetings : [])
+    .filter((meeting) => h2hDateMs(meeting.date) !== null)
+    .sort((a, b) => h2hDateMs(b.date) - h2hDateMs(a.date));
+  const recentMeetings = allMeetings.filter((meeting) => {
+    const ms = h2hDateMs(meeting.date);
+    return ms >= window.startMs && ms < window.endMs;
+  });
+  const summary = {
+    matches: recentMeetings.length,
+    homeWins: 0,
+    draws: 0,
+    awayWins: 0,
+    homeGoals: 0,
+    awayGoals: 0
+  };
+  recentMeetings.forEach((meeting) => {
+    const homeGoals = h2hMeetingGoalsFor(meeting, home);
+    const awayGoals = h2hMeetingGoalsFor(meeting, away);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return;
+    summary.homeGoals += homeGoals;
+    summary.awayGoals += awayGoals;
+    if (homeGoals > awayGoals) summary.homeWins += 1;
+    else if (homeGoals < awayGoals) summary.awayWins += 1;
+    else summary.draws += 1;
+  });
+  const homeRank = rankingForTeam(home, fifaRankings).rank;
+  const awayRank = rankingForTeam(away, fifaRankings).rank;
+  const rankingText = homeRank && awayRank
+    ? `长期实力基线：${eventTeamName(event, "home")} FIFA 第 ${homeRank}，${eventTeamName(event, "away")} FIFA 第 ${awayRank}。`
+    : "长期实力基线部分可用。";
+  const sources = uniqueSources([
+    ...(Array.isArray(override.sources) ? override.sources : []),
+    ...allMeetings.map((meeting) => ({
+      name: meeting.source || "结构化 H2H 来源",
+      url: meeting.sourceUrl || "",
+      status: "verified"
+    }))
+  ]).map((source) => ({ ...source, status: source.status || "verified" }));
+
+  return {
+    windowYears: 4,
+    windowStart: window.windowStart,
+    windowEnd: window.windowEnd,
+    asOf: window.asOf,
+    scope: override.scope || "赛前四年正式 A 级国际赛和友谊赛",
+    summary,
+    latestMeetings: recentMeetings.slice(0, 5).map((meeting) => ({
+      date: meeting.date,
+      competition: meeting.competition || "",
+      home: h2hTeamName(meeting.home),
+      away: h2hTeamName(meeting.away),
+      score: `${meeting.homeGoals}-${meeting.awayGoals}`,
+      source: meeting.source || ""
+    })),
+    allTimeNote: override.allTimeNote || "已读取结构化 H2H 来源；未记录历史交手时不把未知当成 0 场。",
+    impact: summary.matches > 0
+      ? `${rankingText} 近四年有 ${summary.matches} 场直接交手；样本很小，只做低权重复核，不单独大幅调整模型。`
+      : `${rankingText} 近四年无可确认直接交手，模型不对胜平负、让球盘或大小球做交手加权。`,
+    sourceStatus: summary.matches > 0 ? "verified-structured" : "verified-no-pre-match-meetings",
+    sources,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, h2hOverrides, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
@@ -1031,6 +1196,8 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   const { lambdaHome, lambdaAway } = autoBaselineLambda(homeTeam.rating, awayTeam.rating);
   const id = `schedule-${event.scheduleId || key}`;
   const syncedContext = contextForMatch(context, id);
+  const mergedContext = deepMerge(scheduleAutoBaselineContext(event, fifaRankings), syncedContext);
+  const fallbackHeadToHead = h2hFromOverride(event, h2hOverrides, fifaRankings);
   const venue = venueLabel(event.venue);
   const baseMatch = {
     id,
@@ -1046,6 +1213,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     away: eventTeamCode(event, "away"),
     homeTeam,
     awayTeam,
+    recentFormRecords: mergedContext.recentFormRecords,
     group: "待确认",
     venue,
     venueInfo: event.venue || {},
@@ -1071,7 +1239,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
       lineupConfidence: "低",
       lastChecked: new Date().toISOString()
     },
-    headToHead: syncedContext.headToHead || {
+    headToHead: syncedContext.headToHead || fallbackHeadToHead || {
       windowYears: 4,
       windowStart: String(new Date(event.kickoffUtc).getUTCFullYear() - 4),
       windowEnd: String(new Date(event.kickoffUtc).getUTCFullYear()),
@@ -1097,7 +1265,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
       ],
       updatedAt: new Date().toISOString()
     },
-    context: deepMerge(scheduleAutoBaselineContext(event, fifaRankings), syncedContext)
+    context: mergedContext
   };
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
@@ -1109,13 +1277,13 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, h2hOverrides) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
-    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, nowMs))
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, h2hOverrides, nowMs))
     .filter(Boolean);
   const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
@@ -1154,6 +1322,7 @@ function normalizeMatch(match, teams, context, polymarket) {
     homeTeam,
     awayTeam,
     headToHead: matchContext.headToHead || mergedMatch.headToHead,
+    recentFormRecords: matchContext.recentFormRecords || mergedMatch.recentFormRecords,
     probabilities,
     dynamicModel
   };
@@ -1522,6 +1691,29 @@ function contextRecentForm(event, side, ranking) {
   ];
 }
 
+function emptyRecentFormRecord(event, side, ranking) {
+  const code = eventTeamCode(event, side);
+  return {
+    ok: false,
+    status: "queued",
+    teamCode: code,
+    teamName: teamDisplayName(code, eventTeamName(event, side)),
+    updatedAt: new Date().toISOString(),
+    source: "ESPN all soccer team schedule",
+    sourceUrl: "",
+    error: ranking?.rank ? "等待公开赛果同步" : "等待公开赛果同步；排名快照也未覆盖",
+    summary: {
+      matches: 0,
+      wins: 0,
+      draws: 0,
+      losses: 0,
+      goalsFor: 0,
+      goalsAgainst: 0
+    },
+    matches: []
+  };
+}
+
 function contextTacticalMatchup(event, homeRanking, awayRanking) {
   const homeName = eventTeamName(event, "home");
   const awayName = eventTeamName(event, "away");
@@ -1557,6 +1749,10 @@ function scheduleAutoBaselineContext(event, fifaRankings = {}) {
     recentForm: {
       home: contextRecentForm(event, "home", homeRanking),
       away: contextRecentForm(event, "away", awayRanking)
+    },
+    recentFormRecords: {
+      home: emptyRecentFormRecord(event, "home", homeRanking),
+      away: emptyRecentFormRecord(event, "away", awayRanking)
     },
     tacticalMatchup: contextTacticalMatchup(event, homeRanking, awayRanking),
     riskFlags: ["自动基线缺少动态情报", "缺少真实盘口映射"],
@@ -2829,7 +3025,7 @@ async function attachEliteSignals(matches, polymarket, { force = false } = {}) {
   };
 }
 
-async function buildDashboard({ force = false } = {}) {
+async function buildDashboard({ force = false, recordHistory = true } = {}) {
   const now = Date.now();
   if (!force && dashboardCache && now - dashboardCacheAt < CACHE_TTL_MS) {
     return dashboardCache;
@@ -2850,6 +3046,7 @@ async function buildDashboard({ force = false } = {}) {
     dimensions: [],
     tradingRules: []
   });
+  const h2hOverrides = await readOptionalJson(H2H_OVERRIDES_PATH, { pairs: {} });
   const context = await readOptionalJson(CONTEXT_PATH, {
     meta: {
       ok: false,
@@ -2865,7 +3062,7 @@ async function buildDashboard({ force = false } = {}) {
   ]);
   const polymarket = await fetchPolymarket(schedule);
   const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, h2hOverrides);
   attachMarketCharts(matches, polymarket);
   const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
   attachAiPredictions(matches);
@@ -2935,7 +3132,7 @@ async function buildDashboard({ force = false } = {}) {
 
   dashboardCache = payload;
   dashboardCacheAt = now;
-  if (!DISABLE_HISTORY_RECORDING) {
+  if (!DISABLE_HISTORY_RECORDING && recordHistory) {
     recordDashboardSnapshot(payload, { source: "api" }).catch((error) => {
       console.error(`Failed to record dashboard history: ${error.message}`);
     });
@@ -3001,7 +3198,8 @@ const server = http.createServer(async (req, res) => {
     const pathname = stripBasePath(url.pathname);
     if (pathname === "/api/dashboard") {
       const force = url.searchParams.get("force") === "1";
-      jsonResponse(res, 200, await buildDashboard({ force }));
+      const recordHistory = url.searchParams.get("skipHistory") !== "1";
+      jsonResponse(res, 200, await buildDashboard({ force, recordHistory }));
       return;
     }
     if (pathname === "/api/health") {

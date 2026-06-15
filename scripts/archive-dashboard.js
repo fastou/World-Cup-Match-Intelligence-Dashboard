@@ -1,6 +1,6 @@
 const { recordDashboardSnapshot, historyDbPath } = require("./history-store");
 
-const DASHBOARD_URL = process.env.WORLDCUP_DASHBOARD_URL || "http://127.0.0.1:4174/worldcup/api/dashboard?force=1";
+const DASHBOARD_URL = process.env.WORLDCUP_DASHBOARD_URL || "http://127.0.0.1:4174/worldcup/api/dashboard?force=1&skipHistory=1";
 const REQUEST_TIMEOUT_MS = Number(process.env.WORLDCUP_ARCHIVE_TIMEOUT_MS || 180000);
 
 async function fetchJson(url) {

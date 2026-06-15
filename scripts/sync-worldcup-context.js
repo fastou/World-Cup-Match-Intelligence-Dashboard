@@ -5,6 +5,7 @@ const { recordContextSnapshot } = require("./history-store");
 const DASHBOARD_PATH = path.join(__dirname, "..", "data", "worldcup-dashboard.json");
 const CONTEXT_PATH = path.join(__dirname, "..", "data", "worldcup-context.json");
 const FIFA_RANKINGS_PATH = path.join(__dirname, "..", "data", "fifa-rankings.json");
+const H2H_OVERRIDES_PATH = path.join(__dirname, "..", "data", "head-to-head-overrides.json");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const FETCH_TIMEOUT_MS = 8000;
 const MATCH_SYNC_TIMEOUT_MS = 50000;
@@ -13,7 +14,9 @@ const OPENAI_TIMEOUT_MS = 30000;
 const WEATHER_REQUEST_SPACING_MS = 350;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
+const RECENT_FORM_LIMIT = Number(process.env.RECENT_FORM_LIMIT || 5);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
+const ESPN_ALL_SOCCER_TEAM_SCHEDULE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams";
 
 const VENUE_COORDINATES = {
   "BMO Field": { latitude: 43.6332, longitude: -79.4186, label: "BMO Field, Toronto" },
@@ -83,7 +86,74 @@ const TEAM_SEARCH_NAMES = {
   KSA: "Saudi Arabia",
   URU: "Uruguay",
   IRN: "Iran",
-  NZL: "New Zealand"
+  NZL: "New Zealand",
+  FRA: "France",
+  SEN: "Senegal",
+  IRQ: "Iraq",
+  NOR: "Norway",
+  ARG: "Argentina",
+  ALG: "Algeria",
+  AUT: "Austria",
+  JOR: "Jordan",
+  POR: "Portugal",
+  COD: "Congo DR",
+  CRO: "Croatia",
+  ENG: "England",
+  GHA: "Ghana",
+  PAN: "Panama",
+  COL: "Colombia",
+  UZB: "Uzbekistan"
+};
+
+const ESPN_TEAM_IDS = {
+  ARG: "202",
+  MEX: "203",
+  CAN: "206",
+  COL: "208",
+  URU: "212",
+  ENG: "448",
+  CZE: "450",
+  KOR: "451",
+  BIH: "452",
+  BEL: "459",
+  NOR: "464",
+  RSA: "467",
+  IRN: "469",
+  AUT: "474",
+  SUI: "475",
+  CRO: "477",
+  SEN: "654",
+  POR: "482",
+  KSA: "655",
+  ESP: "164",
+  USA: "660",
+  BRA: "205",
+  FRA: "478",
+  GER: "481",
+  NED: "449",
+  JPN: "627",
+  MAR: "2869",
+  AUS: "628",
+  SCO: "580",
+  TUR: "465",
+  ECU: "209",
+  SWE: "466",
+  TUN: "659",
+  CPV: "2597",
+  EGY: "2620",
+  NZL: "2666",
+  IRQ: "4375",
+  QAT: "4398",
+  PAR: "210",
+  HAI: "2654",
+  CIV: "4789",
+  CUW: "11678",
+  ALG: "624",
+  JOR: "2917",
+  COD: "2850",
+  GHA: "4469",
+  PAN: "2659",
+  UZB: "2570"
 };
 
 const TEAM_DISPLAY_NAMES_ZH = {
@@ -118,7 +188,23 @@ const TEAM_DISPLAY_NAMES_ZH = {
   KSA: "沙特阿拉伯",
   URU: "乌拉圭",
   IRN: "伊朗",
-  NZL: "新西兰"
+  NZL: "新西兰",
+  FRA: "法国",
+  SEN: "塞内加尔",
+  IRQ: "伊拉克",
+  NOR: "挪威",
+  ARG: "阿根廷",
+  ALG: "阿尔及利亚",
+  AUT: "奥地利",
+  JOR: "约旦",
+  POR: "葡萄牙",
+  COD: "刚果（金）",
+  CRO: "克罗地亚",
+  ENG: "英格兰",
+  GHA: "加纳",
+  PAN: "巴拿马",
+  COL: "哥伦比亚",
+  UZB: "乌兹别克斯坦"
 };
 
 const ARTICLE_DOMAINS = [
@@ -792,6 +878,11 @@ function teamLabel(match, side) {
   return `${zhName || TEAM_DISPLAY_NAMES_ZH[code] || code}（${enName || TEAM_SEARCH_NAMES[code] || code}）`;
 }
 
+function teamDisplayName(code, fallback = "") {
+  const normalized = String(code || "").toUpperCase();
+  return TEAM_DISPLAY_NAMES_ZH[normalized] || TEAM_SEARCH_NAMES[normalized] || fallback || normalized;
+}
+
 function rankingRecord(fifaRankings, code) {
   const normalized = String(code || "").toUpperCase();
   const rank = Number(fifaRankings?.rankings?.[normalized]);
@@ -815,6 +906,155 @@ function baselineRecentForm(match, side, fifaRankings, snippets = []) {
   });
   if (relevant) notes.push(`公开源摘要：${relevant.slice(0, 160)}`);
   return notes.slice(0, 3);
+}
+
+function scoreValue(score) {
+  if (score && typeof score === "object") {
+    const value = Number(score.value ?? score.displayValue);
+    return Number.isFinite(value) ? value : null;
+  }
+  const value = Number(score);
+  return Number.isFinite(value) ? value : null;
+}
+
+function resultFromGoals(goalsFor, goalsAgainst) {
+  if (!Number.isFinite(goalsFor) || !Number.isFinite(goalsAgainst)) return "unknown";
+  if (goalsFor > goalsAgainst) return "W";
+  if (goalsFor < goalsAgainst) return "L";
+  return "D";
+}
+
+function summarizeFormResults(matches) {
+  const summary = {
+    matches: matches.length,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    goalsFor: 0,
+    goalsAgainst: 0
+  };
+  for (const match of matches) {
+    if (match.result === "W") summary.wins += 1;
+    else if (match.result === "D") summary.draws += 1;
+    else if (match.result === "L") summary.losses += 1;
+    if (Number.isFinite(match.goalsFor)) summary.goalsFor += match.goalsFor;
+    if (Number.isFinite(match.goalsAgainst)) summary.goalsAgainst += match.goalsAgainst;
+  }
+  return summary;
+}
+
+function normalizeTeamScheduleEvent(event, teamCode) {
+  const competition = event.competitions?.[0] || {};
+  const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
+  const team = competitors.find((item) => String(item.team?.abbreviation || "").toUpperCase() === teamCode);
+  if (!team) return null;
+  const opponent = competitors.find((item) => item !== team);
+  if (!opponent) return null;
+  const goalsFor = scoreValue(team.score);
+  const goalsAgainst = scoreValue(opponent.score);
+  if (!Number.isFinite(goalsFor) || !Number.isFinite(goalsAgainst)) return null;
+  const status = competition.status?.type || event.status?.type || {};
+  if (!status.completed && !isFinishedStatus(status.name || status.state || status.description)) return null;
+  const teamSlug = encodeURIComponent(TEAM_SEARCH_NAMES[teamCode] || teamCode);
+  return {
+    date: String(event.date || "").slice(0, 10),
+    competition: event.league?.shortName || event.league?.name || event.season?.displayName || "Match",
+    opponent: teamDisplayName(opponent.team?.abbreviation, opponent.team?.displayName || ""),
+    opponentCode: String(opponent.team?.abbreviation || "").toUpperCase(),
+    venueSide: team.homeAway === "home" ? "home" : team.homeAway === "away" ? "away" : "neutral",
+    goalsFor,
+    goalsAgainst,
+    score: `${goalsFor}-${goalsAgainst}`,
+    result: resultFromGoals(goalsFor, goalsAgainst),
+    eventId: String(event.id || ""),
+    source: "ESPN all soccer team schedule",
+    sourceUrl: `https://www.espn.com/soccer/team/results/_/id/${ESPN_TEAM_IDS[teamCode] || ""}/${teamSlug}`
+  };
+}
+
+const recentFormCache = new Map();
+
+async function fetchTeamRecentForm(teamCode, previous = null, limit = RECENT_FORM_LIMIT) {
+  const normalized = String(teamCode || "").toUpperCase();
+  const teamId = ESPN_TEAM_IDS[normalized];
+  const nowIso = shanghaiIso();
+  if (!teamId) {
+    return {
+      ok: false,
+      status: "missing-team-id",
+      teamCode: normalized,
+      updatedAt: nowIso,
+      source: "ESPN all soccer team schedule",
+      sourceUrl: "",
+      error: "ESPN 队伍 ID 映射缺失",
+      matches: [],
+      summary: summarizeFormResults([])
+    };
+  }
+  if (recentFormCache.has(teamId)) return recentFormCache.get(teamId);
+  const url = `${ESPN_ALL_SOCCER_TEAM_SCHEDULE}/${teamId}/schedule`;
+  const payloadPromise = withTimeout(timedFetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS + 2500 }), FETCH_TIMEOUT_MS + 3500, "team recent form").then((result) => {
+    if (!result.ok) {
+      if (previous?.ok && Array.isArray(previous.matches) && previous.matches.length) {
+        return {
+          ...previous,
+          stale: true,
+          lastError: result.error || "team recent form failed",
+          updatedAt: previous.updatedAt || nowIso
+        };
+      }
+      return {
+        ok: false,
+        status: "source-unavailable",
+        teamCode: normalized,
+        updatedAt: nowIso,
+        source: "ESPN all soccer team schedule",
+        sourceUrl: url,
+        error: result.error || "team recent form failed",
+        matches: [],
+        summary: summarizeFormResults([])
+      };
+    }
+    const nowMs = Date.now();
+    const matches = (Array.isArray(result.data?.events) ? result.data.events : [])
+      .filter((event) => {
+        const ms = dateMs(event.date);
+        return ms && ms <= nowMs;
+      })
+      .sort((a, b) => (dateMs(b.date) || 0) - (dateMs(a.date) || 0))
+      .map((event) => normalizeTeamScheduleEvent(event, normalized))
+      .filter(Boolean)
+      .slice(0, limit);
+    return {
+      ok: matches.length > 0,
+      status: matches.length ? "synced" : "empty",
+      teamCode: normalized,
+      teamName: teamDisplayName(normalized),
+      updatedAt: nowIso,
+      source: "ESPN all soccer team schedule",
+      sourceUrl: url,
+      error: matches.length ? "" : "未返回已完赛赛果",
+      summary: summarizeFormResults(matches),
+      matches
+    };
+  });
+  recentFormCache.set(teamId, payloadPromise);
+  return payloadPromise;
+}
+
+function formTextFromRecord(record, fallbackNotes = []) {
+  if (record?.ok && Array.isArray(record.matches) && record.matches.length) {
+    const summary = record.summary || summarizeFormResults(record.matches);
+    const latest = record.matches.slice(0, 3).map((match) => {
+      const resultLabel = match.result === "W" ? "胜" : match.result === "D" ? "平" : match.result === "L" ? "负" : "未知";
+      return `${match.date} ${resultLabel} ${match.opponent} ${match.score}`;
+    });
+    return [
+      `近 ${summary.matches} 场：${summary.wins}胜${summary.draws}平${summary.losses}负，进 ${summary.goalsFor} / 失 ${summary.goalsAgainst}。`,
+      ...latest
+    ].slice(0, 4);
+  }
+  return fallbackNotes;
 }
 
 function nonWaitingItems(items) {
@@ -1126,7 +1366,16 @@ async function fetchSearchPreview(match) {
       "suspended",
       "team news",
       "preview",
-      "starting"
+      "starting",
+      "head-to-head",
+      "head to head",
+      "h2h",
+      "past meetings",
+      "previous meetings",
+      "last meeting",
+      "historical meetings",
+      "交手",
+      "历史交锋"
     ], 10),
     text
   };
@@ -1235,11 +1484,158 @@ function enqueueWeatherFetch(url) {
   return request;
 }
 
-function buildHeadToHeadContext(match, preview, fifaRankings) {
+function h2hPairKeys(match) {
+  const home = String(match.home || "").toUpperCase();
+  const away = String(match.away || "").toUpperCase();
+  const sorted = [home, away].sort().join("-");
+  return [`${home}-${away}`, `${away}-${home}`, sorted].filter(Boolean);
+}
+
+function findHeadToHeadOverride(match, h2hOverrides = {}) {
+  const pairs = h2hOverrides?.pairs || {};
+  for (const key of h2hPairKeys(match)) {
+    if (pairs[key]) return pairs[key];
+  }
+  return null;
+}
+
+function h2hTeamName(code) {
+  const normalized = String(code || "").toUpperCase();
+  return TEAM_DISPLAY_NAMES_ZH[normalized] || TEAM_SEARCH_NAMES[normalized] || normalized;
+}
+
+function h2hDateMs(date) {
+  const ms = new Date(`${date || ""}T12:00:00Z`).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function h2hWindow(match) {
+  const kickoff = new Date(match.kickoffShanghai || match.kickoffLocal || Date.now());
+  const kickoffMs = Number.isFinite(kickoff.getTime()) ? kickoff.getTime() : Date.now();
+  const windowEnd = new Date(kickoffMs);
+  const windowStart = new Date(kickoffMs);
+  windowStart.setUTCFullYear(windowStart.getUTCFullYear() - 4);
+  return {
+    startMs: windowStart.getTime(),
+    endMs: kickoffMs,
+    windowStart: windowStart.toISOString().slice(0, 10),
+    windowEnd: windowEnd.toISOString().slice(0, 10),
+    asOf: new Date(kickoffMs - 1000).toISOString()
+  };
+}
+
+function h2hMeetingGoalsFor(meeting, code) {
+  const normalized = String(code || "").toUpperCase();
+  if (String(meeting.home || "").toUpperCase() === normalized) return Number(meeting.homeGoals);
+  if (String(meeting.away || "").toUpperCase() === normalized) return Number(meeting.awayGoals);
+  return null;
+}
+
+function formatH2hMeeting(meeting) {
+  return `${meeting.date}: ${h2hTeamName(meeting.home)} ${meeting.homeGoals}-${meeting.awayGoals} ${h2hTeamName(meeting.away)} (${meeting.competition || "match"})`;
+}
+
+function uniqueH2hSources(sources) {
+  const seen = new Set();
+  return sources.filter((source) => {
+    const key = `${source.url || ""}|${source.name || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildVerifiedHeadToHeadContext(match, override, fifaRankings) {
   const nowIso = shanghaiIso();
-  const kickoffYear = new Date(match.kickoffShanghai || match.kickoffLocal || Date.now()).getUTCFullYear();
-  const windowEnd = String(kickoffYear);
-  const windowStart = String(kickoffYear - 4);
+  const window = h2hWindow(match);
+  const allMeetings = (Array.isArray(override.meetings) ? override.meetings : [])
+    .filter((meeting) => h2hDateMs(meeting.date) !== null)
+    .sort((a, b) => h2hDateMs(b.date) - h2hDateMs(a.date));
+  const recentMeetings = allMeetings.filter((meeting) => {
+    const ms = h2hDateMs(meeting.date);
+    return ms >= window.startMs && ms < window.endMs;
+  });
+
+  const summary = {
+    matches: recentMeetings.length,
+    homeWins: 0,
+    draws: 0,
+    awayWins: 0,
+    homeGoals: 0,
+    awayGoals: 0
+  };
+
+  recentMeetings.forEach((meeting) => {
+    const homeGoals = h2hMeetingGoalsFor(meeting, match.home);
+    const awayGoals = h2hMeetingGoalsFor(meeting, match.away);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return;
+    summary.homeGoals += homeGoals;
+    summary.awayGoals += awayGoals;
+    if (homeGoals > awayGoals) summary.homeWins += 1;
+    else if (homeGoals < awayGoals) summary.awayWins += 1;
+    else summary.draws += 1;
+  });
+
+  const homeRank = rankingRecord(fifaRankings, match.home);
+  const awayRank = rankingRecord(fifaRankings, match.away);
+  const rankingText = homeRank && awayRank ? `长期实力基线：${match.homeName} FIFA 第 ${homeRank}，${match.awayName} FIFA 第 ${awayRank}。` : "长期实力基线部分可用。";
+  const allTimeNote = override.allTimeNote || (allMeetings.length
+    ? `公开可核验历史交手：${allMeetings.slice(0, 3).map(formatH2hMeeting).join("；")}。`
+    : "公开源未记录可结构化历史交手；不把未知交手当成 0 场。");
+  const sources = uniqueH2hSources([
+    ...(Array.isArray(override.sources) ? override.sources : []),
+    ...allMeetings.map((meeting) => ({
+      name: meeting.source || "结构化 H2H 来源",
+      url: meeting.sourceUrl || "",
+      status: "verified"
+    }))
+  ]).map((source) => ({
+    ...source,
+    status: source.status || "verified"
+  }));
+
+  return {
+    windowYears: 4,
+    windowStart: window.windowStart,
+    windowEnd: window.windowEnd,
+    asOf: window.asOf,
+    scope: override.scope || "赛前四年正式 A 级国际赛和友谊赛",
+    summary,
+    latestMeetings: recentMeetings.slice(0, 5).map((meeting) => ({
+      date: meeting.date,
+      competition: meeting.competition || "",
+      home: h2hTeamName(meeting.home),
+      away: h2hTeamName(meeting.away),
+      score: `${meeting.homeGoals}-${meeting.awayGoals}`,
+      source: meeting.source || ""
+    })),
+    allTimeNote,
+    impact: summary.matches > 0
+      ? `${rankingText} 近四年有 ${summary.matches} 场直接交手；样本很小，只做低权重复核，不单独大幅调整模型。`
+      : `${rankingText} 近四年无可确认直接交手，模型不对胜平负、让球盘或大小球做交手加权。`,
+    sourceStatus: summary.matches > 0 ? "verified-structured" : "verified-no-pre-match-meetings",
+    sources,
+    updatedAt: nowIso
+  };
+}
+
+function isVerifiedHeadToHead(headToHead) {
+  return Boolean(
+    headToHead
+    && /^verified/i.test(String(headToHead.sourceStatus || ""))
+    && headToHead.summary
+    && headToHead.summary.matches !== null
+    && headToHead.summary.matches !== undefined
+  );
+}
+
+function buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides = {}, previousHeadToHead = null) {
+  const nowIso = shanghaiIso();
+  const override = findHeadToHeadOverride(match, h2hOverrides);
+  if (override) return buildVerifiedHeadToHeadContext(match, override, fifaRankings);
+  if (isVerifiedHeadToHead(previousHeadToHead)) return previousHeadToHead;
+
+  const window = h2hWindow(match);
   const snippets = (preview.snippets || []).filter((snippet) => /head.?to.?head|h2h|last meeting|met|交手|历史/i.test(snippet));
   const articleLinks = Array.isArray(preview.articleLinks) ? preview.articleLinks : [];
   const homeRank = rankingRecord(fifaRankings, match.home);
@@ -1247,8 +1643,9 @@ function buildHeadToHeadContext(match, preview, fifaRankings) {
   const rankingText = homeRank && awayRank ? `长期实力基线：${match.homeName} FIFA 第 ${homeRank}，${match.awayName} FIFA 第 ${awayRank}。` : "长期实力基线部分可用。";
   return {
     windowYears: 4,
-    windowStart,
-    windowEnd,
+    windowStart: window.windowStart,
+    windowEnd: window.windowEnd,
+    asOf: window.asOf,
     scope: "近四年公开交手检索",
     summary: {
       matches: null,
@@ -1266,7 +1663,7 @@ function buildHeadToHeadContext(match, preview, fifaRankings) {
     })),
     allTimeNote: snippets.length
       ? `已抓到交手相关公开摘要 ${snippets.length} 条；未解析成可审计比分前不做数值加权。`
-      : "已纳入 H2H 检索，但本轮未抓到可结构化比分；不把未知交手当成 0 场。",
+      : "已纳入 H2H 检索，但本轮未抓到可结构化比分；标记为待核验，不把未知交手当成 0 场。",
     impact: `${rankingText} 四年交手未结构化前不调整模型，只作为赛前复核项。`,
     sourceStatus: snippets.length ? "partial" : "queried-unstructured",
     sources: [
@@ -1286,7 +1683,12 @@ function buildHeadToHeadContext(match, preview, fifaRankings) {
   };
 }
 
-function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fifaRankings = {}, previous = {}) {
+function previousRecentFormRecord(previous, side) {
+  const record = previous.recentFormRecords?.[side];
+  return record && typeof record === "object" ? record : null;
+}
+
+async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fifaRankings = {}, previous = {}, h2hOverrides = {}) {
   const nowIso = shanghaiIso();
   const aiWithFallback = baselineAiAnalysis(match, preview, weather, fifaRankings, aiAnalysis);
   const effectiveAiAnalysis = aiWithFallback.ok ? aiWithFallback : previous.aiAnalysis?.ok ? {
@@ -1308,7 +1710,7 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fi
   const awayLineupNote = extractTeamLineupNote(sourceText, match.awayName, match.away);
   const injurySummary = baselineInjurySummary(preview, effectiveAiAnalysis, injurySnippets, directInjurySection);
   const teamNewsSummary = directTeamNewsSection || baselineTeamNewsSummary(match, preview, effectiveAiAnalysis, teamNewsSnippets);
-  const recentForm = {
+  const fallbackRecentForm = {
     home: effectiveAiAnalysis.recentForm?.home?.length
       ? effectiveAiAnalysis.recentForm.home
       : nonWaitingItems(previous.recentForm?.home).length
@@ -1319,6 +1721,18 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fi
       : nonWaitingItems(previous.recentForm?.away).length
         ? nonWaitingItems(previous.recentForm.away)
         : baselineRecentForm(match, "away", fifaRankings, snippets)
+  };
+  const [homeRecentFormRecord, awayRecentFormRecord] = await Promise.all([
+    fetchTeamRecentForm(match.home, previousRecentFormRecord(previous, "home")),
+    fetchTeamRecentForm(match.away, previousRecentFormRecord(previous, "away"))
+  ]);
+  const recentForm = {
+    home: formTextFromRecord(homeRecentFormRecord, fallbackRecentForm.home),
+    away: formTextFromRecord(awayRecentFormRecord, fallbackRecentForm.away)
+  };
+  const recentFormRecords = {
+    home: homeRecentFormRecord,
+    away: awayRecentFormRecord
   };
   const tacticalMatchup = baselineTacticalMatchup(match, fifaRankings, effectiveAiAnalysis);
 
@@ -1353,10 +1767,11 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fi
     injurySummary,
     teamNewsSummary,
     recentForm,
+    recentFormRecords,
     tacticalMatchup,
     riskFlags: effectiveAiAnalysis.ok ? effectiveAiAnalysis.riskFlags : [],
     aiAnalysis: effectiveAiAnalysis,
-    headToHead: buildHeadToHeadContext(match, preview, fifaRankings),
+    headToHead: buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides, match.headToHead || previous.headToHead),
     weather: {
       summary: weather.summary || "天气源未同步，暂不调整总进球。",
       updatedAt: weather.updatedAt || null
@@ -1387,6 +1802,14 @@ function buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fi
         url: preview.url || "",
         error: (preview.ok && (teamNewsSnippets.length || directTeamNewsSection)) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.summary) ? "" : "已查询，未发现足够球队新闻"
       },
+      recentForm: {
+        ok: Boolean(homeRecentFormRecord.ok || awayRecentFormRecord.ok),
+        status: homeRecentFormRecord.ok && awayRecentFormRecord.ok ? "synced" : "partial",
+        confidence: homeRecentFormRecord.ok && awayRecentFormRecord.ok ? "medium" : "low",
+        updatedAt: nowIso,
+        url: [homeRecentFormRecord.sourceUrl, awayRecentFormRecord.sourceUrl].filter(Boolean).join(" | "),
+        error: [homeRecentFormRecord.error, awayRecentFormRecord.error].filter(Boolean).join("；")
+      },
       weather: {
         ok: Boolean(weather.ok),
         status: weather.ok ? "synced" : "source-unavailable",
@@ -1411,6 +1834,7 @@ async function main() {
   const dashboard = await readJson(DASHBOARD_PATH);
   const previous = await readJson(CONTEXT_PATH, { meta: {}, matches: {} });
   const fifaRankings = await readJson(FIFA_RANKINGS_PATH, {});
+  const h2hOverrides = await readJson(H2H_OVERRIDES_PATH, { pairs: {} });
 
   const runTimeout = setTimeout(() => {
     console.error(`Context sync exceeded ${RUN_TIMEOUT_MS}ms`);
@@ -1425,7 +1849,7 @@ async function main() {
     ]);
     const openAiConfig = await getOpenAiConfig();
     const aiAnalysis = await fetchOpenAiAnalysis(match, preview, weather);
-    return [match.id, buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fifaRankings, previous.matches?.[match.id] || {})];
+    return [match.id, await buildMatchContext(match, preview, weather, aiAnalysis, openAiConfig, fifaRankings, previous.matches?.[match.id] || {}, h2hOverrides)];
   })(), MATCH_SYNC_TIMEOUT_MS, `match ${match.id}`).then((result) => {
     if (Array.isArray(result)) return result;
     return [match.id, {
