@@ -50,6 +50,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Default dashboard scope is the next three days of not-finished matches, not only today's matches.
 - Hide a match when a final result exists in `match_results`, or when the kickoff is more than the configured post-kickoff grace period ago and no live status keeps it active.
 - Fetch schedule windows with a lookback day when host-local dates can differ from the user's timezone. Do not drop an in-progress match only because the kickoff is several hours old if the schedule source has not marked it completed.
+- Keep the public sync script and dashboard server on the same match-window rules: lookback days, live grace hours, hide-after hours, and finished-status handling should not diverge.
 - Use public schedule/status sources such as ESPN/FIFA only for fixture timing and status unless full modeling inputs exist.
 - If a fixture is inside the three-day window but lacks local team static data, model parameters, odds, or market mappings, generate a conservative auto-baseline model from schedule/team identifiers. Do not call it pending-model in the user UI.
 - Auto-baseline fixtures may render basic win/draw/loss, total, and handicap probabilities, but must mark missing dynamic context and real markets. Do not render live edge or price advice unless real odds/Polymarket mappings exist.
@@ -112,6 +113,7 @@ When maintaining public market data:
 
 - Fetch live curves for match result, handicap, and totals separately when markets exist.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
+- Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`.
 - Keep chart controls usable for each market type and each outcome.
 - Track elite football accounts from public data by transparent criteria such as soccer-market realized PnL, win rate, sample size, and recent activity.
 - Show account positions as expandable row details with account, side, amount, average or latest price, timestamp, market, and source status.

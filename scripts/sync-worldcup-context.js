@@ -13,7 +13,9 @@ const RUN_TIMEOUT_MS = 90000;
 const OPENAI_TIMEOUT_MS = 30000;
 const WEATHER_REQUEST_SPACING_MS = 350;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
-const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
+const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
+const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
+const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
 const RECENT_FORM_LIMIT = Number(process.env.RECENT_FORM_LIMIT || 5);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const ESPN_ALL_SOCCER_TEAM_SCHEDULE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams";
@@ -367,6 +369,23 @@ function inUpcomingWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DA
   return kickoffMs >= nowMs - hideAfterMs && kickoffMs <= windowEnd;
 }
 
+function inScheduleWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DAYS, lookbackDays = MATCH_SCHEDULE_LOOKBACK_DAYS) {
+  const kickoffMs = dateMs(kickoffIso);
+  if (!kickoffMs) return false;
+  const windowStart = nowMs - lookbackDays * 86400000;
+  const windowEnd = nowMs + days * 86400000;
+  return kickoffMs >= windowStart && kickoffMs <= windowEnd;
+}
+
+function shouldKeepScheduledMatch(kickoffIso, schedule = null, nowMs = Date.now()) {
+  const kickoffMs = dateMs(kickoffIso);
+  if (!kickoffMs) return false;
+  if (schedule?.completed || isFinishedStatus(schedule?.status)) return false;
+  if (!inScheduleWindow(kickoffIso, nowMs)) return false;
+  if (kickoffMs >= nowMs - MATCH_HIDE_AFTER_HOURS * 3600000) return true;
+  return Boolean(schedule) && kickoffMs >= nowMs - MATCH_LIVE_GRACE_HOURS * 3600000;
+}
+
 async function readJson(filePath, fallback = null) {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -474,7 +493,7 @@ function lookupVenueCoordinates(match) {
 
 async function fetchScheduleWindow(now = new Date()) {
   const dates = [];
-  for (let offset = 0; offset <= MATCH_WINDOW_DAYS; offset += 1) {
+  for (let offset = -MATCH_SCHEDULE_LOOKBACK_DAYS; offset <= MATCH_WINDOW_DAYS; offset += 1) {
     dates.push(shanghaiDateKey(addDays(now, offset)));
   }
   const url = `${ESPN_WORLDCUP_SCOREBOARD}?dates=${dates[0]}-${dates[dates.length - 1]}`;
@@ -522,7 +541,7 @@ async function fetchScheduleWindow(now = new Date()) {
 
 function scheduleMatchFromEvent(event) {
   const kickoffMs = dateMs(event.kickoffUtc);
-  if (!kickoffMs || !inUpcomingWindow(event.kickoffUtc)) return null;
+  if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
   const homeCode = String(event.home?.code || "").toUpperCase();
   const awayCode = String(event.away?.code || "").toUpperCase();

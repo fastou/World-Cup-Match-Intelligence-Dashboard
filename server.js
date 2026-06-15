@@ -21,7 +21,7 @@ const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOK
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
 const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 10;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
-const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 3);
+const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
 const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
@@ -1514,7 +1514,7 @@ function teamNameVariants(teamCode, displayName) {
     CUW: ["curacao", "curaçao"],
     CIV: ["ivory coast", "cote d'ivoire", "côte d'ivoire"],
     KSA: ["saudi arabia", "saudi"],
-    CPV: ["cape verde"],
+    CPV: ["cape verde", "cabo verde", "cvi"],
     NED: ["netherlands", "holland"],
     GER: ["germany"],
     BRA: ["brazil"],
@@ -1534,7 +1534,8 @@ function teamNameVariants(teamCode, displayName) {
     EGY: ["egypt"],
     URU: ["uruguay"],
     IRN: ["iran"],
-    NZL: ["new zealand"]
+    NZL: ["new zealand"],
+    COD: ["congo dr", "dr congo", "congo", "drc", "democratic republic of congo"]
   }[teamCode] || [];
   return [...new Set([...base, ...extra].filter(Boolean))];
 }
@@ -1917,7 +1918,11 @@ function buildPolymarketEventSlugSearches(schedule = null) {
 }
 
 function polymarketTeamSlug(code) {
-  return String(code || "").trim().toLowerCase();
+  const overrides = {
+    CPV: "cvi"
+  };
+  const normalized = String(code || "").trim().toUpperCase();
+  return overrides[normalized] || normalized.toLowerCase();
 }
 
 function polymarketDateCandidates(kickoffUtc) {
