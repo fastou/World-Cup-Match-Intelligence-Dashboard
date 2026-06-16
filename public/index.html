@@ -1783,7 +1783,7 @@
               <li><strong>统计窗口</strong><span>${escapeHtml(formatH2hWindow(headToHead))} · ${escapeHtml(headToHead.scope || "未同步")}</span></li>
               <li><strong>直接影响</strong><span>${escapeHtml(headToHead.impact || "未同步")}</span></li>
               <li><strong>历史背景</strong><span>${escapeHtml(headToHead.allTimeNote || "未同步")}</span></li>
-              ${meetings.length ? meetings.map((meeting) => `<li><strong>${escapeHtml(meeting.date || "候选摘要")}</strong><span>${escapeHtml(meeting.competition || "")} · ${escapeHtml(meeting.home || "")} ${escapeHtml(meeting.score || "")} ${escapeHtml(meeting.away || "")}${meeting.source ? ` · ${escapeHtml(meeting.source)}` : ""}</span></li>`).join("") : `<li><strong>近期交手</strong><span>${escapeHtml(formatH2hFallback(summary))}</span></li>`}
+              ${meetings.length ? meetings.map((meeting) => `<li><strong>${escapeHtml(meeting.date || "日期待核验")}</strong><span>${escapeHtml(meeting.competition || "")} · ${escapeHtml(meeting.home || "")} ${escapeHtml(meeting.score || "")} ${escapeHtml(meeting.away || "")}${meeting.source ? ` · ${escapeHtml(meeting.source)}` : ""}</span></li>`).join("") : `<li><strong>近期交手</strong><span>${escapeHtml(formatH2hFallback(summary))}</span></li>`}
               <li><strong>更新时间</strong><span>${fmtTime(headToHead.updatedAt)}</span></li>
               ${sources.length ? `<li><strong>交手来源</strong><span>${sources.map((source) => source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.name || source.url)}</a>` : escapeHtml(source.name || "来源")).join(" · ")}</span></li>` : ""}
             </ul>

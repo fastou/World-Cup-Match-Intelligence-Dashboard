@@ -1,0 +1,571 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-13T00:00:00Z",
+  "notes": "Only manually verified structured H2H facts go here. Do not treat missing pairs as zero meetings.",
+  "pairs": {
+    "BRA-MAR": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示两队至少有 3 次交手：1997 巴西 2-0 摩洛哥、1998 巴西 3-0 摩洛哥、2023 摩洛哥 2-1 巴西。模型窗口内只使用 2023 这场。",
+      "sources": [
+        {
+          "name": "ESPN - Morocco 2-1 Brazil",
+          "url": "https://www.espn.com/soccer/match/_/gameId/665817/brazil-morocco"
+        },
+        {
+          "name": "ESPN - Morocco 0-3 Brazil",
+          "url": "https://www.espn.co.uk/football/match/_/gameId/198095/morocco-brazil"
+        },
+        {
+          "name": "Sports Mole - Brazil vs Morocco H2H",
+          "url": "https://www.sportsmole.co.uk/football/brazil/head-to-head/brazil-vs-morocco-head-to-head-record-and-past-meetings_598952.html"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2023-03-25",
+          "home": "MAR",
+          "away": "BRA",
+          "homeGoals": 2,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "ESPN / Sports Mole",
+          "sourceUrl": "https://www.espn.com/soccer/match/_/gameId/665817/brazil-morocco"
+        },
+        {
+          "date": "1998-06-16",
+          "home": "BRA",
+          "away": "MAR",
+          "homeGoals": 3,
+          "awayGoals": 0,
+          "competition": "FIFA World Cup group stage",
+          "source": "ESPN / Sports Mole",
+          "sourceUrl": "https://www.espn.co.uk/football/match/_/gameId/198095/morocco-brazil"
+        },
+        {
+          "date": "1997-10-09",
+          "home": "BRA",
+          "away": "MAR",
+          "homeGoals": 2,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/brazil/head-to-head/brazil-vs-morocco-head-to-head-record-and-past-meetings_598952.html"
+        }
+      ]
+    },
+    "MEX-RSA": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "两队赛前最近一次公开可核验交手为 2010-06-11 世界杯，墨西哥 1-1 南非；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "Wikipedia - Mexico national football team results",
+          "url": "https://en.wikipedia.org/wiki/Mexico_national_football_team_results_(2020%E2%80%93present)"
+        },
+        {
+          "name": "Wikipedia - South Africa national football team results",
+          "url": "https://en.wikipedia.org/wiki/South_Africa_national_football_team_results_(2020%E2%80%93present)"
+        },
+        {
+          "name": "Wikipedia - 2010 FIFA World Cup Group A",
+          "url": "https://en.wikipedia.org/wiki/2010_FIFA_World_Cup_Group_A"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2010-06-11",
+          "home": "RSA",
+          "away": "MEX",
+          "homeGoals": 1,
+          "awayGoals": 1,
+          "competition": "FIFA World Cup group stage",
+          "source": "Wikipedia",
+          "sourceUrl": "https://en.wikipedia.org/wiki/2010_FIFA_World_Cup_Group_A"
+        }
+      ]
+    },
+    "KOR-CZE": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "两队赛前最近一次公开可核验交手为 2016-06-05 友谊赛，韩国 2-1 捷克；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "Wikipedia - South Korea national football team results",
+          "url": "https://en.wikipedia.org/wiki/South_Korea_national_football_team_results_(2020%E2%80%93present)"
+        },
+        {
+          "name": "Wikipedia - Czech Republic national football team results",
+          "url": "https://en.wikipedia.org/wiki/Czech_Republic_national_football_team_results_(2020%E2%80%93present)"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2016-06-05",
+          "home": "CZE",
+          "away": "KOR",
+          "homeGoals": 1,
+          "awayGoals": 2,
+          "competition": "International friendly",
+          "source": "Wikipedia",
+          "sourceUrl": "https://en.wikipedia.org/wiki/South_Korea_national_football_team_results_(2020%E2%80%93present)"
+        }
+      ]
+    },
+    "CAN-BIH": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开赛前数据源未记录加拿大与波黑的历史交手；按无可确认赛前直接交手处理。",
+      "sources": [
+        {
+          "name": "365Scores - Canada vs Bosnia & Herzegovina H2H",
+          "url": "https://www.365scores.com/football/match/fifa-world-cup-5930/bosnia-%26-herzegovina-canada-2388-5048-5930"
+        },
+        {
+          "name": "worldfootball.net - Canada vs Bosnia-Herzegovina H2H",
+          "url": "https://www.worldfootball.net/match-report/co139/fifa-world-cup/ma10426802/canada_bosnia-herzegovina/head-to-head/"
+        }
+      ],
+      "meetings": []
+    },
+    "USA-PAR": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示美国与巴拉圭赛前共有 9 次交手，美国 5 胜 2 平 2 负；模型窗口内只使用 2025-11-15 美国 2-1 巴拉圭。",
+      "sources": [
+        {
+          "name": "Sports Mole - USA vs Paraguay H2H",
+          "url": "https://www.sportsmole.co.uk/football/usa/world-cup-2026/head-to-head/usa-vs-paraguay-head-to-head-record-and-past-meetings_598974.html"
+        },
+        {
+          "name": "11v11 - USA national soccer team record v Paraguay",
+          "url": "https://www.11v11.com/teams/usa/tab/opposingTeams/opposition/Paraguay/"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2025-11-15",
+          "home": "USA",
+          "away": "PAR",
+          "homeGoals": 2,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/usa/world-cup-2026/head-to-head/usa-vs-paraguay-head-to-head-record-and-past-meetings_598974.html"
+        },
+        {
+          "date": "2018-03-27",
+          "home": "USA",
+          "away": "PAR",
+          "homeGoals": 1,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "Sports Mole / 11v11",
+          "sourceUrl": "https://www.11v11.com/teams/usa/tab/opposingTeams/opposition/Paraguay/"
+        },
+        {
+          "date": "2016-06-12",
+          "home": "PAR",
+          "away": "USA",
+          "homeGoals": 0,
+          "awayGoals": 1,
+          "competition": "Copa America",
+          "source": "Sports Mole / 11v11",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/usa/world-cup-2026/head-to-head/usa-vs-paraguay-head-to-head-record-and-past-meetings_598974.html"
+        }
+      ]
+    },
+    "QAT-SUI": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示两队赛前仅 1 次交手：2018-11-14 瑞士 0-1 卡塔尔；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "Sports Mole - Qatar vs Switzerland H2H",
+          "url": "https://www.sportsmole.co.uk/football/qatar/world-cup-2026/head-to-head/qatar-vs-switzerland-head-to-head-record-and-past-meetings_598975.html"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2018-11-14",
+          "home": "SUI",
+          "away": "QAT",
+          "homeGoals": 0,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/qatar/world-cup-2026/head-to-head/qatar-vs-switzerland-head-to-head-record-and-past-meetings_598975.html"
+        }
+      ]
+    },
+    "HAI-SCO": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "worldfootball.net 的赛前交手页显示海地与苏格兰赛前交手为 0 场；模型不做交手加权。",
+      "sources": [
+        {
+          "name": "worldfootball.net - Haiti vs Scotland H2H",
+          "url": "https://www.worldfootball.net/match-report/co139/fifa-world-cup/ma10713800/haiti_scotland/head-to-head/"
+        },
+        {
+          "name": "FootyStats - Haiti vs Scotland H2H",
+          "url": "https://footystats.org/international/scotland-national-team-vs-haiti-national-team-h2h-stats"
+        }
+      ],
+      "meetings": []
+    },
+    "AUS-TUR": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示两队赛前 2 次交手，均为 2004 年友谊赛，土耳其 3-1、1-0 连胜；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "Sports Mole - Australia vs Turkey H2H",
+          "url": "https://www.sportsmole.co.uk/football/australia/world-cup-2026/head-to-head/australia-vs-turkey-head-to-head-record-and-past-meetings_599035.html"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2004-05-24",
+          "home": "AUS",
+          "away": "TUR",
+          "homeGoals": 0,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/australia/world-cup-2026/head-to-head/australia-vs-turkey-head-to-head-record-and-past-meetings_599035.html"
+        },
+        {
+          "date": "2004-05-21",
+          "home": "AUS",
+          "away": "TUR",
+          "homeGoals": 1,
+          "awayGoals": 3,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/australia/world-cup-2026/head-to-head/australia-vs-turkey-head-to-head-record-and-past-meetings_599035.html"
+        }
+      ]
+    },
+    "GER-CUW": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开赛前源显示德国与库拉索为首次交手；近四年没有可确认直接交手。",
+      "sources": [
+        {
+          "name": "Evening Standard - Germany vs Curacao preview",
+          "url": "https://www.standard.co.uk/sport/football/germany-vs-curacao-prediction-kick-off-time-tv-live-stream-team-news-latest-h2h-results-odds-world-cup-2026-preview-b1285707.html"
+        },
+        {
+          "name": "FootyStats - Germany vs Curacao H2H",
+          "url": "https://footystats.org/international/germany-national-team-vs-curacao-national-team-h2h-stats"
+        }
+      ],
+      "meetings": []
+    },
+    "NED-JPN": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示荷兰与日本赛前 3 次交手：2009 荷兰 3-0、2010 荷兰 1-0、2013 日本 2-2 荷兰；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "Sports Mole - Netherlands vs Japan H2H",
+          "url": "https://www.sportsmole.co.uk/football/netherlands/world-cup-2026/head-to-head/netherlands-vs-japan-head-to-head-record-and-past-meetings_599068.html"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2013-11-16",
+          "home": "JPN",
+          "away": "NED",
+          "homeGoals": 2,
+          "awayGoals": 2,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/netherlands/world-cup-2026/head-to-head/netherlands-vs-japan-head-to-head-record-and-past-meetings_599068.html"
+        },
+        {
+          "date": "2010-06-19",
+          "home": "NED",
+          "away": "JPN",
+          "homeGoals": 1,
+          "awayGoals": 0,
+          "competition": "FIFA World Cup",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/netherlands/world-cup-2026/head-to-head/netherlands-vs-japan-head-to-head-record-and-past-meetings_599068.html"
+        },
+        {
+          "date": "2009-09-05",
+          "home": "NED",
+          "away": "JPN",
+          "homeGoals": 3,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "Sports Mole",
+          "sourceUrl": "https://www.sportsmole.co.uk/football/netherlands/world-cup-2026/head-to-head/netherlands-vs-japan-head-to-head-record-and-past-meetings_599068.html"
+        }
+      ]
+    },
+    "CIV-ECU": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开赛前源显示科特迪瓦与厄瓜多尔此前没有可用 H2H 数据，世界杯层面为首次交手；模型不做交手加权。",
+      "sources": [
+        {
+          "name": "Goal.com - Ivory Coast vs Ecuador preview",
+          "url": "https://www.goal.com/en-us/news/ivory-coast-ecuador-world-cup-preview/bltb6fef7b1a695267a"
+        },
+        {
+          "name": "365Scores - Ivory Coast vs Ecuador H2H",
+          "url": "https://www.365scores.com/en-us/football/match/fifa-world-cup-5930/ecuador-ivory-coast-2385-5075-5930"
+        }
+      ],
+      "meetings": []
+    },
+    "SWE-TUN": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示两队赛前 4 次交手，均为友谊赛：1976 1-1、1992 瑞典 1-0、1999 瑞典 1-0、2003 突尼斯 1-0；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "JuveFC - Sweden vs Tunisia H2H",
+          "url": "https://www.juvefc.com/sweden-v-tunisia-predictions/"
+        },
+        {
+          "name": "11v11 - Sweden record v Tunisia",
+          "url": "https://www.11v11.com/teams/sweden/tab/opposingTeams/opposition/Tunisia/"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2003-02-12",
+          "home": "TUN",
+          "away": "SWE",
+          "homeGoals": 1,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "JuveFC",
+          "sourceUrl": "https://www.juvefc.com/sweden-v-tunisia-predictions/"
+        },
+        {
+          "date": "1999-02-10",
+          "home": "TUN",
+          "away": "SWE",
+          "homeGoals": 0,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "JuveFC",
+          "sourceUrl": "https://www.juvefc.com/sweden-v-tunisia-predictions/"
+        },
+        {
+          "date": "1992-04-22",
+          "home": "TUN",
+          "away": "SWE",
+          "homeGoals": 0,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "JuveFC",
+          "sourceUrl": "https://www.juvefc.com/sweden-v-tunisia-predictions/"
+        },
+        {
+          "date": "1976-02-28",
+          "home": "TUN",
+          "away": "SWE",
+          "homeGoals": 1,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "JuveFC",
+          "sourceUrl": "https://www.juvefc.com/sweden-v-tunisia-predictions/"
+        }
+      ]
+    },
+    "ESP-CPV": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开赛前源显示西班牙与佛得角此前没有正式交手记录；本场为首次交手。",
+      "sources": [
+        {
+          "name": "Goal.com - Spain vs Cape Verde preview",
+          "url": "https://www.goal.com/en/news/spain-cape-verde-world-cup-preview/blt1cba94a69b707822"
+        },
+        {
+          "name": "2026 FIFA World Cup Group H",
+          "url": "https://en.wikipedia.org/wiki/2026_FIFA_World_Cup_Group_H"
+        }
+      ],
+      "meetings": []
+    },
+    "BEL-EGY": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示比利时与埃及赛前 4 次交手：1999 埃及 1-0、2005 埃及 4-0、2018 比利时 3-0、2022 埃及 2-1。模型窗口内只使用 2022 这场。",
+      "sources": [
+        {
+          "name": "11v11 - Egypt record v Belgium",
+          "url": "https://www.11v11.com/teams/egypt/tab/opposingTeams/opposition/Belgium/"
+        },
+        {
+          "name": "ESPN - Belgium vs Egypt H2H",
+          "url": "https://www.espn.com/soccer/match/_/gameId/760426/egypt-belgium"
+        },
+        {
+          "name": "JuveFC - Belgium vs Egypt H2H",
+          "url": "https://www.juvefc.com/belgium-v-egypt-predictions/"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2022-11-18",
+          "home": "EGY",
+          "away": "BEL",
+          "homeGoals": 2,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "11v11 / ESPN",
+          "sourceUrl": "https://www.11v11.com/teams/egypt/tab/opposingTeams/opposition/Belgium/"
+        },
+        {
+          "date": "2018-06-06",
+          "home": "BEL",
+          "away": "EGY",
+          "homeGoals": 3,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "11v11 / ESPN",
+          "sourceUrl": "https://www.11v11.com/teams/egypt/tab/opposingTeams/opposition/Belgium/"
+        },
+        {
+          "date": "2005-02-09",
+          "home": "EGY",
+          "away": "BEL",
+          "homeGoals": 4,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/egypt/tab/opposingTeams/opposition/Belgium/"
+        },
+        {
+          "date": "1999-03-30",
+          "home": "BEL",
+          "away": "EGY",
+          "homeGoals": 0,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/egypt/tab/opposingTeams/opposition/Belgium/"
+        }
+      ]
+    },
+    "KSA-URU": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示沙特与乌拉圭赛前 3 次交手：2002 沙特 3-2、2014 1-1、2018 乌拉圭 1-0；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "11v11 - Uruguay record v Saudi Arabia",
+          "url": "https://www.11v11.com/teams/uruguay/tab/opposingTeams/opposition/Saudi%20Arabia/"
+        },
+        {
+          "name": "FotMob - Saudi Arabia vs Uruguay H2H",
+          "url": "https://www.fotmob.com/matches/uruguay-vs-saudi-arabia/1izuvb"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2018-06-20",
+          "home": "URU",
+          "away": "KSA",
+          "homeGoals": 1,
+          "awayGoals": 0,
+          "competition": "FIFA World Cup",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/uruguay/tab/opposingTeams/opposition/Saudi%20Arabia/"
+        },
+        {
+          "date": "2014-10-10",
+          "home": "KSA",
+          "away": "URU",
+          "homeGoals": 1,
+          "awayGoals": 1,
+          "competition": "International friendly",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/uruguay/tab/opposingTeams/opposition/Saudi%20Arabia/"
+        },
+        {
+          "date": "2002-03-27",
+          "home": "KSA",
+          "away": "URU",
+          "homeGoals": 3,
+          "awayGoals": 2,
+          "competition": "International friendly",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/uruguay/tab/opposingTeams/opposition/Saudi%20Arabia/"
+        }
+      ]
+    },
+    "IRN-NZL": {
+      "verifiedThrough": "2026-06-13",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示伊朗与新西兰赛前 2 次交手：1973 0-0、2003 伊朗 3-0；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "11v11 - Iran record v New Zealand",
+          "url": "https://www.11v11.com/teams/iran/tab/opposingTeams/opposition/New%20Zealand/"
+        },
+        {
+          "name": "worldfootball.net - Iran vs New Zealand H2H",
+          "url": "https://www.worldfootball.net/match-report/co139/fifa-world-cup/ma10713854/iran_new-zealand/head-to-head/"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2003-10-12",
+          "home": "IRN",
+          "away": "NZL",
+          "homeGoals": 3,
+          "awayGoals": 0,
+          "competition": "AFC-OFC Challenge",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/iran/tab/opposingTeams/opposition/New%20Zealand/"
+        },
+        {
+          "date": "1973-08-12",
+          "home": "IRN",
+          "away": "NZL",
+          "homeGoals": 0,
+          "awayGoals": 0,
+          "competition": "International friendly",
+          "source": "11v11",
+          "sourceUrl": "https://www.11v11.com/teams/iran/tab/opposingTeams/opposition/New%20Zealand/"
+        }
+      ]
+    },
+    "ARG-ALG": {
+      "verifiedThrough": "2026-06-16",
+      "scope": "赛前四年正式 A 级国际赛和友谊赛",
+      "allTimeNote": "公开记录显示阿根廷与阿尔及利亚赛前仅 1 次成年队交手：2007-06-05 友谊赛，阿尔及利亚 3-4 阿根廷；近四年没有可确认交手。",
+      "sources": [
+        {
+          "name": "ESPN - Algeria vs Argentina 2007",
+          "url": "https://www.espn.com/soccer/match/_/gameId/218940/algeria-argentina"
+        },
+        {
+          "name": "National Football Teams - Algeria vs Argentina 2007",
+          "url": "https://www.national-football-teams.com/matches/report/12959/Algeria_Argentina.html"
+        }
+      ],
+      "meetings": [
+        {
+          "date": "2007-06-05",
+          "home": "ALG",
+          "away": "ARG",
+          "homeGoals": 3,
+          "awayGoals": 4,
+          "competition": "International friendly",
+          "source": "ESPN / National Football Teams",
+          "sourceUrl": "https://www.espn.com/soccer/match/_/gameId/218940/algeria-argentina"
+        }
+      ]
+    }
+  }
+}

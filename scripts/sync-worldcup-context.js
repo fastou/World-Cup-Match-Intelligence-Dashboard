@@ -7,10 +7,11 @@ const CONTEXT_PATH = path.join(__dirname, "..", "data", "worldcup-context.json")
 const FIFA_RANKINGS_PATH = path.join(__dirname, "..", "data", "fifa-rankings.json");
 const H2H_OVERRIDES_PATH = path.join(__dirname, "..", "data", "head-to-head-overrides.json");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
-const FETCH_TIMEOUT_MS = 8000;
-const MATCH_SYNC_TIMEOUT_MS = 50000;
-const RUN_TIMEOUT_MS = 90000;
-const OPENAI_TIMEOUT_MS = 30000;
+const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 8000);
+const MATCH_SYNC_TIMEOUT_MS = Number(process.env.MATCH_SYNC_TIMEOUT_MS || 50000);
+const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 150000);
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
+const CONTEXT_ARCHIVE_TIMEOUT_MS = Number(process.env.CONTEXT_ARCHIVE_TIMEOUT_MS || 20000);
 const WEATHER_REQUEST_SPACING_MS = 350;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
@@ -666,6 +667,11 @@ function extractSearchLinks(text, limit = 4) {
 
 function readableProxyUrl(url) {
   return `https://r.jina.ai/http://${url.replace(/^https?:\/\//i, "")}`;
+}
+
+function isSearchProxyUrl(url) {
+  const value = String(url || "").toLowerCase();
+  return value.includes("duckduckgo.com") || value.includes("r.jina.ai/http://duckduckgo.com");
 }
 
 async function fetchReadableArticle(url) {
@@ -1655,8 +1661,8 @@ function buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides = {},
   if (isVerifiedHeadToHead(previousHeadToHead)) return previousHeadToHead;
 
   const window = h2hWindow(match);
-  const snippets = (preview.snippets || []).filter((snippet) => /head.?to.?head|h2h|last meeting|met|交手|历史/i.test(snippet));
   const articleLinks = Array.isArray(preview.articleLinks) ? preview.articleLinks : [];
+  const previewSourceUrl = preview.url && !isSearchProxyUrl(preview.url) ? preview.url : "";
   const homeRank = rankingRecord(fifaRankings, match.home);
   const awayRank = rankingRecord(fifaRankings, match.away);
   const rankingText = homeRank && awayRank ? `长期实力基线：${match.homeName} FIFA 第 ${homeRank}，${match.awayName} FIFA 第 ${awayRank}。` : "长期实力基线部分可用。";
@@ -1674,21 +1680,14 @@ function buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides = {},
       homeGoals: null,
       awayGoals: null
     },
-    latestMeetings: snippets.slice(0, 3).map((snippet) => ({
-      date: "",
-      competition: "公开源摘要",
-      score: snippet.slice(0, 180),
-      source: preview.url || "search preview"
-    })),
-    allTimeNote: snippets.length
-      ? `已抓到交手相关公开摘要 ${snippets.length} 条；未解析成可审计比分前不做数值加权。`
-      : "已纳入 H2H 检索，但本轮未抓到可结构化比分；标记为待核验，不把未知交手当成 0 场。",
+    latestMeetings: [],
+    allTimeNote: "已查询公开源，但本轮未抓到可审计比分；标记为待核验，不把未知交手当成 0 场。",
     impact: `${rankingText} 四年交手待核验前不调整模型，只作为赛前复核项。`,
-    sourceStatus: snippets.length ? "partial" : "queried-pending-verification",
+    sourceStatus: "queried-pending-verification",
     sources: [
       {
-        name: preview.url ? "公开检索/可读文章" : "公开检索",
-        url: preview.url || "",
+        name: previewSourceUrl ? "公开检索/可读文章" : "公开 H2H 检索",
+        url: previewSourceUrl,
         status: preview.ok ? "queried" : "failed",
         detail: preview.ok ? "已查询，未完全结构化" : preview.error || "查询失败"
       },
@@ -1905,8 +1904,15 @@ async function main() {
   };
 
   await fs.writeFile(CONTEXT_PATH, `${JSON.stringify(payload, null, 2)}\n`);
-  await recordContextSnapshot(payload);
   clearTimeout(runTimeout);
+  const archiveResult = await withTimeout(
+    recordContextSnapshot(payload).then(() => ({ ok: true })),
+    CONTEXT_ARCHIVE_TIMEOUT_MS,
+    "context archive"
+  );
+  if (!archiveResult.ok) {
+    console.warn(`Context archive skipped: ${archiveResult.error || "timeout"}`);
+  }
   console.log(`Synced worldcup context for ${Object.keys(matches).length} matches at ${payload.meta.lastUpdated}`);
 }
 

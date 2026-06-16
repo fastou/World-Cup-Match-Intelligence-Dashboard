@@ -21,6 +21,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - `public/index.html`: single-page bilingual dashboard UI.
 - `data/worldcup-dashboard.json`: seed/static match data and manually maintained market scaffolding.
 - `data/research-framework.json`: structured research dimensions and scoring framework.
+- `data/head-to-head-overrides.json`: manually verified structured H2H records and no-meeting confirmations.
 - `data/worldcup-context.json`: generated runtime context, ignored by Git.
 - `scripts/sync-worldcup-context.js`: public source sync and optional OpenAI-compatible AI synthesis.
 - `scripts/archive-dashboard.js`: archives current dashboard snapshots into SQLite.
@@ -66,6 +67,8 @@ Use this skill when building, modifying, operating, or extending a football matc
 - If head-to-head is not yet available for an auto-baseline fixture, show a structured missing/pending status with source target, not a blank value.
 - Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
 - Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.
+- Do not display search-engine snippets as head-to-head meetings. Only dated, auditable score records belong in latest meetings; generic search summaries may only appear as source status or pending-verification notes.
+- Do not show search-engine proxy URLs as H2H source links. Link only to auditable source pages such as ESPN, 11v11, worldfootball.net, National Football Teams, or reputable match previews.
 - Historical context outside the four-year window may be shown as background only; label it separately from model inputs.
 - When static context is added, surface it in the Static tab and preserve it in dashboard history if it affects future review.
 
@@ -106,6 +109,7 @@ When updating source collection:
 - Optional AI synthesis must summarize only retrieved public facts and explicitly state missing inputs.
 - Public sync should generate `worldcup-context.json` fields for lineups, injuries, team news, recent form, tactical matchup, weather, AI synthesis, and head-to-head. If a field cannot be verified, write a structured low-confidence explanation with source status rather than leaving the UI blank.
 - ESPN schedule venue data should be carried into match records and used to drive weather lookup whenever possible.
+- Context writes should not fail just because historical archiving is slow or locked. Write `worldcup-context.json` first, then archive with a bounded timeout and warning.
 
 ## Polymarket And Account Intelligence
 
