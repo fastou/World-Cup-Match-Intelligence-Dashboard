@@ -91,7 +91,7 @@ Every data dimension should use an explicit source chain instead of simply waiti
 - `backup`: reputable public search/articles for the same dimension, with source URLs and extraction status preserved.
 - `fallback`: a conservative, clearly labelled low-confidence baseline from already verified facts such as schedule, venue, ranking, team rating, weather availability, and model priors.
 
-Fallbacks may explain uncertainty and keep the page useful, but they must not fabricate unavailable facts. For example, do not create starting XIs, confirmed injuries, holder rows, odds, or head-to-head scores when no source supports them. Show `queried / pending`, `rule fallback`, or `unstructured` instead of blank values when the sync ran but did not produce a verified fact.
+Fallbacks may explain uncertainty and keep the page useful, but they must not fabricate unavailable facts. For example, do not create starting XIs, confirmed injuries, holder rows, odds, or head-to-head scores when no source supports them. Show `queried / pending`, `pending verification`, or `rule fallback` instead of blank values when the sync ran but did not produce a verified fact.
 
 Ranking, venue, weather, recent form, tactical matchup, AI synthesis, and four-year head-to-head context should all have either a verified value or a visible low-confidence fallback. A plain `waiting` state should be reserved for source failures, not for dimensions that can be explained from existing baseline inputs.
 

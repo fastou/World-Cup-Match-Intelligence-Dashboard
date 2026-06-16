@@ -1683,8 +1683,8 @@ function buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides = {},
     allTimeNote: snippets.length
       ? `已抓到交手相关公开摘要 ${snippets.length} 条；未解析成可审计比分前不做数值加权。`
       : "已纳入 H2H 检索，但本轮未抓到可结构化比分；标记为待核验，不把未知交手当成 0 场。",
-    impact: `${rankingText} 四年交手未结构化前不调整模型，只作为赛前复核项。`,
-    sourceStatus: snippets.length ? "partial" : "queried-unstructured",
+    impact: `${rankingText} 四年交手待核验前不调整模型，只作为赛前复核项。`,
+    sourceStatus: snippets.length ? "partial" : "queried-pending-verification",
     sources: [
       {
         name: preview.url ? "公开检索/可读文章" : "公开检索",

@@ -1254,7 +1254,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
       },
       latestMeetings: [],
       allTimeNote: "赛程自动基线已纳入 H2H 同步队列；未解析成可审计比分前不做数值加权。",
-      impact: "交手资料未结构化，模型不做交手加权。",
+      impact: "交手资料待核验，模型不做交手加权。",
       sourceStatus: "queued",
       sources: [
         {
