@@ -225,6 +225,24 @@
         border: 1px solid var(--line);
         border-radius: 8px;
         background: #fbfcfa;
+        cursor: pointer;
+        transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+      }
+
+      .opportunity-card:hover,
+      .opportunity-card:focus-visible {
+        border-color: rgba(20, 125, 100, 0.45);
+        box-shadow: 0 10px 26px rgba(31, 45, 38, 0.09);
+        outline: none;
+        transform: translateY(-1px);
+      }
+
+      .opportunity-card.checking {
+        border-color: rgba(36, 90, 156, 0.5);
+      }
+
+      .opportunity-card.checked {
+        border-color: rgba(20, 125, 100, 0.48);
       }
 
       .opportunity-card-head {
@@ -292,6 +310,42 @@
         margin: 0;
         padding-left: 17px;
         color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .opportunity-live-check {
+        display: grid;
+        gap: 7px;
+        margin-top: 10px;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .opportunity-live-check.good {
+        border-color: rgba(20, 125, 100, 0.35);
+        background: #f2faf6;
+      }
+
+      .opportunity-live-check.warn {
+        border-color: rgba(162, 98, 19, 0.35);
+        background: #fff8ec;
+      }
+
+      .opportunity-live-check.bad {
+        border-color: rgba(184, 58, 53, 0.28);
+        background: #fff4f2;
+      }
+
+      .opportunity-live-check strong {
+        font-size: 12px;
+      }
+
+      .opportunity-live-check p {
+        margin: 0;
+        color: var(--ink);
         font-size: 12px;
         line-height: 1.45;
       }
@@ -2065,10 +2119,32 @@
         "待确认": "Pending",
         "未返回": "Not returned",
         "已分析": "Analyzed",
-        "未启用": "Disabled"
+        "未启用": "Disabled",
+        "点击卡片刷新当前价": "Click to refresh current price",
+        "正在刷新当前价": "Refreshing current price",
+        "当前价复核失败": "Current price check failed",
+        "当前价复核": "Current price check",
+        "可按纪律观察": "Disciplined watch",
+        "小仓观察": "Small-watch",
+        "等回落": "Wait for pullback"
       };
 
       const UI_REGEX_TRANSLATIONS = [
+        [/打开这张卡片会重新拉当前价格，并判断是否仍在建议上限内。/g, "Open this card to fetch the latest price and re-check the entry limit."],
+        [/正在拉取实时盘口价格\.\.\./g, "Fetching live market price..."],
+        [/当前没有可用实时价格，先不做价格判断。/g, "No live price is available, so no price judgment is shown."],
+        [/真实盘口或 Polymarket 曲线不足，不能给价格建议。/g, "Real market or Polymarket curve is incomplete, so price guidance is disabled."],
+        [/当前价 ([0-9]+¢)，但实时曲线不足，先观察不追。/g, "Current price $1, but the live curve is incomplete; watch without chasing."],
+        [/当前价 ([0-9]+¢)，缺少建议上限，先观察。/g, "Current price $1, but the entry limit is missing; watch only."],
+        [/当前价 ([0-9]+¢)，低于建议上限 ([0-9]+¢)，edge ([0-9.]+%)。/g, "Current price $1 is below the entry limit $2, edge $3."],
+        [/当前价 ([0-9]+¢) 已高于建议上限 ([0-9]+¢)，不要追价。/g, "Current price $1 is above the entry limit $2; do not chase."],
+        [/当前价 ([0-9]+¢)，edge ([+-]?[0-9.]+%)，没有达到进入纪律。/g, "Current price $1, edge $2; it does not meet entry discipline."],
+        [/价格空间 ([0-9.]+%)。/g, "Price room $1."],
+        [/需要至少回落 ([0-9.]+%) 才重新考虑。/g, "Needs at least a $1 pullback before reconsidering."],
+        [/数据闸门允许较高置信判断。/g, "The data gate allows a higher-confidence judgment."],
+        [/动态数据仍有限，只按小仓\/观察处理。/g, "Dynamic data is still limited; treat as small-watch only."],
+        [/模型价差转负，先回避。/g, "The model gap has turned negative; avoid for now."],
+        [/价差不够，等待更好价格。/g, "The gap is not enough; wait for a better price."],
         [/生成/g, "Generated"],
         [/情报/g, "Intelligence"],
         [/本地基线/g, "Local baseline"],
@@ -2121,6 +2197,7 @@
       let currentLang = localStorage.getItem("worldcup-dashboard-lang") || "zh";
       let currentDashboard = null;
       let currentOpportunities = { meta: {}, items: [] };
+      const opportunityChecks = new Map();
 
       function translateText(text) {
         if (currentLang !== "en" || !text) return text;
@@ -2612,6 +2689,60 @@
         return labels[confidence] || labels.low;
       }
 
+      function opportunityCheckClass(check) {
+        if (!check) return "";
+        if (check.loading) return "warn";
+        if (check.error || check.verdict?.action === "avoid") return "bad";
+        if (check.verdict?.canConsider) return "good";
+        return "warn";
+      }
+
+      function opportunityCheckLabel(check) {
+        if (!check) return currentLang === "en" ? "Click to refresh current price" : "点击卡片刷新当前价";
+        if (check.loading) return currentLang === "en" ? "Refreshing current price" : "正在刷新当前价";
+        if (check.error) return currentLang === "en" ? "Price check failed" : "当前价复核失败";
+        return currentLang === "en" ? "Current price check" : "当前价复核";
+      }
+
+      function renderOpportunityCheck(item) {
+        const check = opportunityChecks.get(item.id);
+        if (!check) {
+          return `
+            <div class="opportunity-live-check">
+              <strong>${escapeHtml(opportunityCheckLabel(check))}</strong>
+              <p>${escapeHtml(currentLang === "en" ? "Open this card to fetch the latest price and re-check the entry limit." : "打开这张卡片会重新拉当前价格，并判断是否仍在建议上限内。")}</p>
+            </div>
+          `;
+        }
+        const detail = check.error
+          ? check.error
+          : check.loading
+            ? (currentLang === "en" ? "Fetching live market price..." : "正在拉取实时盘口价格...")
+            : check.summary || check.verdict?.message || "";
+        const priceLine = !check.loading && !check.error
+          ? `
+            <div class="opportunity-meta">
+              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Now" : "当前")} ${escapeHtml(fmtPrice(check.marketPrice))}</span>
+              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(check.maxBuyPrice))}</span>
+              <span class="opportunity-chip">${escapeHtml("Edge")} ${escapeHtml(fmtEdge(check.edge))}</span>
+              ${typeof check.priceChange === "number" ? `<span class="opportunity-chip ${check.priceChange <= 0 ? "good" : "warn"}">${escapeHtml(currentLang === "en" ? "Move" : "变动")} ${escapeHtml(fmtEdge(check.priceChange))}</span>` : ""}
+              <span class="opportunity-chip">${escapeHtml(fmtDateTime(check.checkedAt))}</span>
+            </div>
+          `
+          : "";
+        const riskLines = !check.loading && !check.error && check.risks?.length
+          ? `<ul>${check.risks.slice(0, 3).map((risk) => `<li>${escapeHtml(risk)}</li>`).join("")}</ul>`
+          : "";
+        return `
+          <div class="opportunity-live-check ${escapeHtml(opportunityCheckClass(check))}">
+            <strong>${escapeHtml(opportunityCheckLabel(check))}${check.verdict?.label ? ` · ${escapeHtml(check.verdict.label)}` : ""}</strong>
+            <p>${escapeHtml(detail)}</p>
+            ${priceLine}
+            ${riskLines}
+          </div>
+        `;
+      }
+
       function renderOpportunities(payload = currentOpportunities) {
         currentOpportunities = payload || { meta: {}, items: [] };
         const labels = APP_LABELS[currentLang];
@@ -2638,8 +2769,15 @@
           return;
         }
 
-        list.innerHTML = items.map((item) => `
-          <article class="opportunity-card">
+        list.innerHTML = items.map((item) => {
+          const check = opportunityChecks.get(item.id);
+          const cardClass = [
+            "opportunity-card",
+            check?.loading ? "checking" : "",
+            check && !check.loading ? "checked" : ""
+          ].filter(Boolean).join(" ");
+          return `
+          <article class="${escapeHtml(cardClass)}" data-opportunity-id="${escapeHtml(item.id)}" role="button" tabindex="0" aria-label="${escapeHtml(currentLang === "en" ? "Refresh current price for this opportunity" : "刷新这条机会的当前价格")}">
             <div class="opportunity-card-head">
               <div>
                 <div class="opportunity-title">${escapeHtml(item.title || `${item.matchName} · ${item.name}`)}</div>
@@ -2660,6 +2798,7 @@
               <strong>${escapeHtml(currentLang === "en" ? "Entry discipline" : "买价纪律")}</strong>
               <div class="confidence-note">${escapeHtml(item.entryText || "")}</div>
             </div>
+            ${renderOpportunityCheck(item)}
             <div class="opportunity-section">
               <strong>${escapeHtml(currentLang === "en" ? "Reasons" : "理由")}</strong>
               <ul>${(item.reasons || []).slice(0, 5).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
@@ -2669,7 +2808,8 @@
               <ul>${(item.risks || []).slice(0, 5).map((risk) => `<li>${escapeHtml(risk)}</li>`).join("")}</ul>
             </div>
           </article>
-        `).join("");
+        `;
+        }).join("");
         translateRenderedContent(list);
       }
 
@@ -2691,6 +2831,48 @@
             },
             items: []
           };
+          renderOpportunities(currentOpportunities);
+        }
+      }
+
+      function findOpportunityItem(id) {
+        return activeOpportunities(currentOpportunities).find((item) => item.id === id) || null;
+      }
+
+      async function checkOpportunityPrice(id) {
+        if (!id || window.location.protocol === "file:") return;
+        const item = findOpportunityItem(id);
+        if (!item) return;
+        opportunityChecks.set(id, { loading: true, checkedAt: new Date().toISOString() });
+        renderOpportunities(currentOpportunities);
+        try {
+          const params = new URLSearchParams({
+            id: item.id,
+            matchId: item.matchId,
+            marketKey: item.marketKey
+          });
+          if (typeof item.marketPrice === "number") params.set("marketPrice", String(item.marketPrice));
+          if (typeof item.maxBuyPrice === "number") params.set("maxBuyPrice", String(item.maxBuyPrice));
+          const response = await fetch(`${basePath()}api/opportunities/check?${params.toString()}`, { cache: "no-store" });
+          const data = await response.json();
+          if (!response.ok || data.ok === false) {
+            throw new Error(data.message || data.error || "price check failed");
+          }
+          opportunityChecks.set(id, data);
+          const targetItem = (currentOpportunities.items || []).find((candidate) => candidate.id === id);
+          if (targetItem) {
+            targetItem.marketPrice = data.marketPrice;
+            targetItem.edge = data.edge;
+            targetItem.maxBuyPrice = data.maxBuyPrice;
+            targetItem.source = data.source || targetItem.source;
+            targetItem.summary = data.summary || targetItem.summary;
+          }
+        } catch (error) {
+          opportunityChecks.set(id, {
+            error: error.message,
+            checkedAt: new Date().toISOString()
+          });
+        } finally {
           renderOpportunities(currentOpportunities);
         }
       }
@@ -3644,6 +3826,18 @@
         const modal = document.getElementById("opportunityModal");
         modal.classList.remove("open");
         modal.setAttribute("aria-hidden", "true");
+      });
+      document.getElementById("opportunityList").addEventListener("click", (event) => {
+        const card = event.target.closest("[data-opportunity-id]");
+        if (!card) return;
+        checkOpportunityPrice(card.dataset.opportunityId);
+      });
+      document.getElementById("opportunityList").addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const card = event.target.closest("[data-opportunity-id]");
+        if (!card) return;
+        event.preventDefault();
+        checkOpportunityPrice(card.dataset.opportunityId);
       });
       document.getElementById("opportunityModal").addEventListener("click", (event) => {
         if (event.target.id !== "opportunityModal") return;

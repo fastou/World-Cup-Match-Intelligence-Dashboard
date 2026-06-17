@@ -27,6 +27,7 @@ const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 
 const AI_TRADE_PLAN_ENABLED = process.env.AI_TRADE_PLAN_ENABLED !== "0";
 const OPPORTUNITY_REFRESH_MS = Number(process.env.OPPORTUNITY_REFRESH_MS || 60 * 60 * 1000);
 const OPPORTUNITY_AI_TIMEOUT_MS = Number(process.env.OPPORTUNITY_AI_TIMEOUT_MS || 25000);
+const OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS = Number(process.env.OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS || 18000);
 const OPPORTUNITY_MAX_ITEMS = Number(process.env.OPPORTUNITY_MAX_ITEMS || 8);
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
@@ -1294,6 +1295,162 @@ function buildRuleOpportunity(row, index) {
     createdAt: new Date().toISOString(),
     status: Date.parse(expiresAt) > Date.now() ? "active" : "expired"
   };
+}
+
+function currentOpportunityVerdict(rec, match) {
+  const hasPrice = typeof rec.marketPrice === "number" && Number.isFinite(rec.marketPrice);
+  const hasMax = typeof rec.maxBuyPrice === "number" && Number.isFinite(rec.maxBuyPrice);
+  const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
+  if (!hasPrice) {
+    return {
+      action: "wait",
+      label: "等待价格",
+      canConsider: false,
+      message: "当前没有可用实时价格，先不做价格判断。",
+      reasons: ["盘口价格缺失"]
+    };
+  }
+  if (!match.tradingGate?.allowPriceAdvice) {
+    return {
+      action: "wait",
+      label: "等待真实盘口",
+      canConsider: false,
+      message: "真实盘口或 Polymarket 曲线不足，不能给价格建议。",
+      reasons: match.tradingGate?.reasons || ["真实盘口不可用"]
+    };
+  }
+  if (!hasLiveChart) {
+    return {
+      action: "watch",
+      label: "观察",
+      canConsider: false,
+      message: `当前价 ${formatCents(rec.marketPrice)}，但实时曲线不足，先观察不追。`,
+      reasons: ["实时曲线不足"]
+    };
+  }
+  if (!hasMax) {
+    return {
+      action: "watch",
+      label: "观察",
+      canConsider: false,
+      message: `当前价 ${formatCents(rec.marketPrice)}，缺少建议上限，先观察。`,
+      reasons: ["建议价缺失"]
+    };
+  }
+  const priceGap = rec.maxBuyPrice - rec.marketPrice;
+  if (rec.marketPrice <= rec.maxBuyPrice && rec.edge >= 0.035) {
+    return {
+      action: match.tradingGate?.allowStrongTrade ? "watch" : "watch",
+      label: match.tradingGate?.allowStrongTrade ? "可按纪律观察" : "小仓观察",
+      canConsider: true,
+      message: `当前价 ${formatCents(rec.marketPrice)}，低于建议上限 ${formatCents(rec.maxBuyPrice)}，edge ${formatPercent(rec.edge)}。`,
+      reasons: [
+        `价格空间 ${formatPercent(priceGap)}。`,
+        ...(match.tradingGate?.allowStrongTrade ? ["数据闸门允许较高置信判断。"] : ["动态数据仍有限，只按小仓/观察处理。"])
+      ]
+    };
+  }
+  if (rec.edge >= 0.015) {
+    return {
+      action: "watch",
+      label: "等回落",
+      canConsider: false,
+      message: `当前价 ${formatCents(rec.marketPrice)} 已高于建议上限 ${formatCents(rec.maxBuyPrice)}，不要追价。`,
+      reasons: [`需要至少回落 ${formatPercent(Math.abs(priceGap))} 才重新考虑。`]
+    };
+  }
+  return {
+    action: rec.edge < -0.015 ? "avoid" : "wait",
+    label: rec.edge < -0.015 ? "回避" : "等待",
+    canConsider: false,
+    message: `当前价 ${formatCents(rec.marketPrice)}，edge ${formatPercent(rec.edge)}，没有达到进入纪律。`,
+    reasons: rec.edge < -0.015 ? ["模型价差转负，先回避。"] : ["价差不够，等待更好价格。"]
+  };
+}
+
+function buildOpportunityPriceCheck(match, rec, request = {}) {
+  const now = new Date().toISOString();
+  const expiresAt = opportunityExpiryForMatch(match);
+  const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
+  const verdict = currentOpportunityVerdict(rec, match);
+  const source = recommendationSourceText(rec);
+  const matchedRequestedPrice = typeof request.marketPrice === "number"
+    ? Math.abs((rec.marketPrice || 0) - request.marketPrice)
+    : null;
+  return {
+    ok: true,
+    checkedAt: now,
+    requested: {
+      id: request.id || "",
+      marketKey: request.marketKey || "",
+      marketPrice: typeof request.marketPrice === "number" ? request.marketPrice : null,
+      maxBuyPrice: typeof request.maxBuyPrice === "number" ? request.maxBuyPrice : null
+    },
+    matchId: match.id,
+    matchName: `${match.homeName} vs ${match.awayName}`,
+    kickoffShanghai: match.kickoffShanghai,
+    marketKey: rec.key,
+    marketType: rec.marketType,
+    marketTypeLabel: rec.marketTypeLabel,
+    name: rec.name,
+    title: `${match.homeName} vs ${match.awayName} · ${rec.name}`,
+    modelProbability: rec.modelProbability,
+    marketPrice: rec.marketPrice,
+    previousPrice: typeof request.marketPrice === "number" ? request.marketPrice : null,
+    priceChange: typeof request.marketPrice === "number" && typeof rec.marketPrice === "number"
+      ? roundTo(rec.marketPrice - request.marketPrice, 4)
+      : null,
+    edge: rec.edge,
+    maxBuyPrice: rec.maxBuyPrice,
+    source,
+    hasLiveChart,
+    chartPoints: rec.chart?.history?.length || 0,
+    decisionLabel: rec.decision?.label || "",
+    decisionAction: rec.decision?.action || "",
+    verdict,
+    summary: verdict.message,
+    staleRequest: matchedRequestedPrice != null && matchedRequestedPrice >= 0.005,
+    expiresAt,
+    status: Date.parse(expiresAt) > Date.now() ? "active" : "expired",
+    risks: topRiskNotes(match, rec).slice(0, 4)
+  };
+}
+
+async function checkOpportunityCurrentPrice(params = {}) {
+  const matchId = String(params.matchId || "").trim();
+  const marketKey = String(params.marketKey || "").trim();
+  if (!matchId || !marketKey) {
+    return {
+      ok: false,
+      error: "missing_match_or_market",
+      message: "缺少比赛或盘口标识。"
+    };
+  }
+  const dashboard = await withTimeout(buildDashboard({
+    force: true,
+    recordHistory: false,
+    includeElite: false,
+    includeOpenAi: false,
+    light: true
+  }), OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS, "opportunity price check");
+  if (!dashboard.ok && dashboard.error) return dashboard;
+  const match = (dashboard.matches || []).find((item) => item.id === matchId);
+  if (!match) {
+    return {
+      ok: false,
+      error: "match_not_found",
+      message: "当前三天窗口里没有找到这场比赛，可能已经结束或被隐藏。"
+    };
+  }
+  const rec = (match.recommendations || []).find((item) => item.key === marketKey);
+  if (!rec) {
+    return {
+      ok: false,
+      error: "market_not_found",
+      message: "没有找到这条提醒对应的盘口。"
+    };
+  }
+  return buildOpportunityPriceCheck(match, rec, params);
 }
 
 function normalizeAiOpportunity(raw, fallback, model) {
@@ -4948,6 +5105,23 @@ const server = http.createServer(async (req, res) => {
           cacheAgeSeconds: generatedAt ? Math.max(0, Math.round(staleMs / 1000)) : null
         }
       });
+      return;
+    }
+    if (pathname === "/api/opportunities/check") {
+      const marketPriceParam = url.searchParams.get("marketPrice");
+      const maxBuyPriceParam = url.searchParams.get("maxBuyPrice");
+      const payload = await checkOpportunityCurrentPrice({
+        id: url.searchParams.get("id") || "",
+        matchId: url.searchParams.get("matchId") || "",
+        marketKey: url.searchParams.get("marketKey") || "",
+        marketPrice: marketPriceParam != null && Number.isFinite(Number(marketPriceParam))
+          ? Number(marketPriceParam)
+          : null,
+        maxBuyPrice: maxBuyPriceParam != null && Number.isFinite(Number(maxBuyPriceParam))
+          ? Number(maxBuyPriceParam)
+          : null
+      });
+      jsonResponse(res, payload.ok === false ? 422 : 200, payload);
       return;
     }
     if (pathname === "/api/health") {
