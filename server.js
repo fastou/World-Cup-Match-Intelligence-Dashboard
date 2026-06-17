@@ -19,6 +19,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const LIGHT_CACHE_TTL_MS = 60 * 1000;
+const LIGHT_CACHE_STABILITY_MAX_AGE_MS = Number(process.env.LIGHT_CACHE_STABILITY_MAX_AGE_MS || 30 * 60 * 1000);
 const FETCH_TIMEOUT_MS = 6500;
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 4000);
@@ -26,7 +27,7 @@ const AI_TRADE_PLAN_ENABLED = process.env.AI_TRADE_PLAN_ENABLED !== "0";
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
-const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 240);
+const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || Math.max(360, POLYMARKET_MARKET_LIMIT * 2));
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
 const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 10;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
@@ -328,7 +329,7 @@ function normalizeBasePath(value) {
 }
 
 function jsonResponse(res, status, payload) {
-  const body = JSON.stringify(payload, null, 2);
+  const body = JSON.stringify(payload);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store"
@@ -361,7 +362,7 @@ async function readOptionalJson(filePath, fallback) {
 async function writeJsonAtomic(filePath, payload) {
   const tmpPath = `${filePath}.${process.pid}.tmp`;
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2));
+  await fs.writeFile(tmpPath, JSON.stringify(payload));
   await fs.rename(tmpPath, filePath);
 }
 
@@ -4241,6 +4242,51 @@ async function getPersistedLightCache() {
   return lightDashboardCache;
 }
 
+function livePolymarketChartCount(payload) {
+  let count = 0;
+  for (const match of payload?.matches || []) {
+    for (const recommendation of match.recommendations || []) {
+      if (recommendation.chart?.source !== "Polymarket") continue;
+      if ((recommendation.chart.history || []).length >= 2) count += 1;
+    }
+  }
+  return count;
+}
+
+function payloadCacheAgeMs(payload) {
+  const generatedAt = Date.parse(payload?.meta?.generatedAt || "");
+  return Number.isFinite(generatedAt) ? Math.max(0, Date.now() - generatedAt) : Infinity;
+}
+
+function shouldKeepExistingLightCache(nextPayload, previousPayload) {
+  if (!previousPayload?.matches?.length || !nextPayload?.matches?.length) return false;
+  if (payloadCacheAgeMs(previousPayload) > LIGHT_CACHE_STABILITY_MAX_AGE_MS) return false;
+  const previousCount = livePolymarketChartCount(previousPayload);
+  const nextCount = livePolymarketChartCount(nextPayload);
+  if (previousCount < 3) return false;
+  return nextCount < Math.max(1, Math.floor(previousCount * 0.6));
+}
+
+function buildPolymarketSourceSummary(polymarket) {
+  return {
+    source: polymarket?.source || "Polymarket 实时市场 API",
+    ok: Boolean(polymarket?.ok),
+    latencyMs: polymarket?.latencyMs,
+    marketCount: Array.isArray(polymarket?.markets) ? polymarket.markets.length : 0,
+    historySource: polymarket?.historySource ? {
+      source: polymarket.historySource.source,
+      ok: polymarket.historySource.ok,
+      partial: polymarket.historySource.partial,
+      error: polymarket.historySource.error,
+      requestedTokens: polymarket.historySource.requestedTokens,
+      returnedTokens: polymarket.historySource.returnedTokens,
+      batchCount: polymarket.historySource.batchCount,
+      fidelityMinutes: polymarket.historySource.fidelityMinutes
+    } : undefined,
+    error: polymarket?.error
+  };
+}
+
 function mergeCachedEliteSignals(matches, polymarket, cachedPayload) {
   if (!cachedPayload?.matches?.length) return null;
   const cachedMatches = new Map((cachedPayload.matches || []).map((match) => [match.id, match]));
@@ -4427,7 +4473,7 @@ async function buildDashboard({
         error: eliteTraders.error || eliteTraders.marketPositions?.error,
         detail: eliteTraders.rankingBasis
       },
-      polymarket
+      buildPolymarketSourceSummary(polymarket)
     ],
     teams: local.teams,
     fifaRankings: {
@@ -4464,11 +4510,31 @@ async function buildDashboard({
   };
 
   if (light) {
-    lightDashboardCache = payload;
-    lightDashboardCacheAt = Date.now();
-    writeJsonAtomic(LIVE_CACHE_PATH, payload).catch((error) => {
-      console.error(`Failed to persist live dashboard cache: ${error.message}`);
-    });
+    const previousLightCache = lightDashboardCache || await readOptionalJson(LIVE_CACHE_PATH, null);
+    if (shouldKeepExistingLightCache(payload, previousLightCache)) {
+      payload.meta.cacheQualityHold = {
+        keptPrevious: true,
+        reason: "polymarket-chart-drop",
+        previousLiveCharts: livePolymarketChartCount(previousLightCache),
+        nextLiveCharts: livePolymarketChartCount(payload),
+        previousGeneratedAt: previousLightCache.meta?.generatedAt || ""
+      };
+      lightDashboardCache = {
+        ...previousLightCache,
+        meta: {
+          ...(previousLightCache.meta || {}),
+          cacheQualityHold: payload.meta.cacheQualityHold,
+          backgroundRefresh: Boolean(backgroundRefreshPromise)
+        }
+      };
+      lightDashboardCacheAt = Date.parse(previousLightCache.meta?.generatedAt || "") || Date.now();
+    } else {
+      lightDashboardCache = payload;
+      lightDashboardCacheAt = Date.now();
+      writeJsonAtomic(LIVE_CACHE_PATH, payload).catch((error) => {
+        console.error(`Failed to persist live dashboard cache: ${error.message}`);
+      });
+    }
     if (!background && (!dashboardCache || Date.now() - dashboardCacheAt >= CACHE_TTL_MS)) {
       scheduleBackgroundDashboardRefresh();
     }
@@ -4549,12 +4615,12 @@ const server = http.createServer(async (req, res) => {
       const force = url.searchParams.get("force") === "1";
       const light = url.searchParams.get("light") === "1";
       const recordHistory = url.searchParams.get("skipHistory") !== "1";
-      if (light) {
+      if (light && !force) {
         const cached = await getPersistedLightCache();
         if (cached) {
           const generatedAt = Date.parse(cached.meta?.generatedAt || "") || 0;
           const staleMs = Date.now() - generatedAt;
-          if (force || staleMs > LIGHT_CACHE_TTL_MS) scheduleBackgroundLightRefresh();
+          if (staleMs > LIGHT_CACHE_TTL_MS) scheduleBackgroundLightRefresh();
           jsonResponse(res, 200, {
             ...cached,
             meta: {
