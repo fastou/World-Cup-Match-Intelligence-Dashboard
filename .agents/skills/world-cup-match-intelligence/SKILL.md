@@ -66,6 +66,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - When new schedule teams appear, refresh ranking coverage for every visible team code in the current match window, not only the single reported fixture.
 - Each team should include recent match form against other opponents when a public results feed is available: date, opponent, score, W/D/L, competition, source URL, update time, and a compact W/D/L plus goals summary.
 - Recent form belongs in the Static tab as historical context. It can inform low-weight model review, but missing or stale recent-form data must not be invented or treated as confirmed team news.
+- Each team should include all-time FIFA World Cup finals record when available: appearances, matches, W/D/L, goals for/against, best finish, source, update date, and as-of scope. Exclude qualifiers; explicitly mark teams with no pre-2026 finals appearances.
 - If head-to-head is not yet available for an auto-baseline fixture, show a structured missing/pending status with source target, not a blank value.
 - Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
 - Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.

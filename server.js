@@ -9,6 +9,7 @@ const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || "");
 const ROOT = __dirname;
 const DATA_PATH = path.join(ROOT, "data", "worldcup-dashboard.json");
 const FIFA_RANKINGS_PATH = path.join(ROOT, "data", "fifa-rankings.json");
+const WORLD_CUP_RECORDS_PATH = path.join(ROOT, "data", "world-cup-records.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
@@ -1454,7 +1455,7 @@ async function attachAiPredictions(matches, { useOpenAi = true } = {}) {
 async function fetchFinalResults() {
   try {
     await ensureHistorySchema();
-    const raw = await runSql("SELECT match_id, status, finished_at, result_key, result_label FROM match_results WHERE status = 'final';", [], "all");
+    const raw = await runSql("SELECT match_id, home_goals, away_goals, status, finished_at, result_key, result_label FROM match_results WHERE status = 'final';", [], "all");
     return new Map((JSON.parse(raw || "[]") || []).map((row) => [row.match_id, row]));
   } catch (error) {
     console.error(`Failed to read match results: ${error.message}`);
@@ -1619,7 +1620,7 @@ function h2hFromOverride(event, h2hOverrides, fifaRankings) {
   };
 }
 
-function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, h2hOverrides, nowMs = Date.now()) {
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, h2hOverrides, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
@@ -1627,8 +1628,8 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   if (modeledKeys.has(key)) return null;
   if (hasRecordedFinal(event.scheduleId, finalResults)) return null;
 
-  const homeTeam = scheduleTeamRecord(event.home, fifaRankings);
-  const awayTeam = scheduleTeamRecord(event.away, fifaRankings);
+  const homeTeam = scheduleTeamRecord(event.home, fifaRankings, worldCupRecords);
+  const awayTeam = scheduleTeamRecord(event.away, fifaRankings, worldCupRecords);
   const { lambdaHome, lambdaAway } = autoBaselineLambda(homeTeam.rating, awayTeam.rating);
   const id = `schedule-${event.scheduleId || key}`;
   const syncedContext = contextForMatch(context, id);
@@ -1713,13 +1714,13 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, h2hOverrides) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, h2hOverrides) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
-    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, h2hOverrides, nowMs))
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, h2hOverrides, nowMs))
     .filter(Boolean);
   const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
@@ -1744,9 +1745,9 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   };
 }
 
-function normalizeMatch(match, teams, context, polymarket) {
-  const homeTeam = teams[match.home];
-  const awayTeam = teams[match.away];
+function normalizeMatch(match, teams, context, polymarket, worldCupRecords) {
+  const homeTeam = attachWorldCupRecord(teams[match.home], match.home, worldCupRecords);
+  const awayTeam = attachWorldCupRecord(teams[match.away], match.away, worldCupRecords);
   const matchContext = contextForMatch(context, match.id);
   const mergedMatch = deepMerge(match, { context: matchContext });
   const dynamicModel = applyDynamicAdjustments(mergedMatch);
@@ -2020,6 +2021,110 @@ function rankingForTeam(code, fifaRankings) {
   };
 }
 
+function worldCupRecordForTeam(code, worldCupRecords) {
+  const normalizedCode = String(code || "").toUpperCase();
+  const record = worldCupRecords?.records?.[normalizedCode];
+  const base = {
+    teamCode: normalizedCode,
+    source: worldCupRecords?.source || "Wikipedia - National team appearances in the FIFA World Cup",
+    sourceUrl: worldCupRecords?.sourceUrl || "https://en.wikipedia.org/wiki/National_team_appearances_in_the_FIFA_World_Cup",
+    updatedAt: worldCupRecords?.updatedAt || "",
+    asOf: worldCupRecords?.asOf || "",
+    asOfZh: worldCupRecords?.asOfZh || "",
+    notes: worldCupRecords?.notes || "",
+    notesZh: worldCupRecords?.notesZh || ""
+  };
+  if (!record) {
+    return {
+      ...base,
+      ok: false,
+      status: "missing",
+      error: "世界杯历史战绩快照未覆盖该队。"
+    };
+  }
+  return {
+    ...base,
+    ...record,
+    ok: true,
+    status: "verified-snapshot"
+  };
+}
+
+function attachWorldCupRecord(team, code, worldCupRecords) {
+  return {
+    ...(team || {}),
+    worldCupRecord: worldCupRecordForTeam(code, worldCupRecords)
+  };
+}
+
+function cloneWorldCupRecords(worldCupRecords) {
+  return {
+    ...(worldCupRecords || {}),
+    records: Object.fromEntries(Object.entries(worldCupRecords?.records || {}).map(([code, record]) => [code, { ...record }]))
+  };
+}
+
+function addWorldCupResultToRecord(record, goalsFor, goalsAgainst) {
+  if (!record || !Number.isFinite(goalsFor) || !Number.isFinite(goalsAgainst)) return;
+  record.matches = Number(record.matches || 0) + 1;
+  record.wins = Number(record.wins || 0) + (goalsFor > goalsAgainst ? 1 : 0);
+  record.draws = Number(record.draws || 0) + (goalsFor === goalsAgainst ? 1 : 0);
+  record.losses = Number(record.losses || 0) + (goalsFor < goalsAgainst ? 1 : 0);
+  record.goalsFor = Number(record.goalsFor || 0) + goalsFor;
+  record.goalsAgainst = Number(record.goalsAgainst || 0) + goalsAgainst;
+}
+
+function applyRecordedWorldCupResults(worldCupRecords, modeledMatches, scheduleMatches, finalResults) {
+  const enriched = cloneWorldCupRecords(worldCupRecords);
+  const records = enriched.records || {};
+  const matchById = new Map();
+  for (const match of modeledMatches || []) {
+    matchById.set(match.id, {
+      home: String(match.home || "").toUpperCase(),
+      away: String(match.away || "").toUpperCase()
+    });
+  }
+  for (const event of scheduleMatches || []) {
+    const id = `schedule-${event.scheduleId || scheduleEventKey(event)}`;
+    matchById.set(id, {
+      home: eventTeamCode(event, "home"),
+      away: eventTeamCode(event, "away")
+    });
+    if (event.scheduleId) {
+      matchById.set(event.scheduleId, {
+        home: eventTeamCode(event, "home"),
+        away: eventTeamCode(event, "away")
+      });
+    }
+  }
+
+  let applied = 0;
+  const appearanceAddedTeams = new Set();
+  for (const [matchId, result] of finalResults || []) {
+    const teams = matchById.get(matchId);
+    const homeGoals = result?.home_goals === null || result?.home_goals === undefined ? NaN : Number(result.home_goals);
+    const awayGoals = result?.away_goals === null || result?.away_goals === undefined ? NaN : Number(result.away_goals);
+    if (!teams?.home || !teams?.away || !Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) continue;
+    if (!records[teams.home]) continue;
+    if (!records[teams.away]) continue;
+    for (const code of [teams.home, teams.away]) {
+      if (!appearanceAddedTeams.has(code)) {
+        records[code].appearances = Number(records[code].appearances || 0) + 1;
+        appearanceAddedTeams.add(code);
+      }
+    }
+    addWorldCupResultToRecord(records[teams.home], homeGoals, awayGoals);
+    addWorldCupResultToRecord(records[teams.away], awayGoals, homeGoals);
+    applied += 1;
+  }
+  if (applied > 0) {
+    enriched.asOf = `${enriched.asOf || "Historical snapshot"}; plus ${applied} recorded 2026 final result${applied === 1 ? "" : "s"} from local history.`;
+    enriched.asOfZh = `${enriched.asOfZh || "历史快照"}；已叠加本地结果库记录的 ${applied} 场 2026 已完赛结果。`;
+    enriched.appliedFinalResults = applied;
+  }
+  return enriched;
+}
+
 function rankBand(rank) {
   if (!rank) return "排名快照未覆盖，使用默认自动评分";
   if (rank <= 10) return "世界前十级别";
@@ -2029,11 +2134,12 @@ function rankBand(rank) {
   return "低排名队，模型降低基线强度";
 }
 
-function scheduleTeamRecord(team, fifaRankings) {
+function scheduleTeamRecord(team, fifaRankings, worldCupRecords) {
   const code = String(team?.code || "").toUpperCase();
   const name = TEAM_DISPLAY_NAMES_ZH[code] || team?.name || "TBD";
   const rating = teamRatingForScheduleTeam(team);
   const worldRanking = rankingForTeam(code, fifaRankings);
+  const worldCupRecord = worldCupRecordForTeam(code, worldCupRecords);
   return {
     name,
     englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
@@ -2053,6 +2159,7 @@ function scheduleTeamRecord(team, fifaRankings) {
       "公开盘口和 Polymarket 市场未匹配时不提供价格建议"
     ],
     worldRanking,
+    worldCupRecord,
     code
   };
 }
@@ -3657,6 +3764,15 @@ async function buildDashboard({
     ok: false,
     error: "data/fifa-rankings.json 缺失或未初始化"
   });
+  const worldCupRecords = await readOptionalJson(WORLD_CUP_RECORDS_PATH, {
+    source: "Wikipedia - National team appearances in the FIFA World Cup",
+    sourceUrl: "https://en.wikipedia.org/wiki/National_team_appearances_in_the_FIFA_World_Cup",
+    updatedAt: "",
+    asOf: "",
+    records: {},
+    ok: false,
+    error: "data/world-cup-records.json 缺失或未初始化"
+  });
   const researchFramework = await readOptionalJson(RESEARCH_FRAMEWORK_PATH, {
     ok: false,
     dimensions: [],
@@ -3676,9 +3792,10 @@ async function buildDashboard({
     fetchScheduleWindow(),
     fetchFinalResults()
   ]);
+  const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
   const polymarket = await fetchPolymarket(schedule);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, h2hOverrides);
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, effectiveWorldCupRecords));
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, h2hOverrides);
   attachMarketCharts(matches, polymarket);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
   if (!includeElite) {
@@ -3714,6 +3831,13 @@ async function buildDashboard({
         detail: `${Object.keys(fifaRankings.rankings || {}).length} 队排名快照 · 下一次官方更新 ${fifaRankings.nextUpdateAt || "待确认"}`
       },
       {
+        source: "世界杯历史战绩",
+        ok: effectiveWorldCupRecords.ok !== false,
+        lastUpdated: effectiveWorldCupRecords.updatedAt || "",
+        error: effectiveWorldCupRecords.error,
+        detail: `${Object.keys(effectiveWorldCupRecords.records || {}).length} 队世界杯正赛历史快照${effectiveWorldCupRecords.appliedFinalResults ? ` · 已叠加 ${effectiveWorldCupRecords.appliedFinalResults} 场本地完赛结果` : ""}`
+      },
+      {
         source: "动态情报快照",
         ok: context.meta?.ok !== false,
         lastUpdated: context.meta?.lastUpdated || "",
@@ -3742,6 +3866,15 @@ async function buildDashboard({
       updatedAt: fifaRankings.updatedAt,
       nextUpdateAt: fifaRankings.nextUpdateAt,
       count: Object.keys(fifaRankings.rankings || {}).length
+    },
+    worldCupRecords: {
+      source: effectiveWorldCupRecords.source,
+      sourceUrl: effectiveWorldCupRecords.sourceUrl,
+      updatedAt: effectiveWorldCupRecords.updatedAt,
+      asOf: effectiveWorldCupRecords.asOf,
+      asOfZh: effectiveWorldCupRecords.asOfZh,
+      appliedFinalResults: effectiveWorldCupRecords.appliedFinalResults || 0,
+      count: Object.keys(effectiveWorldCupRecords.records || {}).length
     },
     researchFramework,
     contextMeta: context.meta || {},

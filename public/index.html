@@ -806,6 +806,34 @@
         line-height: 1.45;
       }
 
+      .worldcup-record-stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 9px;
+      }
+
+      .worldcup-record-stat {
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid #edf1ee;
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .worldcup-record-stat span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .worldcup-record-stat strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
       .form-match-list {
         display: grid;
         gap: 6px;
@@ -1624,6 +1652,9 @@
         "天气和场地": "Weather and Venue",
         "天气": "Weather",
         "更新时间": "Updated",
+        "世界杯战绩": "World Cup Record",
+        "参赛次数": "Appearances",
+        "最好成绩": "Best finish",
         "AI 综合分析": "AI Analysis",
         "状态": "Status",
         "结论": "Summary",
@@ -1967,6 +1998,58 @@
         `;
       }
 
+      function worldCupRecordSummary(record) {
+        if (!record?.ok) {
+          return record?.error || (currentLang === "en" ? "World Cup finals record not available in the local snapshot." : "本地快照未覆盖该队世界杯正赛战绩。");
+        }
+        if ((record.matches || 0) === 0) {
+          return currentLang === "en"
+            ? `${record.bestFinish || "No finals appearances before 2026"}.`
+            : `${record.bestFinishZh || "2026 前无世界杯正赛参赛"}。`;
+        }
+        return currentLang === "en"
+          ? `${record.matches} World Cup finals matches: ${record.wins || 0}W ${record.draws || 0}D ${record.losses || 0}L, goals ${record.goalsFor || 0}-${record.goalsAgainst || 0}.`
+          : `世界杯正赛 ${record.matches} 场：${record.wins || 0}胜${record.draws || 0}平${record.losses || 0}负，进 ${record.goalsFor || 0} / 失 ${record.goalsAgainst || 0}。`;
+      }
+
+      function renderWorldCupRecordTeam(title, record) {
+        const sourceLabel = currentLang === "en" ? "Source" : "来源";
+        const asOfLabel = currentLang === "en" ? "As of" : "统计口径";
+        const note = currentLang === "en"
+          ? (record?.note || record?.notes || "")
+          : (record?.noteZh || record?.notesZh || record?.note || record?.notes || "");
+        const asOf = currentLang === "en" ? record?.asOf : record?.asOfZh || record?.asOf;
+        return `
+          <div class="form-team-card">
+            <h5>${escapeHtml(title)}</h5>
+            <div class="form-summary">${escapeHtml(worldCupRecordSummary(record))}</div>
+            <div class="worldcup-record-stats">
+              <div class="worldcup-record-stat"><span>${currentLang === "en" ? "Appearances" : "参赛次数"}</span><strong>${escapeHtml(record?.ok ? `${record.appearances ?? "-"}` : "-")}</strong></div>
+              <div class="worldcup-record-stat"><span>${currentLang === "en" ? "W/D/L" : "胜/平/负"}</span><strong>${escapeHtml(record?.ok ? `${record.wins || 0}/${record.draws || 0}/${record.losses || 0}` : "-")}</strong></div>
+              <div class="worldcup-record-stat"><span>${currentLang === "en" ? "Best" : "最好成绩"}</span><strong>${escapeHtml(record?.ok ? (currentLang === "en" ? record.bestFinish : record.bestFinishZh || record.bestFinish) : "-")}</strong></div>
+            </div>
+            <div class="form-meta">
+              ${record?.sourceUrl ? `<a href="${escapeHtml(record.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(record.source || sourceLabel)}</a>` : escapeHtml(record?.source || sourceLabel)}
+              ${record?.updatedAt ? ` · ${fmtTime(record.updatedAt)}` : ""}
+            </div>
+            ${asOf ? `<div class="form-meta">${escapeHtml(asOfLabel)}：${escapeHtml(asOf)}</div>` : ""}
+            ${note ? `<div class="form-meta">${escapeHtml(note)}</div>` : ""}
+          </div>
+        `;
+      }
+
+      function renderWorldCupRecords(match) {
+        return `
+          <section class="static-block wide">
+            <h4>世界杯战绩</h4>
+            <div class="form-grid">
+              ${renderWorldCupRecordTeam(homeName(match), match.homeTeam?.worldCupRecord)}
+              ${renderWorldCupRecordTeam(awayName(match), match.awayTeam?.worldCupRecord)}
+            </div>
+          </section>
+        `;
+      }
+
       function recentFormInline(match, side) {
         const records = match.recentFormRecords || match.context?.recentFormRecords || {};
         const record = records[side];
@@ -1985,6 +2068,7 @@
           <div class="static-grid">
             ${renderHeadToHead(match)}
             ${renderRecentForm(match)}
+            ${renderWorldCupRecords(match)}
             <section class="static-block">
               <h4>静态信息</h4>
               <ul class="info-list">
