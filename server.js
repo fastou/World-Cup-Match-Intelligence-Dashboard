@@ -1460,13 +1460,13 @@ async function fetchAiHumanReads(matches) {
   if (!config.apiKey) return new Map();
   const fallbackById = new Map(matches.map((match) => [match.id, match.humanMatchup?.aiRead]));
   const prompt = {
-    task: "为世界杯看板生成每场比赛的中文'人类对位复核'。只能基于给定的身高、GK/DF/MF/FW proxy、俱乐部分层和已有限制说明，不要编造身价、扑救率、伤停或首发。",
+    task: "为世界杯看板生成每场比赛的中文'阵容与比赛证据复核'。只能基于给定的身高、GK/DF/MF/FW 综合分、俱乐部分层、近期比赛证据和已有限制说明，不要编造身价、扑救率、伤停或首发。",
     output: "返回 JSON：{reads:[{matchId,title,summary,notes:[...],limits:[...]}]}",
     rules: [
       "不要写下注、买入、赚钱、梭哈等交易动作。",
-      "如果某项只是 proxy，必须说清楚是 proxy，不是官方能力评分。",
-      "summary 用一两句话说明这场从身体、门将、后防、中场、锋线角度最值得复核什么。",
-      "notes 给 2-4 条具体观察，例如高空球、定位球、中场控制、锋线转化、门将身高/经验。",
+      "不要使用 proxy 这个词；说综合分、阵容层级、近期比赛证据即可。",
+      "summary 用一两句话说明这场从身体、门将、后防、中场、锋线和真实战绩角度最值得复核什么。",
+      "notes 给 2-4 条具体观察，例如连续零封、场均失球、对强队失球、连续进球、高空球、定位球、中场控制。",
       "缺失身价时明确说身价未接入，不要猜身价。"
     ],
     matches: matches.map((match) => ({
@@ -1538,7 +1538,7 @@ async function attachAiPredictions(matches, { useOpenAi = true } = {}) {
     match.humanMatchup = match.humanMatchup || buildHumanMatchup(match);
     match.humanMatchup.aiRead = {
       source: "rule",
-      title: "人类对位复核",
+      title: "阵容与比赛证据复核",
       summary: match.humanMatchup.summary,
       notes: (match.humanMatchup.insights || []).slice(0, 4).map((item) => item.zh).filter(Boolean),
       limits: match.humanMatchup.limits || [],
@@ -1816,7 +1816,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     },
     context: mergedContext
   };
-  baseMatch.humanMatchup = buildHumanMatchup(baseMatch);
+  baseMatch.humanMatchup = buildHumanMatchup(baseMatch, fifaRankings);
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
   baseMatch.manualMarkets = autoBaselineManualMarkets(baseMatch, baseMatch.probabilities);
@@ -1858,7 +1858,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   };
 }
 
-function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles) {
+function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}) {
   const homeTeam = attachStaticProfiles(teams[match.home], match.home, worldCupRecords, squadProfiles);
   const awayTeam = attachStaticProfiles(teams[match.away], match.away, worldCupRecords, squadProfiles);
   const matchContext = contextForMatch(context, match.id);
@@ -1876,7 +1876,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
     probabilities,
     dynamicModel
   };
-  enriched.humanMatchup = buildHumanMatchup(enriched);
+  enriched.humanMatchup = buildHumanMatchup(enriched, fifaRankings);
   const withInitialRecommendations = {
     ...enriched,
     recommendations: []
@@ -2227,7 +2227,7 @@ function avgHeight(group) {
   return value === null ? 0 : value;
 }
 
-function proxyLineScore(group, weights = {}) {
+function lineStrengthScore(group, weights = {}) {
   if (!group || !group.players) return null;
   const height = avgHeight(group);
   const caps = avgCaps(group);
@@ -2254,11 +2254,133 @@ function advantageTeamName(match, side) {
   return "";
 }
 
-function matchupInsight({ key, label, labelEn, side, valueText, valueTextEn, zh, en, confidence = "medium" }) {
-  return { key, label, labelEn, side, valueText, valueTextEn, zh, en, confidence };
+function matchupInsight({ key, label, labelEn, side, valueText, valueTextEn, zh, en, evidence = [], evidenceEn = [], confidence = "medium" }) {
+  return { key, label, labelEn, side, valueText, valueTextEn, zh, en, evidence, evidenceEn, confidence };
 }
 
-function buildHumanMatchup(match) {
+function recentRecordForSide(match, side) {
+  const records = match.recentFormRecords || match.context?.recentFormRecords || {};
+  return records?.[side] || null;
+}
+
+function sideNameForResult(match, side) {
+  return side === "home" ? match.homeName : match.awayName;
+}
+
+function opponentRankFromName(name) {
+  const normalized = String(name || "").toLowerCase();
+  for (const [code, english] of Object.entries(TEAM_SEARCH_NAMES)) {
+    const zh = TEAM_DISPLAY_NAMES_ZH[code] || "";
+    if (
+      normalized === String(english).toLowerCase()
+      || normalized === String(zh).toLowerCase()
+      || normalized.includes(String(english).toLowerCase())
+      || normalized.includes(String(zh).toLowerCase())
+    ) {
+      return code;
+    }
+  }
+  return "";
+}
+
+function formEvidence(match, side, fifaRankings = {}) {
+  const record = recentRecordForSide(match, side);
+  const games = Array.isArray(record?.matches) ? record.matches.filter((item) => item && item.score) : [];
+  if (!games.length) {
+    return {
+      ok: false,
+      team: sideNameForResult(match, side),
+      summary: "最近战绩样本未同步，无法提供连续零封/失球证据。",
+      summaryEn: "Recent-results sample is unavailable, so clean-sheet and conceded-goal evidence is not available.",
+      defensive: "最近战绩样本未同步。",
+      defensiveEn: "Recent-results sample is unavailable.",
+      attacking: "最近战绩样本未同步。",
+      attackingEn: "Recent-results sample is unavailable.",
+      strongOpponent: "对强队表现待补充。",
+      strongOpponentEn: "Performance against strong opponents is pending."
+    };
+  }
+
+  let cleanSheets = 0;
+  let failedToScore = 0;
+  let goalsFor = 0;
+  let goalsAgainst = 0;
+  let scoredStreak = 0;
+  let concededStreak = 0;
+  const strongGames = [];
+
+  games.forEach((game, index) => {
+    const [gfRaw, gaRaw] = String(game.score || "").split("-").map((value) => Number(value.trim()));
+    if (!Number.isFinite(gfRaw) || !Number.isFinite(gaRaw)) return;
+    goalsFor += gfRaw;
+    goalsAgainst += gaRaw;
+    if (gaRaw === 0) cleanSheets += 1;
+    if (gfRaw === 0) failedToScore += 1;
+    if (index === scoredStreak && gfRaw > 0) scoredStreak += 1;
+    if (index === concededStreak && gaRaw > 0) concededStreak += 1;
+    const opponentCode = opponentRankFromName(game.opponent);
+    const rank = rankingForTeam(opponentCode, fifaRankings).rank;
+    if (rank && rank <= 30) {
+      strongGames.push({
+        opponent: game.opponent,
+        rank,
+        score: game.score,
+        goalsAgainst: gaRaw,
+        goalsFor: gfRaw,
+        date: game.date
+      });
+    }
+  });
+
+  const count = games.length;
+  const gaAvg = count ? roundTo(goalsAgainst / count, 2) : null;
+  const gfAvg = count ? roundTo(goalsFor / count, 2) : null;
+  const lowConcedeStrong = strongGames.filter((game) => game.goalsAgainst <= 1).length;
+  const strongText = strongGames.length
+    ? `对 FIFA 前30或同级可识别强队 ${strongGames.length} 场，其中 ${lowConcedeStrong} 场失球≤1。`
+    : "最近样本中未识别到 FIFA 前30强队对手。";
+  const strongTextEn = strongGames.length
+    ? `${strongGames.length} recent game(s) against identifiable top-30-level opponents; ${lowConcedeStrong} allowed one goal or fewer.`
+    : "No identifiable top-30 opponent appears in the recent sample.";
+
+  const summaryCore = `近 ${count} 场 ${goalsFor}-${goalsAgainst}，场均进 ${gfAvg} / 失 ${gaAvg}，零封 ${cleanSheets} 场，被零封 ${failedToScore} 场`;
+  const summaryCoreEn = `last ${count}: goals ${goalsFor}-${goalsAgainst}, ${gfAvg} scored and ${gaAvg} conceded per game, ${cleanSheets} clean sheet(s), ${failedToScore} scoreless game(s)`;
+  return {
+    ok: true,
+    team: sideNameForResult(match, side),
+    matches: count,
+    cleanSheets,
+    failedToScore,
+    goalsFor,
+    goalsAgainst,
+    gfAvg,
+    gaAvg,
+    scoredStreak,
+    concededStreak,
+    strongGames,
+    summaryCore,
+    summaryCoreEn,
+    summary: `${summaryCore}。`,
+    summaryEn: `${summaryCoreEn}.`,
+    defensive: `近 ${count} 场零封 ${cleanSheets} 场，场均失 ${gaAvg} 球${concededStreak ? `，最近连续 ${concededStreak} 场有失球` : ""}。${strongText}`,
+    defensiveEn: `Last ${count}: ${cleanSheets} clean sheet(s), ${gaAvg} conceded per game${concededStreak ? `, conceded in ${concededStreak} straight` : ""}. ${strongTextEn}`,
+    attacking: `近 ${count} 场场均进 ${gfAvg} 球，连续 ${scoredStreak} 场有进球，被零封 ${failedToScore} 场。`,
+    attackingEn: `Last ${count}: ${gfAvg} scored per game, scored in ${scoredStreak} straight, ${failedToScore} scoreless game(s).`,
+    strongOpponent: strongText,
+    strongOpponentEn: strongTextEn
+  };
+}
+
+function evidenceForSide(homeEvidence, awayEvidence, side, kind) {
+  const selected = side === "away" ? awayEvidence : homeEvidence;
+  const other = side === "away" ? homeEvidence : awayEvidence;
+  if (kind === "attack") return [selected.attacking, other.defensive].filter(Boolean);
+  if (kind === "defence" || kind === "goalkeeper") return [selected.defensive, other.attacking].filter(Boolean);
+  if (kind === "midfield") return [selected.summary, selected.strongOpponent].filter(Boolean);
+  return [selected.summary, other.summary].filter(Boolean);
+}
+
+function buildHumanMatchup(match, fifaRankings = {}) {
   const homeProfile = match.homeTeam?.squadProfile;
   const awayProfile = match.awayTeam?.squadProfile;
   if (!homeProfile?.ok || !awayProfile?.ok) {
@@ -2268,15 +2390,17 @@ function buildHumanMatchup(match) {
       updatedAt: new Date().toISOString(),
       source: homeProfile?.source || awayProfile?.source || "World Cup 2026 Team Stats",
       sourceUrl: homeProfile?.sourceUrl || awayProfile?.sourceUrl || "",
-      summary: "阵容身高/分线 profile 缺失，暂不做身体和分线对位判断。",
+      summary: "阵容身高/分线数据缺失，暂不做身体和分线对位判断。",
       summaryEn: "Squad physical and line-profile data is missing; no matchup read is generated.",
       insights: [],
-      limits: ["身价、扑救率、球员评分未接入；当前只使用公开阵容 proxy。"]
+      limits: ["身价、扑救率、球员评分未接入；当前只使用公开阵容数据和近期比赛证据。"]
     };
   }
 
   const h = homeProfile.groups || {};
   const a = awayProfile.groups || {};
+  const homeEvidence = formEvidence(match, "home", fifaRankings);
+  const awayEvidence = formEvidence(match, "away", fifaRankings);
   const insights = [];
   const overallHeight = lineupAdvantage(avgHeight(h.all), avgHeight(a.all), 2);
   if (overallHeight.side !== "none") {
@@ -2293,80 +2417,90 @@ function buildHumanMatchup(match) {
         : `${sideName} 平均身高高出约 ${overallHeight.diff}cm，定位球、二点球和高空防守要重点看。`,
       en: overallHeight.side === "even"
         ? "Overall average height is close; physical size is not a clear one-sided edge."
-        : `${sideName} are about ${overallHeight.diff}cm taller on average; set pieces, second balls and aerial defending matter more.`
+        : `${sideName} are about ${overallHeight.diff}cm taller on average; set pieces, second balls and aerial defending matter more.`,
+      evidence: [homeEvidence.summary, awayEvidence.summary].filter(Boolean),
+      evidenceEn: [homeEvidence.summaryEn, awayEvidence.summaryEn].filter(Boolean)
     }));
   }
 
-  const gkScoreHome = proxyLineScore(h.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
-  const gkScoreAway = proxyLineScore(a.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
+  const gkScoreHome = lineStrengthScore(h.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
+  const gkScoreAway = lineStrengthScore(a.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
   const gkAdv = lineupAdvantage(gkScoreHome, gkScoreAway, 8);
   insights.push(matchupInsight({
-    key: "goalkeeper-proxy",
-    label: "门将 proxy",
-    labelEn: "Goalkeeper proxy",
+    key: "goalkeeper-analysis",
+    label: "门将分析",
+    labelEn: "Goalkeeper read",
     side: gkAdv.side,
     valueText: `${gkScoreHome ?? "-"} vs ${gkScoreAway ?? "-"}`,
     valueTextEn: `${gkScoreHome ?? "-"} vs ${gkScoreAway ?? "-"}`,
     zh: gkAdv.side === "even"
-      ? "门将组 proxy 接近；不能仅凭门将维度偏向一边。"
-      : `${advantageTeamName(match, gkAdv.side)} 门将组在身高、出场经验或俱乐部分层 proxy 上更占优。`,
+      ? "门将组综合分接近；需要结合近期零封和失球证据再判断。"
+      : `${advantageTeamName(match, gkAdv.side)} 门将组在身高、国家队经验和俱乐部层级上更占优。`,
     en: gkAdv.side === "even"
-      ? "Goalkeeper proxy is close; do not lean on this dimension alone."
-      : `${advantageTeamName(match, gkAdv.side)} have the stronger goalkeeper proxy from height, caps or club tier.`
+      ? "Goalkeeper read is close; use clean-sheet and conceded-goal evidence before leaning either way."
+      : `${advantageTeamName(match, gkAdv.side)} rate stronger by goalkeeper height, international experience and club level.`,
+    evidence: evidenceForSide(homeEvidence, awayEvidence, gkAdv.side === "away" ? "away" : "home", "goalkeeper"),
+    evidenceEn: evidenceForSide(homeEvidence, awayEvidence, gkAdv.side === "away" ? "away" : "home", "goalkeeper").map((_, index) => (gkAdv.side === "away" ? [awayEvidence.defensiveEn, homeEvidence.attackingEn] : [homeEvidence.defensiveEn, awayEvidence.attackingEn])[index]).filter(Boolean)
   }));
 
-  const dfScoreHome = proxyLineScore(h.DF, { height: 0.25, caps: 0.25, tier: 0.5 });
-  const dfScoreAway = proxyLineScore(a.DF, { height: 0.25, caps: 0.25, tier: 0.5 });
+  const dfScoreHome = lineStrengthScore(h.DF, { height: 0.25, caps: 0.25, tier: 0.5 });
+  const dfScoreAway = lineStrengthScore(a.DF, { height: 0.25, caps: 0.25, tier: 0.5 });
   const dfAdv = lineupAdvantage(dfScoreHome, dfScoreAway, 10);
   insights.push(matchupInsight({
-    key: "defence-proxy",
-    label: "后防 proxy",
-    labelEn: "Defensive line proxy",
+    key: "defence-analysis",
+    label: "后防分析",
+    labelEn: "Defensive read",
     side: dfAdv.side,
     valueText: `${dfScoreHome ?? "-"} vs ${dfScoreAway ?? "-"}`,
     valueTextEn: `${dfScoreHome ?? "-"} vs ${dfScoreAway ?? "-"}`,
     zh: dfAdv.side === "even"
-      ? "后防线 proxy 接近，更多要看临场站位、速度和个人失误。"
-      : `${advantageTeamName(match, dfAdv.side)} 后防线俱乐部分层/经验/身高 proxy 更强，理论上更能承受持续压迫。`,
+      ? "后防线综合分接近，更多要看临场站位、速度和个人失误。"
+      : `${advantageTeamName(match, dfAdv.side)} 后防线俱乐部层级、经验和身高更强，理论上更能承受持续压迫。`,
     en: dfAdv.side === "even"
-      ? "Defensive-line proxy is close; live shape, pace and errors matter more."
-      : `${advantageTeamName(match, dfAdv.side)} rate stronger on defensive club-tier, experience and height proxy.`
+      ? "Defensive read is close; live shape, pace and errors matter more."
+      : `${advantageTeamName(match, dfAdv.side)} rate stronger on defensive club level, experience and height.`,
+    evidence: evidenceForSide(homeEvidence, awayEvidence, dfAdv.side === "away" ? "away" : "home", "defence"),
+    evidenceEn: (dfAdv.side === "away" ? [awayEvidence.defensiveEn, homeEvidence.attackingEn] : [homeEvidence.defensiveEn, awayEvidence.attackingEn]).filter(Boolean)
   }));
 
-  const mfScoreHome = proxyLineScore(h.MF, { height: 0.12, caps: 0.28, tier: 0.6 });
-  const mfScoreAway = proxyLineScore(a.MF, { height: 0.12, caps: 0.28, tier: 0.6 });
+  const mfScoreHome = lineStrengthScore(h.MF, { height: 0.12, caps: 0.28, tier: 0.6 });
+  const mfScoreAway = lineStrengthScore(a.MF, { height: 0.12, caps: 0.28, tier: 0.6 });
   const mfAdv = lineupAdvantage(mfScoreHome, mfScoreAway, 10);
   insights.push(matchupInsight({
-    key: "midfield-proxy",
-    label: "中场 proxy",
-    labelEn: "Midfield proxy",
+    key: "midfield-analysis",
+    label: "中场分析",
+    labelEn: "Midfield read",
     side: mfAdv.side,
     valueText: `${mfScoreHome ?? "-"} vs ${mfScoreAway ?? "-"}`,
     valueTextEn: `${mfScoreHome ?? "-"} vs ${mfScoreAway ?? "-"}`,
     zh: mfAdv.side === "even"
-      ? "中场 proxy 接近；控球和推进优势需要结合首发与临场压迫强度再判断。"
-      : `${advantageTeamName(match, mfAdv.side)} 中场俱乐部分层/国家队经验 proxy 更强，控球、推进和反抢稳定性可能更好。`,
+      ? "中场综合分接近；控球和推进优势需要结合首发与临场压迫强度再判断。"
+      : `${advantageTeamName(match, mfAdv.side)} 中场俱乐部层级和国家队经验更强，控球、推进和反抢稳定性可能更好。`,
     en: mfAdv.side === "even"
-      ? "Midfield proxy is close; possession and progression should be checked after lineups."
-      : `${advantageTeamName(match, mfAdv.side)} have the stronger midfield proxy for club tier and international experience.`
+      ? "Midfield read is close; possession and progression should be checked after lineups."
+      : `${advantageTeamName(match, mfAdv.side)} have stronger midfield club level and international experience.`,
+    evidence: evidenceForSide(homeEvidence, awayEvidence, mfAdv.side === "away" ? "away" : "home", "midfield"),
+    evidenceEn: (mfAdv.side === "away" ? [awayEvidence.summaryEn, awayEvidence.strongOpponentEn] : [homeEvidence.summaryEn, homeEvidence.strongOpponentEn]).filter(Boolean)
   }));
 
-  const fwScoreHome = proxyLineScore(h.FW, { height: 0.15, caps: 0.25, tier: 0.6 });
-  const fwScoreAway = proxyLineScore(a.FW, { height: 0.15, caps: 0.25, tier: 0.6 });
+  const fwScoreHome = lineStrengthScore(h.FW, { height: 0.15, caps: 0.25, tier: 0.6 });
+  const fwScoreAway = lineStrengthScore(a.FW, { height: 0.15, caps: 0.25, tier: 0.6 });
   const fwAdv = lineupAdvantage(fwScoreHome, fwScoreAway, 10);
   insights.push(matchupInsight({
-    key: "attack-proxy",
-    label: "锋线 proxy",
-    labelEn: "Attack proxy",
+    key: "attack-analysis",
+    label: "锋线分析",
+    labelEn: "Attack read",
     side: fwAdv.side,
     valueText: `${fwScoreHome ?? "-"} vs ${fwScoreAway ?? "-"}`,
     valueTextEn: `${fwScoreHome ?? "-"} vs ${fwScoreAway ?? "-"}`,
     zh: fwAdv.side === "even"
-      ? "锋线 proxy 接近；大小球要更多看节奏、双方防线和临场阵型。"
-      : `${advantageTeamName(match, fwAdv.side)} 锋线俱乐部分层/经验 proxy 更强，转化机会的理论质量更好。`,
+      ? "锋线综合分接近；大小球要更多看节奏、双方防线和临场阵型。"
+      : `${advantageTeamName(match, fwAdv.side)} 锋线俱乐部层级和经验更强，转化机会的理论质量更好。`,
     en: fwAdv.side === "even"
-      ? "Attack proxy is close; totals need pace, defensive line and lineup context."
-      : `${advantageTeamName(match, fwAdv.side)} have a stronger attack proxy for club tier and experience.`
+      ? "Attack read is close; totals need pace, defensive line and lineup context."
+      : `${advantageTeamName(match, fwAdv.side)} have stronger attacking club level and experience.`,
+    evidence: evidenceForSide(homeEvidence, awayEvidence, fwAdv.side === "away" ? "away" : "home", "attack"),
+    evidenceEn: (fwAdv.side === "away" ? [awayEvidence.attackingEn, homeEvidence.defensiveEn] : [homeEvidence.attackingEn, awayEvidence.defensiveEn]).filter(Boolean)
   }));
 
   const topTierHome = topTierShare(h.all);
@@ -2380,23 +2514,27 @@ function buildHumanMatchup(match) {
     valueText: `${roundTo(topTierHome * 100, 1)}% vs ${roundTo(topTierAway * 100, 1)}%`,
     valueTextEn: `${roundTo(topTierHome * 100, 1)}% vs ${roundTo(topTierAway * 100, 1)}%`,
     zh: tierAdv.side === "even"
-      ? "高水平俱乐部球员占比接近；不能用阵容身价 proxy 拉开明显差距。"
-      : `${advantageTeamName(match, tierAdv.side)} Tier 1/2 俱乐部球员占比更高，可作为身价不可用时的阵容质量 proxy。`,
+      ? "高水平俱乐部球员占比接近；阵容层级没有拉开明显差距。"
+      : `${advantageTeamName(match, tierAdv.side)} Tier 1/2 俱乐部球员占比更高，阵容层级更厚。`,
     en: tierAdv.side === "even"
-      ? "Top club-tier share is close; squad-value proxy does not separate the teams much."
-      : `${advantageTeamName(match, tierAdv.side)} have a higher Tier 1/2 club share, a proxy while market value is unavailable.`
+      ? "Top club-tier share is close; squad level does not separate the teams much."
+      : `${advantageTeamName(match, tierAdv.side)} have a higher Tier 1/2 club share and better squad depth.`,
+    evidence: [homeEvidence.summary, awayEvidence.summary].filter(Boolean),
+    evidenceEn: [homeEvidence.summaryEn, awayEvidence.summaryEn].filter(Boolean)
   }));
 
   const summaryInsights = insights
     .filter((item) => item.side && item.side !== "even" && item.side !== "none")
     .slice(0, 3)
     .map((item) => `${item.label}偏${advantageTeamName(match, item.side)}`);
+  const homeSummaryText = homeEvidence.ok ? `${homeEvidence.team}：${homeEvidence.summaryCore}` : `${homeEvidence.team}：最近战绩待补`;
+  const awaySummaryText = awayEvidence.ok ? `${awayEvidence.team}：${awayEvidence.summaryCore}` : `${awayEvidence.team}：最近战绩待补`;
   const summary = summaryInsights.length
-    ? `人类复核重点：${summaryInsights.join("，")}。这些是阵容 proxy，不替代首发、伤停和真实比赛状态。`
-    : "人类复核重点：身体、门将、后防、中场、锋线 proxy 没有明显单边碾压，临场阵容和节奏更关键。";
+    ? `分析重点：${summaryInsights.join("，")}。真实比赛证据：${homeSummaryText}；${awaySummaryText}。`
+    : `分析重点：身体、门将、后防、中场、锋线没有明显单边碾压，临场阵容和节奏更关键。真实比赛证据：${homeSummaryText}；${awaySummaryText}。`;
   const summaryEn = summaryInsights.length
-    ? `Human-check focus: ${summaryInsights.map((text) => text.replace("偏", " leans ")).join(", ")}. These are squad proxies, not replacements for lineups, injuries or live state.`
-    : "Human-check focus: physical, GK, defensive, midfield and attacking proxies do not show a clear one-sided gap; lineups and tempo matter more.";
+    ? `Human-check focus: ${summaryInsights.map((text) => text.replace("偏", " leans ")).join(", ")}. Match evidence: ${homeEvidence.team} ${homeEvidence.summaryEn}; ${awayEvidence.team} ${awayEvidence.summaryEn}.`
+    : `Human-check focus: physical, GK, defensive, midfield and attacking reads do not show a clear one-sided gap; lineups and tempo matter more. Evidence: ${homeEvidence.summaryEn}; ${awayEvidence.summaryEn}.`;
 
   return {
     ok: true,
@@ -2410,15 +2548,19 @@ function buildHumanMatchup(match) {
     methodology: homeProfile.methodology,
     methodologyZh: homeProfile.methodologyZh,
     insights,
+    formEvidence: {
+      home: homeEvidence,
+      away: awayEvidence
+    },
     limits: [
-      "身价字段当前未接入可靠可抓取源；用 Tier 1/2 俱乐部占比作临时 proxy。",
-      "门将强弱暂用身高、国家队出场和俱乐部分层 proxy；不等同于扑救率或真实状态。",
-      "这些静态对位不会自动覆盖首发、伤停、天气和盘口曲线。"
+      "身价字段当前未接入可靠可抓取源；先用 Tier 1/2 俱乐部占比描述阵容层级。",
+      "门将分析使用身高、国家队出场、俱乐部层级和近期失球/零封证据；不等同于扑救率。",
+      "这些静态分析不会自动覆盖首发、伤停、天气和盘口曲线。"
     ],
     limitsEn: [
-      "Market value is not connected to a reliably fetchable source yet; Tier 1/2 club share is used as a proxy.",
-      "Goalkeeper strength uses height, international caps and club tier proxy; it is not save percentage or current form.",
-      "These static matchups do not override lineups, injuries, weather or market curves."
+      "Market value is not connected to a reliably fetchable source yet; Tier 1/2 club share describes squad level.",
+      "Goalkeeper read uses height, international caps, club level and recent conceded/clean-sheet evidence; it is not save percentage.",
+      "These static reads do not override lineups, injuries, weather or market curves."
     ]
   };
 }
@@ -4171,7 +4313,7 @@ async function buildDashboard({
   ]);
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
   const polymarket = await fetchPolymarket(schedule);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, effectiveWorldCupRecords, squadProfiles));
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, effectiveWorldCupRecords, squadProfiles, fifaRankings));
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides);
   attachMarketCharts(matches, polymarket);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
@@ -4215,11 +4357,11 @@ async function buildDashboard({
         detail: `${Object.keys(effectiveWorldCupRecords.records || {}).length} 队世界杯正赛历史快照${effectiveWorldCupRecords.appliedFinalResults ? ` · 已叠加 ${effectiveWorldCupRecords.appliedFinalResults} 场本地完赛结果` : ""}`
       },
       {
-        source: "阵容身体与分线 profile",
+        source: "阵容与比赛证据",
         ok: squadProfiles.ok !== false,
         lastUpdated: squadProfiles.updatedAt || "",
         error: squadProfiles.error,
-        detail: `${Object.keys(squadProfiles.teams || {}).length} 队 · 身高/年龄/出场/俱乐部分层 proxy`
+        detail: `${Object.keys(squadProfiles.teams || {}).length} 队 · 身高/年龄/出场/俱乐部分层/近期战绩证据`
       },
       {
         source: "动态情报快照",

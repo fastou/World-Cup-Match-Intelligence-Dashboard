@@ -293,15 +293,15 @@ function buildProfile(code, countryId, players) {
     sourceUrl: TEAM_STATS_SOURCE_URL,
     rawSquadsUrl: SQUAD_SOURCE_URL,
     updatedAt: new Date().toISOString(),
-    methodology: "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-    methodologyZh: "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+    methodology: "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+    methodologyZh: "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
     groups,
     marketValue: {
       status: "unavailable",
       source: "Transfermarkt",
       sourceUrl: TRANSFERMARKT_WORLD_CUP_URL,
       note: "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-      noteZh: "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+      noteZh: "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
     }
   };
 }
@@ -334,8 +334,8 @@ async function main() {
     updatedAt: new Date().toISOString(),
     teamCount: Object.keys(teams).length,
     missing,
-    methodology: "Public squad dataset with player position, age, height, caps and club. Club tier counts are used as an auditable proxy for squad quality by line; market value is left unavailable when a reliable public source cannot be fetched.",
-    methodologyZh: "公开阵容数据包含球员位置、年龄、身高、出场和俱乐部；按位置统计身高、经验和俱乐部分层，作为可审计的阵容质量 proxy。可靠身价源不可抓取时，身价字段保持不可用。",
+    methodology: "Public squad dataset with player position, age, height, caps and club. Club tier counts describe squad quality by line; market value is left unavailable when a reliable public source cannot be fetched.",
+    methodologyZh: "公开阵容数据包含球员位置、年龄、身高、出场和俱乐部；按位置统计身高、经验和俱乐部分层，用于描述各条线阵容质量。可靠身价源不可抓取时，身价字段保持不可用。",
     teams
   };
 

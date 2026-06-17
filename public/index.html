@@ -1739,7 +1739,7 @@
         "世界杯战绩": "World Cup Record",
         "参赛次数": "Appearances",
         "最好成绩": "Best finish",
-        "身体与阵容对位": "Physical and Squad Matchup",
+        "阵容与比赛证据分析": "Squad and Match Evidence",
         "分线 profile": "Line Profiles",
         "数据限制": "Data Limits",
         "AI 综合分析": "AI Analysis",
@@ -2171,10 +2171,10 @@
           : (currentLang === "en" ? matchup.summaryEn || "Squad profile unavailable." : matchup.summary || "阵容 profile 未同步。");
         return `
           <section class="static-block wide">
-            <h4>身体与阵容对位</h4>
+            <h4>阵容与比赛证据分析</h4>
             <div class="form-summary">${escapeHtml(statusText || "")}</div>
             ${aiRead.summary ? `<div class="form-team-card" style="margin-top:10px">
-              <h5>${escapeHtml(currentLang === "en" ? "AI human read" : aiRead.title || "AI 人类复核")}</h5>
+              <h5>${escapeHtml(currentLang === "en" ? "AI evidence read" : aiRead.title || "AI 证据复核")}</h5>
               <div class="form-summary">${escapeHtml(currentLang === "en" ? aiRead.summary : aiRead.summary)}</div>
               ${Array.isArray(aiRead.notes) && aiRead.notes.length ? `<div class="form-match-list">${aiRead.notes.map((note) => `<div class="form-meta">• ${escapeHtml(note)}</div>`).join("")}</div>` : ""}
               <div class="form-meta">${escapeHtml(aiRead.source === "openai" ? "OpenAI" : currentLang === "en" ? "Rule fallback" : "规则 fallback")} · ${fmtTime(aiRead.updatedAt)}</div>
@@ -2187,6 +2187,11 @@
                     <span>${escapeHtml(currentLang === "en" ? item.valueTextEn || item.valueText || "" : item.valueText || "")}</span>
                   </div>
                   <div class="form-summary">${escapeHtml(currentLang === "en" ? item.en || item.zh : item.zh || item.en)}</div>
+                  ${Array.isArray(currentLang === "en" ? item.evidenceEn : item.evidence) && (currentLang === "en" ? item.evidenceEn : item.evidence).length ? `
+                    <div class="form-match-list">
+                      ${(currentLang === "en" ? item.evidenceEn : item.evidence).slice(0, 3).map((evidence) => `<div class="form-meta">${escapeHtml(currentLang === "en" ? "Evidence" : "证据")}：${escapeHtml(evidence)}</div>`).join("")}
+                    </div>
+                  ` : ""}
                 </div>
               `).join("")}
             </div>

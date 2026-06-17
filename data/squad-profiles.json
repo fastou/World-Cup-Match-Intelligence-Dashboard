@@ -3,11 +3,11 @@
   "source": "World Cup 2026 Team Stats: Age, Height & Club Tiers by Country",
   "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
   "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-  "updatedAt": "2026-06-17T12:28:13.348Z",
+  "updatedAt": "2026-06-17T12:47:04.869Z",
   "teamCount": 48,
   "missing": [],
-  "methodology": "Public squad dataset with player position, age, height, caps and club. Club tier counts are used as an auditable proxy for squad quality by line; market value is left unavailable when a reliable public source cannot be fetched.",
-  "methodologyZh": "公开阵容数据包含球员位置、年龄、身高、出场和俱乐部；按位置统计身高、经验和俱乐部分层，作为可审计的阵容质量 proxy。可靠身价源不可抓取时，身价字段保持不可用。",
+  "methodology": "Public squad dataset with player position, age, height, caps and club. Club tier counts describe squad quality by line; market value is left unavailable when a reliable public source cannot be fetched.",
+  "methodologyZh": "公开阵容数据包含球员位置、年龄、身高、出场和俱乐部；按位置统计身高、经验和俱乐部分层，用于描述各条线阵容质量。可靠身价源不可抓取时，身价字段保持不可用。",
   "teams": {
     "MEX": {
       "ok": true,
@@ -19,9 +19,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.329Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.852Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -308,7 +308,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "RSA": {
@@ -321,9 +321,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.338Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.859Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -610,7 +610,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "KOR": {
@@ -623,9 +623,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.338Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.859Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -912,7 +912,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "CZE": {
@@ -925,9 +925,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.338Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.859Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -1214,7 +1214,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "CAN": {
@@ -1227,9 +1227,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.338Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.860Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -1516,7 +1516,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "BIH": {
@@ -1529,9 +1529,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.339Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.860Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -1818,7 +1818,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "USA": {
@@ -1831,9 +1831,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.339Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.860Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -2120,7 +2120,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "PAR": {
@@ -2133,9 +2133,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.339Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.860Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -2422,7 +2422,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "QAT": {
@@ -2435,9 +2435,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.339Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.860Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -2724,7 +2724,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "SUI": {
@@ -2737,9 +2737,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.339Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.860Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -3026,7 +3026,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "BRA": {
@@ -3039,9 +3039,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.341Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -3328,7 +3328,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "MAR": {
@@ -3341,9 +3341,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.341Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -3630,7 +3630,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "HAI": {
@@ -3643,9 +3643,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -3932,7 +3932,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "SCO": {
@@ -3945,9 +3945,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -4234,7 +4234,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "AUS": {
@@ -4247,9 +4247,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -4536,7 +4536,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "TUR": {
@@ -4549,9 +4549,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -4838,7 +4838,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "GER": {
@@ -4851,9 +4851,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -5140,7 +5140,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "CUW": {
@@ -5153,9 +5153,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.863Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -5442,7 +5442,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "NED": {
@@ -5455,9 +5455,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -5744,7 +5744,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "JPN": {
@@ -5757,9 +5757,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.342Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -6030,7 +6030,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "CIV": {
@@ -6043,9 +6043,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -6332,7 +6332,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "ECU": {
@@ -6345,9 +6345,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -6634,7 +6634,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "SWE": {
@@ -6647,9 +6647,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -6936,7 +6936,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "TUN": {
@@ -6949,9 +6949,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -7238,7 +7238,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "ESP": {
@@ -7251,9 +7251,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -7540,7 +7540,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "CPV": {
@@ -7553,9 +7553,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.864Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -7842,7 +7842,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "BEL": {
@@ -7855,9 +7855,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.865Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -8144,7 +8144,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "EGY": {
@@ -8157,9 +8157,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.343Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.865Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -8454,7 +8454,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "KSA": {
@@ -8467,9 +8467,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.346Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.865Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -8756,7 +8756,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "URU": {
@@ -8769,9 +8769,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.346Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.867Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -9058,7 +9058,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "IRN": {
@@ -9071,9 +9071,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.346Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.867Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -9360,7 +9360,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "NZL": {
@@ -9373,9 +9373,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.346Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.867Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -9662,7 +9662,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "FRA": {
@@ -9675,9 +9675,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.346Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.867Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -9964,7 +9964,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "SEN": {
@@ -9977,9 +9977,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.346Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -10266,7 +10266,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "IRQ": {
@@ -10279,9 +10279,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -10568,7 +10568,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "NOR": {
@@ -10581,9 +10581,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -10870,7 +10870,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "ARG": {
@@ -10883,9 +10883,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 25,
@@ -11172,7 +11172,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "ALG": {
@@ -11185,9 +11185,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -11474,7 +11474,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "AUT": {
@@ -11487,9 +11487,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -11768,7 +11768,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "JOR": {
@@ -11781,9 +11781,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -12070,7 +12070,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "POR": {
@@ -12083,9 +12083,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -12372,7 +12372,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "COD": {
@@ -12385,9 +12385,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -12674,7 +12674,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "CRO": {
@@ -12687,9 +12687,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.868Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -12976,7 +12976,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "ENG": {
@@ -12989,9 +12989,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.347Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.869Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -13278,7 +13278,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "GHA": {
@@ -13291,9 +13291,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.348Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.869Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -13580,7 +13580,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "PAN": {
@@ -13593,9 +13593,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.348Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.869Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -13874,7 +13874,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "COL": {
@@ -13887,9 +13887,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.348Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.869Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -14176,7 +14176,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     },
     "UZB": {
@@ -14189,9 +14189,9 @@
       "source": "World Cup 2026 Team Stats / squad profile",
       "sourceUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
       "rawSquadsUrl": "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
-      "updatedAt": "2026-06-17T12:28:13.348Z",
-      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is a proxy based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
-      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间做 proxy。Transfermarkt 不可访问时不推断身价。",
+      "updatedAt": "2026-06-17T12:47:04.869Z",
+      "methodology": "Player position, age, height, caps and club are pulled from a public squad dataset. Club tier is based on UEFA five-year club coefficient bands used by the source page. Market value is not inferred when Transfermarkt is unreachable.",
+      "methodologyZh": "球员位置、年龄、身高、国家队出场和俱乐部来自公开阵容数据；俱乐部分层按源页面采用的 UEFA 五年俱乐部积分区间。Transfermarkt 不可访问时不推断身价。",
       "groups": {
         "all": {
           "players": 26,
@@ -14478,7 +14478,7 @@
         "source": "Transfermarkt",
         "sourceUrl": "https://www.transfermarkt.com/world-cup/teilnehmer/pokalwettbewerb/FIWC",
         "note": "Transfermarkt team market value page is protected by human verification from this environment; value data is not fabricated.",
-        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层 proxy 辅助判断。"
+        "noteZh": "当前环境访问 Transfermarkt 球队身价页会触发人机验证，因此不伪造身价；暂用俱乐部分层辅助判断阵容层级。"
       }
     }
   }
