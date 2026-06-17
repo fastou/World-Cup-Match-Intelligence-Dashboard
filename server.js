@@ -11,6 +11,7 @@ const DATA_PATH = path.join(ROOT, "data", "worldcup-dashboard.json");
 const FIFA_RANKINGS_PATH = path.join(ROOT, "data", "fifa-rankings.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
+const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
 const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
@@ -353,6 +354,13 @@ async function readOptionalJson(filePath, fallback) {
     if (error.code === "ENOENT") return fallback;
     throw error;
   }
+}
+
+async function writeJsonAtomic(filePath, payload) {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2));
+  await fs.rename(tmpPath, filePath);
 }
 
 async function readOptionalText(filePath) {
@@ -3547,6 +3555,31 @@ function scheduleBackgroundDashboardRefresh() {
   });
 }
 
+function scheduleBackgroundLightRefresh() {
+  if (backgroundRefreshPromise) return;
+  backgroundRefreshPromise = buildDashboard({
+    force: true,
+    recordHistory: false,
+    includeElite: false,
+    includeOpenAi: false,
+    light: true,
+    background: true
+  }).catch((error) => {
+    console.error(`Background light dashboard refresh failed: ${error.message}`);
+  }).finally(() => {
+    backgroundRefreshPromise = null;
+  });
+}
+
+async function getPersistedLightCache() {
+  if (lightDashboardCache) return lightDashboardCache;
+  const cached = await readOptionalJson(LIVE_CACHE_PATH, null);
+  if (!cached?.matches?.length) return null;
+  lightDashboardCache = cached;
+  lightDashboardCacheAt = Date.parse(cached.meta?.generatedAt || "") || Date.now();
+  return lightDashboardCache;
+}
+
 function mergeCachedEliteSignals(matches, polymarket, cachedPayload) {
   if (!cachedPayload?.matches?.length) return null;
   const cachedMatches = new Map((cachedPayload.matches || []).map((match) => [match.id, match]));
@@ -3721,6 +3754,9 @@ async function buildDashboard({
   if (light) {
     lightDashboardCache = payload;
     lightDashboardCacheAt = Date.now();
+    writeJsonAtomic(LIVE_CACHE_PATH, payload).catch((error) => {
+      console.error(`Failed to persist live dashboard cache: ${error.message}`);
+    });
     if (!background && (!dashboardCache || Date.now() - dashboardCacheAt >= CACHE_TTL_MS)) {
       scheduleBackgroundDashboardRefresh();
     }
@@ -3801,6 +3837,24 @@ const server = http.createServer(async (req, res) => {
       const force = url.searchParams.get("force") === "1";
       const light = url.searchParams.get("light") === "1";
       const recordHistory = url.searchParams.get("skipHistory") !== "1";
+      if (light) {
+        const cached = await getPersistedLightCache();
+        if (cached) {
+          const generatedAt = Date.parse(cached.meta?.generatedAt || "") || 0;
+          const staleMs = Date.now() - generatedAt;
+          if (force || staleMs > LIGHT_CACHE_TTL_MS) scheduleBackgroundLightRefresh();
+          jsonResponse(res, 200, {
+            ...cached,
+            meta: {
+              ...(cached.meta || {}),
+              servedFromCache: true,
+              backgroundRefresh: Boolean(backgroundRefreshPromise),
+              cacheAgeSeconds: generatedAt ? Math.max(0, Math.round(staleMs / 1000)) : null
+            }
+          });
+          return;
+        }
+      }
       jsonResponse(res, 200, await buildDashboard({
         force,
         recordHistory: recordHistory && !light,

@@ -651,6 +651,21 @@
         padding: 10px;
       }
 
+      .odds-chart-empty {
+        min-height: 180px;
+        display: grid;
+        align-content: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .odds-chart-empty strong {
+        color: var(--ink);
+        font-size: 15px;
+      }
+
       .odds-big-chart {
         width: 100%;
         height: 260px;
@@ -2341,7 +2356,7 @@
           const liveSeries = series.filter((item) => Array.isArray(item.history) && item.history.length >= 2);
           const values = liveSeries.flatMap((item) => item.history.map((point) => point.p));
           if (!values.length) {
-            const emptyMessage = canvas.dataset.emptyMessage || "Polymarket 暂未返回这个盘口的实时历史曲线；当前只显示参考价";
+            const emptyMessage = currentLang === "en" ? "No live curve" : "暂无实时曲线";
             ctx.fillStyle = "#66706b";
             ctx.font = "13px system-ui, sans-serif";
             ctx.fillText(emptyMessage, pad.left, pad.top + 24);
@@ -2396,16 +2411,34 @@
       }
 
       function renderOddsBoard(match) {
-        const marketTypeEmptyMessage = {
+        const marketTypeEmptyState = {
           moneyline: currentLang === "en"
-            ? "Polymarket has not returned live history for this match-result market; showing reference prices."
-            : "Polymarket 暂未返回这场胜平负的实时历史曲线；当前只显示参考价",
+            ? {
+              title: "No live single-match result market yet",
+              body: "Polymarket has not returned a live history curve for this match-result market. The prices above are local references."
+            }
+            : {
+              title: "暂无 Polymarket 单场胜平负曲线",
+              body: "Polymarket 当前未返回这场胜平负的实时历史曲线，上方价格只是本地参考价。"
+            },
           handicap: currentLang === "en"
-            ? "Polymarket has not opened a live handicap curve for this match; showing local handicap references."
-            : "Polymarket 暂未开出这场让球盘的实时曲线；当前只显示本地让球参考价",
+            ? {
+              title: "No live handicap market yet",
+              body: "Polymarket has not opened a live handicap curve for this match. The handicap prices above are local references."
+            }
+            : {
+              title: "暂无 Polymarket 让球盘曲线",
+              body: "Polymarket 当前未开出这场让球盘的实时曲线，上方让球价格只是本地参考价。"
+            },
           total: currentLang === "en"
-            ? "Polymarket has not returned live history for this totals market; showing reference prices."
-            : "Polymarket 暂未返回这场大小球的实时历史曲线；当前只显示参考价"
+            ? {
+              title: "No live totals market yet",
+              body: "Polymarket has not returned a live history curve for this totals market. The prices above are local references."
+            }
+            : {
+              title: "暂无 Polymarket 大小球曲线",
+              body: "Polymarket 当前未返回这场大小球的实时历史曲线，上方价格只是本地参考价。"
+            }
         };
         const groups = [
           { type: "moneyline", label: currentLang === "en" ? "Result" : "胜平负" },
@@ -2437,6 +2470,16 @@
             source: rec.chart?.source,
             history: Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2 ? rec.chart.history : []
           }));
+          const hasLiveSeries = series.some((item) => item.history.length >= 2);
+          const emptyState = marketTypeEmptyState[group.type] || (currentLang === "en"
+            ? {
+              title: "No live curve yet",
+              body: "Polymarket has not returned a live history curve for this market. The prices above are references."
+            }
+            : {
+              title: "暂无实时曲线",
+              body: "Polymarket 当前未返回这个盘口的实时历史曲线，上方价格只是参考价。"
+            });
           return `
             <div class="odds-board-panel ${index === activeIndex ? "active" : ""}" data-odds-panel="${escapeHtml(group.type)}">
               <div class="odds-market-row">
@@ -2449,7 +2492,9 @@
                 `).join("")}
               </div>
               <div class="odds-chart-wrap">
-                <canvas class="odds-big-chart" data-empty-message="${escapeHtml(marketTypeEmptyMessage[group.type] || (currentLang === "en" ? "Polymarket has not returned live history for this market; showing reference prices." : "Polymarket 暂未返回这个盘口的实时历史曲线；当前只显示参考价"))}" data-series="${encodeURIComponent(JSON.stringify(series))}" aria-label="${escapeHtml(`${group.label} ${currentLang === "en" ? "market curve" : "盘口曲线"}`)}"></canvas>
+                ${hasLiveSeries
+                  ? `<canvas class="odds-big-chart" data-series="${encodeURIComponent(JSON.stringify(series))}" aria-label="${escapeHtml(`${group.label} ${currentLang === "en" ? "market curve" : "盘口曲线"}`)}"></canvas>`
+                  : `<div class="odds-chart-empty"><strong>${escapeHtml(emptyState.title)}</strong><span>${escapeHtml(emptyState.body)}</span><span>${escapeHtml(currentLang === "en" ? "Use tabs marked Live when available." : "如果有带“实时”的盘口标签，请切换到该标签查看真实曲线。")}</span></div>`}
               </div>
             </div>
           `;
