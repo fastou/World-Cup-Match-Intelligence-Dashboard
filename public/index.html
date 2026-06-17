@@ -2936,7 +2936,12 @@
           const basePath = window.location.pathname.endsWith("/")
             ? window.location.pathname
             : window.location.pathname.replace(/\/[^/]*$/, "/");
-          const apiPath = `${basePath}api/dashboard${force ? "?force=1" : ""}`;
+          const params = new URLSearchParams({
+            light: "1",
+            skipHistory: "1"
+          });
+          if (force) params.set("force", "1");
+          const apiPath = `${basePath}api/dashboard?${params.toString()}`;
           const response = await fetch(apiPath, { cache: "no-store" });
           const data = await response.json();
           window.dashboardResearchFramework = data.researchFramework || {};

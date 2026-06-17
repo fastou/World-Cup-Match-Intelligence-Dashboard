@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -16,11 +17,13 @@ def main():
 
     payload = json.load(sys.stdin)
     operations = payload.get("operations") or []
-    for attempt in range(5):
-        conn = sqlite3.connect(sys.argv[1], timeout=30)
+    timeout_seconds = float(os.environ.get("SQLITE_BUSY_TIMEOUT_SECONDS", "3"))
+    retry_count = int(os.environ.get("SQLITE_BUSY_RETRIES", "3"))
+    for attempt in range(retry_count):
+        conn = sqlite3.connect(sys.argv[1], timeout=timeout_seconds)
         try:
             conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute(f"PRAGMA busy_timeout={int(timeout_seconds * 1000)}")
             with conn:
                 for operation in operations:
                     sql = operation.get("sql") or ""
@@ -37,7 +40,7 @@ def main():
         except sqlite3.OperationalError as error:
             if "locked" not in str(error).lower() and "busy" not in str(error).lower():
                 raise
-            if attempt == 4:
+            if attempt == retry_count - 1:
                 raise
             time.sleep(0.5 * (attempt + 1))
         finally:

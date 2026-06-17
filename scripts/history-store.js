@@ -4,6 +4,7 @@ const { spawn } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
 const DEFAULT_DB_PATH = path.join(ROOT, "data", "worldcup-history.sqlite");
+const SQLITE_EXEC_TIMEOUT_MS = Number(process.env.SQLITE_EXEC_TIMEOUT_MS || 12000);
 let schemaReady = null;
 
 function historyDbPath() {
@@ -25,6 +26,10 @@ function runOperations(operations) {
     const child = spawn(process.env.PYTHON_BIN || "python3", [path.join(__dirname, "sqlite-exec.py"), dbPath], {
       stdio: ["pipe", "pipe", "pipe"]
     });
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`sqlite operation timeout after ${SQLITE_EXEC_TIMEOUT_MS}ms`));
+    }, SQLITE_EXEC_TIMEOUT_MS);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -33,8 +38,12 @@ function runOperations(operations) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on("close", (code) => {
+      clearTimeout(timeout);
       if (code === 0) resolve(stdout);
       else reject(new Error(stderr || `sqlite3 exited with code ${code}`));
     });

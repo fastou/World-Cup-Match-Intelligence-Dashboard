@@ -15,6 +15,7 @@ const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json"
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const LIGHT_CACHE_TTL_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = 6500;
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 4000);
@@ -103,6 +104,9 @@ const VENUE_COORDINATES = {
 
 let dashboardCache = null;
 let dashboardCacheAt = 0;
+let lightDashboardCache = null;
+let lightDashboardCacheAt = 0;
+let backgroundRefreshPromise = null;
 let eliteLeaderboardCache = null;
 let eliteLeaderboardCacheAt = 0;
 let envFileCache = null;
@@ -1423,11 +1427,12 @@ async function fetchAiTradePlans(matches) {
   return out;
 }
 
-async function attachAiPredictions(matches) {
+async function attachAiPredictions(matches, { useOpenAi = true } = {}) {
   for (const match of matches || []) {
     match.aiPrediction = buildAiPrediction(match);
     match.aiTradePlan = buildRuleTradePlan(match);
   }
+  if (!useOpenAi) return;
   try {
     const aiPlans = await fetchAiTradePlans(matches || []);
     for (const match of matches || []) {
@@ -3309,7 +3314,78 @@ async function enrichSignalsWithActivity(signals) {
   }));
 }
 
-async function attachEliteSignals(matches, polymarket, { force = false } = {}) {
+function emptyEliteLeaderboard(reason = "轻量实时模式跳过 Top100 持仓深挖") {
+  return {
+    source: "Polymarket Data API",
+    ok: false,
+    updatedAt: new Date().toISOString(),
+    skipped: true,
+    error: reason,
+    rankingBasis: "SPORTS 表现候选账号 + 足球已结算样本过滤",
+    traders: [],
+    marketPositions: {
+      ok: false,
+      source: "Polymarket Data API /v1/market-positions",
+      updatedAt: new Date().toISOString(),
+      skipped: true,
+      conditionsChecked: 0,
+      tokensWithElitePositions: 0,
+      error: reason
+    }
+  };
+}
+
+function attachEmptyEliteSignals(matches, polymarket, reason = "轻量实时模式跳过 Top100 持仓深挖") {
+  for (const match of matches || []) {
+    for (const recommendation of match.recommendations || []) {
+      recommendation.eliteSignals = [];
+      recommendation.eliteSummary = {
+        count: 0,
+        totalCurrentValue: 0,
+        totalBought: 0,
+        topTrader: ""
+      };
+      recommendation.topHolders = [];
+      recommendation.holderSummary = {
+        count: 0,
+        totalShares: 0,
+        totalCurrentValue: 0,
+        eliteCount: 0,
+        topHolder: ""
+      };
+      if (recommendation.chart) recommendation.chart.topHolders = [];
+    }
+    match.eliteSummary = {
+      activePositions: 0,
+      activeTraders: 0,
+      totalCurrentValue: 0,
+      totalBought: 0,
+      topHolderPositions: 0,
+      topHolderAccounts: 0,
+      topHolderShares: 0,
+      updatedAt: new Date().toISOString(),
+      source: "Polymarket Data API /v1/market-positions",
+      skipped: true,
+      reason
+    };
+  }
+  for (const market of polymarket?.markets || []) {
+    for (const token of market.tokens || []) {
+      token.topHolders = [];
+      token.holderSummary = {
+        count: 0,
+        totalShares: 0,
+        totalCurrentValue: 0,
+        eliteCount: 0,
+        topHolder: ""
+      };
+    }
+  }
+  return emptyEliteLeaderboard(reason);
+}
+
+async function attachEliteSignals(matches, polymarket, { force = false, enabled = true } = {}) {
+  if (!enabled) return attachEmptyEliteSignals(matches, polymarket, "轻量实时模式跳过 Top100 持仓深挖");
   const leaderboard = await fetchEliteLeaderboard({ force });
   const traderMap = new Map((leaderboard.traders || []).map((trader) => [walletKey(trader.proxyWallet), trader]));
   const catalog = recommendationMarketCatalog(matches);
@@ -3455,9 +3531,86 @@ async function attachEliteSignals(matches, polymarket, { force = false } = {}) {
   };
 }
 
-async function buildDashboard({ force = false, recordHistory = true } = {}) {
+function scheduleBackgroundDashboardRefresh() {
+  if (backgroundRefreshPromise) return;
+  backgroundRefreshPromise = buildDashboard({
+    force: true,
+    recordHistory: false,
+    includeElite: true,
+    includeOpenAi: true,
+    light: false,
+    background: true
+  }).catch((error) => {
+    console.error(`Background dashboard refresh failed: ${error.message}`);
+  }).finally(() => {
+    backgroundRefreshPromise = null;
+  });
+}
+
+function mergeCachedEliteSignals(matches, polymarket, cachedPayload) {
+  if (!cachedPayload?.matches?.length) return null;
+  const cachedMatches = new Map((cachedPayload.matches || []).map((match) => [match.id, match]));
+  for (const match of matches || []) {
+    const cachedMatch = cachedMatches.get(match.id);
+    if (!cachedMatch) continue;
+    if (cachedMatch.eliteSummary) {
+      match.eliteSummary = {
+        ...cachedMatch.eliteSummary,
+        cacheHit: true
+      };
+    }
+    const cachedRecommendations = new Map((cachedMatch.recommendations || []).map((rec) => [rec.key, rec]));
+    for (const recommendation of match.recommendations || []) {
+      const cachedRec = cachedRecommendations.get(recommendation.key);
+      if (!cachedRec) continue;
+      recommendation.eliteSignals = cachedRec.eliteSignals || [];
+      recommendation.eliteSummary = cachedRec.eliteSummary || recommendation.eliteSummary;
+      recommendation.topHolders = cachedRec.topHolders || [];
+      recommendation.holderSummary = cachedRec.holderSummary || recommendation.holderSummary;
+      if (recommendation.chart && cachedRec.chart?.topHolders) {
+        recommendation.chart.topHolders = cachedRec.chart.topHolders;
+      }
+    }
+  }
+
+  const cachedTokens = new Map();
+  for (const market of cachedPayload.polymarket?.markets || []) {
+    for (const token of market.tokens || []) {
+      if (!market.conditionId || !token.tokenId) continue;
+      cachedTokens.set(`${market.conditionId}:${token.tokenId}`, token);
+    }
+  }
+  for (const market of polymarket?.markets || []) {
+    for (const token of market.tokens || []) {
+      const cachedToken = cachedTokens.get(`${market.conditionId}:${token.tokenId}`);
+      if (!cachedToken) continue;
+      token.topHolders = cachedToken.topHolders || [];
+      token.holderSummary = cachedToken.holderSummary || token.holderSummary;
+    }
+  }
+
+  return cachedPayload.eliteTraders
+    ? {
+      ...cachedPayload.eliteTraders,
+      cacheHit: true,
+      updatedAt: cachedPayload.eliteTraders.updatedAt || cachedPayload.meta?.generatedAt || new Date().toISOString()
+    }
+    : null;
+}
+
+async function buildDashboard({
+  force = false,
+  recordHistory = true,
+  includeElite = true,
+  includeOpenAi = true,
+  light = false,
+  background = false
+} = {}) {
   const now = Date.now();
-  if (!force && dashboardCache && now - dashboardCacheAt < CACHE_TTL_MS) {
+  if (light && !force && lightDashboardCache && now - lightDashboardCacheAt < LIGHT_CACHE_TTL_MS) {
+    return lightDashboardCache;
+  }
+  if (!light && !force && dashboardCache && now - dashboardCacheAt < CACHE_TTL_MS) {
     return dashboardCache;
   }
 
@@ -3494,13 +3647,18 @@ async function buildDashboard({ force = false, recordHistory = true } = {}) {
   const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket));
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, h2hOverrides);
   attachMarketCharts(matches, polymarket);
-  const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
-  await attachAiPredictions(matches);
+  let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
+  if (!includeElite) {
+    eliteTraders = mergeCachedEliteSignals(matches, polymarket, dashboardCache) || eliteTraders;
+  }
+  await attachAiPredictions(matches, { useOpenAi: includeOpenAi });
   const payload = {
     meta: {
       ...local.meta,
       generatedAt: new Date().toISOString(),
       cacheTtlSeconds: Math.round(CACHE_TTL_MS / 1000),
+      lightMode: Boolean(light),
+      backgroundRefresh: Boolean(backgroundRefreshPromise),
       matchWindow: visibility
     },
     sources: [
@@ -3560,8 +3718,21 @@ async function buildDashboard({ force = false, recordHistory = true } = {}) {
     polymarket
   };
 
-  dashboardCache = payload;
-  dashboardCacheAt = now;
+  if (light) {
+    lightDashboardCache = payload;
+    lightDashboardCacheAt = Date.now();
+    if (!background && (!dashboardCache || Date.now() - dashboardCacheAt >= CACHE_TTL_MS)) {
+      scheduleBackgroundDashboardRefresh();
+    }
+  } else {
+    const completedAt = Date.now();
+    dashboardCache = payload;
+    dashboardCacheAt = completedAt;
+    if (!lightDashboardCache || lightDashboardCacheAt <= now) {
+      lightDashboardCache = payload;
+      lightDashboardCacheAt = completedAt;
+    }
+  }
   if (!DISABLE_HISTORY_RECORDING && recordHistory) {
     recordDashboardSnapshot(payload, { source: "api" }).catch((error) => {
       console.error(`Failed to record dashboard history: ${error.message}`);
@@ -3628,8 +3799,15 @@ const server = http.createServer(async (req, res) => {
     const pathname = stripBasePath(url.pathname);
     if (pathname === "/api/dashboard") {
       const force = url.searchParams.get("force") === "1";
+      const light = url.searchParams.get("light") === "1";
       const recordHistory = url.searchParams.get("skipHistory") !== "1";
-      jsonResponse(res, 200, await buildDashboard({ force, recordHistory }));
+      jsonResponse(res, 200, await buildDashboard({
+        force,
+        recordHistory: recordHistory && !light,
+        includeElite: !light,
+        includeOpenAi: !light,
+        light
+      }));
       return;
     }
     if (pathname === "/api/health") {
