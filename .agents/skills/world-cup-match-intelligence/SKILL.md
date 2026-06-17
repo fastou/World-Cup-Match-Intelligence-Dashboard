@@ -13,6 +13,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Do not fabricate missing sports, odds, Polymarket, lineup, injury, weather, or account data. Mark unavailable inputs as missing, stale, or source-unreachable.
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
+- Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
 
 ## Project Map
@@ -111,6 +112,7 @@ When updating source collection:
 - Public sync should generate `worldcup-context.json` fields for lineups, injuries, team news, recent form, tactical matchup, weather, AI synthesis, and head-to-head. If a field cannot be verified, write a structured low-confidence explanation with source status rather than leaving the UI blank.
 - ESPN schedule venue data should be carried into match records and used to drive weather lookup whenever possible.
 - Context writes should not fail just because historical archiving is slow or locked. Write `worldcup-context.json` first, then archive with a bounded timeout and warning.
+- Server-side AI trade summaries should use the merged dashboard state after live prices, curves, holders, model probabilities, and trading gates are attached. Use a rule-based fallback first, then optional OpenAI-compatible synthesis from server environment/Codex config without committing secrets.
 
 ## Polymarket And Account Intelligence
 

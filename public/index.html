@@ -401,6 +401,110 @@
         line-height: 1.4;
       }
 
+      .trade-plan {
+        margin: 12px 0 14px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .trade-plan-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: start;
+        margin-bottom: 12px;
+      }
+
+      .trade-plan-kicker {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .trade-plan-summary {
+        margin-top: 4px;
+        font-size: 18px;
+        font-weight: 800;
+        line-height: 1.3;
+      }
+
+      .trade-plan-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: flex-end;
+      }
+
+      .trade-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        padding: 0 8px;
+        border-radius: 7px;
+        background: #edf0ef;
+        color: #59645f;
+        font-size: 12px;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+
+      .trade-badge.buy {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .trade-badge.watch,
+      .trade-badge.wait {
+        background: #f7ead1;
+        color: #8a5a0a;
+      }
+
+      .trade-badge.avoid {
+        background: #f8e3e1;
+        color: var(--danger);
+      }
+
+      .trade-plan-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      .trade-plan-box {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .trade-plan-box strong {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 13px;
+      }
+
+      .trade-plan-box span,
+      .trade-plan-box li {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .trade-plan-box ul {
+        display: grid;
+        gap: 5px;
+        margin: 0;
+        padding-left: 16px;
+      }
+
+      .trade-plan-primary {
+        color: var(--green);
+        font-weight: 800;
+      }
+
       .completeness-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1319,6 +1423,8 @@
         }
 
         .confidence-panel,
+        .trade-plan-head,
+        .trade-plan-grid,
         .intel-grid,
         .static-grid,
         .h2h-summary-grid,
@@ -2029,6 +2135,76 @@
         `;
       }
 
+      function tradeActionLabel(action) {
+        const labels = {
+          buy: currentLang === "en" ? "Actionable" : "可参与",
+          watch: currentLang === "en" ? "Watch" : "观察",
+          wait: currentLang === "en" ? "Wait" : "等待",
+          avoid: currentLang === "en" ? "Avoid" : "回避"
+        };
+        return labels[action] || labels.watch;
+      }
+
+      function stakeLabel(stake) {
+        const labels = {
+          none: currentLang === "en" ? "No position" : "不做",
+          "small-watch": currentLang === "en" ? "Small / watch" : "小仓/观察",
+          small: currentLang === "en" ? "Small" : "小仓",
+          "small-medium": currentLang === "en" ? "Small-medium" : "小到中仓"
+        };
+        return labels[stake] || escapeHtml(stake || (currentLang === "en" ? "Small / watch" : "小仓/观察"));
+      }
+
+      function renderTradeRecLine(rec) {
+        if (!rec) return "";
+        return `${rec.name || "-"} · 价格 ${fmtPrice(rec.marketPrice)} · 模型 ${fmtPct(rec.modelProbability)} · Edge ${fmtPct(rec.edge)} · 上限 ${fmtPrice(rec.maxBuyPrice)}`;
+      }
+
+      function renderAiTradePlan(match) {
+        const plan = match.aiTradePlan || {};
+        const primary = plan.primary || (plan.primaryName ? { name: plan.primaryName } : null);
+        const secondary = Array.isArray(plan.secondary) ? plan.secondary : [];
+        const avoid = Array.isArray(plan.avoid) ? plan.avoid : [];
+        const rationale = Array.isArray(plan.rationale) ? plan.rationale : [];
+        const risks = Array.isArray(plan.riskNotes) ? plan.riskNotes : [];
+        return `
+          <section class="trade-plan">
+            <div class="trade-plan-head">
+              <div>
+                <div class="trade-plan-kicker">${escapeHtml(plan.title || "AI 买卖建议")} · ${escapeHtml(plan.source === "openai" ? "ChatGPT + 规则风控" : "规则风控")}</div>
+                <div class="trade-plan-summary">${escapeHtml(plan.summary || "等待服务器生成每场操作摘要。")}</div>
+                <div class="confidence-note">${escapeHtml(plan.entryText || "没有明确价格线时只观察。")}</div>
+              </div>
+              <div class="trade-plan-badges">
+                <span class="trade-badge ${escapeHtml(plan.action || "watch")}">${escapeHtml(tradeActionLabel(plan.action))}</span>
+                <span class="trade-badge">${escapeHtml(confidenceLabel(plan.confidence || "low"))}</span>
+                <span class="trade-badge">${escapeHtml(stakeLabel(plan.stake))}</span>
+              </div>
+            </div>
+            <div class="trade-plan-grid">
+              <div class="trade-plan-box">
+                <strong>首选盘口</strong>
+                <span class="trade-plan-primary">${escapeHtml(renderTradeRecLine(primary) || "暂无")}</span>
+              </div>
+              <div class="trade-plan-box">
+                <strong>次选/回避</strong>
+                <span>${secondary.length ? secondary.map(renderTradeRecLine).map(escapeHtml).join(" / ") : "无明确次选"}</span>
+                ${avoid.length ? `<div class="confidence-note">回避：${avoid.map((item) => `${item.name || "-"} ${fmtPrice(item.marketPrice)}，Edge ${fmtPct(item.edge)}`).map(escapeHtml).join(" / ")}</div>` : ""}
+              </div>
+              <div class="trade-plan-box">
+                <strong>为什么</strong>
+                ${rationale.length ? `<ul>${rationale.slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<span>等待模型和盘口信号。</span>"}
+              </div>
+              <div class="trade-plan-box">
+                <strong>风险/纪律</strong>
+                ${risks.length ? `<ul>${risks.slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<span>超过建议价不追；首发变化后重新评估。</span>"}
+              </div>
+            </div>
+            <div class="confidence-note">${escapeHtml(plan.disclaimer || "研究辅助，不自动下单。")} · ${fmtTime(plan.updatedAt)}</div>
+          </section>
+        `;
+      }
+
       function renderPolymarket(polymarket) {
         const root = document.getElementById("polymarket");
         if (!polymarket.ok) {
@@ -2559,6 +2735,7 @@
             </div>
 
             ${renderAiPrediction(match)}
+            ${renderAiTradePlan(match)}
 
             ${renderOddsBoard(match)}
 

@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS match_snapshots (
   prediction_probability REAL,
   prediction_confidence TEXT,
   trade_label TEXT,
+  ai_trade_action TEXT,
+  ai_trade_primary TEXT,
+  ai_trade_summary TEXT,
   completeness_mode TEXT,
   completeness_score REAL,
   lambda_home REAL,
@@ -343,10 +346,21 @@ LEFT JOIN match_results r ON r.match_id = mk.match_id
 WHERE mk.market_type = 'moneyline';
 `
   }]);
+  await ensureColumn("match_snapshots", "ai_trade_action", "TEXT");
+  await ensureColumn("match_snapshots", "ai_trade_primary", "TEXT");
+  await ensureColumn("match_snapshots", "ai_trade_summary", "TEXT");
 }
 
 function json(value) {
   return JSON.stringify(value ?? null);
+}
+
+async function ensureColumn(tableName, columnName, columnType) {
+  const rows = JSON.parse(await runSql(`PRAGMA table_info(${tableName});`, [], "all") || "[]");
+  if (rows.some((row) => row.name === columnName)) return;
+  await runOperations([{
+    sql: `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType};`
+  }]);
 }
 
 function numberOrNull(value) {
@@ -405,9 +419,10 @@ async function recordDashboardSnapshot(payload, options = {}) {
       sql:
       `INSERT OR REPLACE INTO match_snapshots
        (snapshot_id, run_id, match_id, captured_at, prediction_label, prediction_key, prediction_probability,
-        prediction_confidence, trade_label, completeness_mode, completeness_score, lambda_home, lambda_away,
+        prediction_confidence, trade_label, ai_trade_action, ai_trade_primary, ai_trade_summary,
+        completeness_mode, completeness_score, lambda_home, lambda_away,
         elite_active_positions, elite_active_traders, elite_current_value, elite_total_bought, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       params: [
         snapshotId,
         id,
@@ -418,6 +433,9 @@ async function recordDashboardSnapshot(payload, options = {}) {
         numberOrNull(match.aiPrediction?.probability),
         match.aiPrediction?.confidence,
         match.aiPrediction?.tradeLabel,
+        textOrNull(match.aiTradePlan?.action),
+        textOrNull(match.aiTradePlan?.primary?.name || match.aiTradePlan?.primaryName),
+        textOrNull(match.aiTradePlan?.summary),
         match.completeness?.mode,
         numberOrNull(match.completeness?.score),
         numberOrNull(match.dynamicModel?.adjusted?.lambdaHome),

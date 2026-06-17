@@ -1,5 +1,6 @@
 const http = require("http");
 const fs = require("fs/promises");
+const os = require("os");
 const path = require("path");
 const { recordDashboardSnapshot, ensureHistorySchema, historyDbPath, runSql } = require("./scripts/history-store");
 
@@ -12,8 +13,12 @@ const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
+const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 6500;
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
+const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 4000);
+const AI_TRADE_PLAN_ENABLED = process.env.AI_TRADE_PLAN_ENABLED !== "0";
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
@@ -100,6 +105,8 @@ let dashboardCache = null;
 let dashboardCacheAt = 0;
 let eliteLeaderboardCache = null;
 let eliteLeaderboardCacheAt = 0;
+let envFileCache = null;
+let codexOpenAiConfigCache = null;
 
 const TEAM_SEARCH_NAMES = {
   MEX: "Mexico",
@@ -342,6 +349,97 @@ async function readOptionalJson(filePath, fallback) {
     if (error.code === "ENOENT") return fallback;
     throw error;
   }
+}
+
+async function readOptionalText(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function readEnvFile() {
+  if (envFileCache) return envFileCache;
+  const env = {};
+  const raw = await readOptionalText(ENV_PATH);
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const index = trimmed.indexOf("=");
+    const key = trimmed.slice(0, index).trim();
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    env[key] = value;
+  }
+  envFileCache = env;
+  return env;
+}
+
+function parseTomlScalar(rawValue) {
+  let value = String(rawValue || "").trim();
+  const commentIndex = value.search(/\s#/);
+  if (commentIndex >= 0) value = value.slice(0, commentIndex).trim();
+  if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value;
+}
+
+function parseCodexConfigToml(raw) {
+  const root = {};
+  let currentSection = "";
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1];
+      continue;
+    }
+    const index = trimmed.indexOf("=");
+    if (index < 0) continue;
+    const key = trimmed.slice(0, index).trim();
+    const value = parseTomlScalar(trimmed.slice(index + 1));
+    const target = currentSection ? `${currentSection}.${key}` : key;
+    root[target] = value;
+  }
+  return root;
+}
+
+async function readCodexOpenAiConfig() {
+  if (codexOpenAiConfigCache) return codexOpenAiConfigCache;
+  const home = os.homedir();
+  const configPath = process.env.CODEX_CONFIG_PATH || path.join(home, ".codex", "config.toml");
+  const authPath = process.env.CODEX_AUTH_PATH || path.join(home, ".codex", "auth.json");
+  const config = parseCodexConfigToml(await readOptionalText(configPath));
+  const auth = await readOptionalJson(authPath, {});
+  const providerName = String(config.model_provider || "OpenAI");
+  const providerPrefix = `model_providers.${providerName}.`;
+  codexOpenAiConfigCache = {
+    apiKey: auth.OPENAI_API_KEY || "",
+    model: config.model || "",
+    baseUrl: config[`${providerPrefix}base_url`] || "",
+    wireApi: config[`${providerPrefix}wire_api`] || ""
+  };
+  return codexOpenAiConfigCache;
+}
+
+async function getOpenAiConfig() {
+  const [env, codex] = await Promise.all([
+    readEnvFile(),
+    readCodexOpenAiConfig()
+  ]);
+  return {
+    apiKey: process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || codex.apiKey || "",
+    model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || codex.model || "gpt-4o-mini",
+    baseUrl: (process.env.OPENAI_BASE_URL || env.OPENAI_BASE_URL || codex.baseUrl || "https://api.openai.com").replace(/\/+$/, ""),
+    wireApi: process.env.OPENAI_WIRE_API || env.OPENAI_WIRE_API || codex.wireApi || "responses"
+  };
 }
 
 function isPlainObject(value) {
@@ -1009,9 +1107,334 @@ function buildAiPrediction(match) {
   };
 }
 
-function attachAiPredictions(matches) {
+function formatPercent(value, digits = 1) {
+  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "-";
+}
+
+function formatCents(value) {
+  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}¢` : "-";
+}
+
+function recommendationMarketPriority(rec) {
+  if (rec.marketType === "total") return 3;
+  if (rec.marketType === "handicap") return 2;
+  if (rec.marketType === "moneyline" && rec.key === "draw") return 1;
+  return 0;
+}
+
+function tradableRecommendationScore(rec) {
+  const edgeValue = typeof rec.edge === "number" ? rec.edge : -9;
+  const holderBoost = Math.min(0.025, ((rec.eliteSummary?.count || 0) * 0.008) + ((rec.holderSummary?.eliteCount || 0) * 0.004));
+  return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003;
+}
+
+function isActionableRecommendation(rec) {
+  if (typeof rec.marketPrice !== "number" || typeof rec.modelProbability !== "number") return false;
+  if (rec.decision?.action === "AVOID_OR_SELL") return false;
+  if (rec.edge == null || rec.edge <= 0) return false;
+  return true;
+}
+
+function isPrimaryTradeCandidate(match, rec) {
+  if (!isActionableRecommendation(rec)) return false;
+  if (rec.marketType !== "moneyline") return true;
+  if (rec.key === "draw") return false;
+  const topWinKey = match.probabilities?.home >= match.probabilities?.away ? "home" : "away";
+  return Boolean(
+    match.tradingGate?.allowStrongTrade
+    && rec.key === topWinKey
+    && rec.modelProbability >= 0.48
+    && rec.edge >= 0.035
+  );
+}
+
+function sortedPrimaryRecommendations(match) {
+  return [...(match.recommendations || [])]
+    .filter((rec) => isPrimaryTradeCandidate(match, rec))
+    .sort((a, b) => tradableRecommendationScore(b) - tradableRecommendationScore(a));
+}
+
+function sortedActionableRecommendations(match) {
+  return [...(match.recommendations || [])]
+    .filter(isActionableRecommendation)
+    .sort((a, b) => tradableRecommendationScore(b) - tradableRecommendationScore(a));
+}
+
+function topRiskNotes(match, primary) {
+  const notes = [];
+  const restrictions = match.tradingGate?.reasons || [];
+  if (restrictions.length) notes.push(`限制：${restrictions.join("、")}。`);
+  if (match.autoBaseline) notes.push("本场仍有自动基线成分，盘口结论要按小仓/观察处理。");
+  if (primary?.decision?.reasons?.length) notes.push(`降级原因：${primary.decision.reasons.join("、")}。`);
+  const contextRisks = Array.isArray(match.context?.riskFlags) ? match.context.riskFlags : [];
+  notes.push(...contextRisks.slice(0, 2));
+  if (!notes.length) notes.push("按价格纪律执行；超过建议价不追。");
+  return [...new Set(notes)].slice(0, 4);
+}
+
+function buildRuleTradePlan(match) {
+  const primaryCandidates = sortedPrimaryRecommendations(match);
+  const actionable = sortedActionableRecommendations(match);
+  const avoidRows = [...(match.recommendations || [])]
+    .filter((rec) => rec.decision?.action === "AVOID_OR_SELL" || (typeof rec.edge === "number" && rec.edge < -0.035))
+    .sort((a, b) => (a.edge || 0) - (b.edge || 0));
+  const primary = primaryCandidates[0] || null;
+  const secondary = actionable.filter((rec) => rec !== primary).slice(0, 3);
+  const headline = primary
+    ? `${primary.name}，${formatCents(primary.marketPrice)} 附近只做${match.tradingGate?.allowStrongTrade ? "按计划" : "小仓/观察"}。`
+    : "没有达到价格纪律的正向盘口，先观察。";
+  const confidence = match.tradingGate?.allowStrongTrade
+    ? "high"
+    : match.completeness?.confidence === "low" || !primary
+      ? "low"
+      : "medium";
+  const action = primary
+    ? primary.decision?.gated
+      ? "watch"
+      : primary.decision?.action === "BUY" || primary.decision?.action === "BUY_SMALL"
+        ? "buy"
+        : "watch"
+    : "avoid";
+  const stake = primary
+    ? match.tradingGate?.allowStrongTrade
+      ? primary.decision?.stake || "small"
+      : "small-watch"
+    : "none";
+  const entryText = primary
+    ? primary.decision?.gated
+      ? primary.decision?.reasons?.some((reason) => /本地参考价|不是真实盘口|真实盘口不可用|盘口价格缺失/.test(String(reason)))
+        ? `当前价格只作参考；等真实盘口/曲线可用后，参考上限 ${formatCents(primary.maxBuyPrice)}，超过不追。`
+        : `理想 ${formatCents(Math.min(primary.marketPrice, primary.maxBuyPrice || primary.marketPrice))} 以下；参考上限 ${formatCents(primary.maxBuyPrice)}，超过 ${formatCents(Math.max(primary.marketPrice + 0.04, primary.maxBuyPrice || primary.marketPrice))} 不追。`
+      : `建议买价不高于 ${formatCents(primary.maxBuyPrice)}；超过就等待回落。`
+    : "无建议买价。";
+
+  return {
+    ok: true,
+    source: "rule",
+    updatedAt: new Date().toISOString(),
+    title: primary ? "AI 操作摘要" : "AI 观察摘要",
+    action,
+    confidence,
+    stake,
+    primary: primary ? {
+      key: primary.key,
+      name: primary.name,
+      marketTypeLabel: primary.marketTypeLabel,
+      marketPrice: primary.marketPrice,
+      modelProbability: primary.modelProbability,
+      edge: primary.edge,
+      maxBuyPrice: primary.maxBuyPrice,
+      decisionLabel: primary.decision?.label || "观察",
+      source: primary.chart?.source || match.manualMarkets?.source || ""
+    } : null,
+    secondary: secondary.map((rec) => ({
+      key: rec.key,
+      name: rec.name,
+      marketTypeLabel: rec.marketTypeLabel,
+      marketPrice: rec.marketPrice,
+      modelProbability: rec.modelProbability,
+      edge: rec.edge,
+      maxBuyPrice: rec.maxBuyPrice,
+      decisionLabel: rec.decision?.label || "观察"
+    })),
+    avoid: avoidRows.slice(0, 2).map((rec) => ({
+      key: rec.key,
+      name: rec.name,
+      marketPrice: rec.marketPrice,
+      modelProbability: rec.modelProbability,
+      edge: rec.edge,
+      reason: rec.decision?.label || "回避"
+    })),
+    summary: headline,
+    entryText,
+    rationale: primary ? [
+      `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，edge ${formatPercent(primary.edge)}。`,
+      primary.holderSummary?.count ? `该盘口公开持仓 ${primary.holderSummary.count} 人，Top holder ${primary.holderSummary.topHolder || "-"}。` : "",
+      primary.eliteSummary?.count ? `足球 Top100 命中 ${primary.eliteSummary.count} 人，当前价值约 ${Math.round(primary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
+    ].filter(Boolean) : ["当前没有非胜平负盘口达到价格纪律；胜平负长赔只作为激进观察，不做首选。"],
+    riskNotes: topRiskNotes(match, primary),
+    disclaimer: "研究辅助，不自动下单；首发、伤停、盘口跳动后需要重新评估。"
+  };
+}
+
+function safeJsonFromText(text) {
+  const value = String(text || "").trim();
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced) {
+      try {
+        return JSON.parse(fenced[1]);
+      } catch {
+        return null;
+      }
+    }
+    const objectMatch = value.match(/\{[\s\S]*\}/);
+    if (objectMatch) {
+      try {
+        return JSON.parse(objectMatch[0]);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function extractOpenAiText(data) {
+  if (typeof data?.output_text === "string") return data.output_text;
+  const parts = [];
+  for (const item of data?.output || []) {
+    for (const content of item.content || []) {
+      if (typeof content.text === "string") parts.push(content.text);
+    }
+  }
+  if (typeof data?.choices?.[0]?.message?.content === "string") parts.push(data.choices[0].message.content);
+  return parts.join("\n");
+}
+
+function openAiEndpoint(config) {
+  if (/\/v1\/responses$/.test(config.baseUrl)) return config.baseUrl;
+  if (/\/v1$/.test(config.baseUrl)) return `${config.baseUrl}/responses`;
+  return `${config.baseUrl}/v1/responses`;
+}
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      setTimeout(() => resolve({ ok: false, error: `${label || "operation"} timeout` }), ms);
+    })
+  ]);
+}
+
+function normalizeAiTradePlan(raw, fallback) {
+  if (!raw || typeof raw !== "object") return fallback;
+  const primaryName = String(raw.primaryName || raw.primary?.name || fallback.primary?.name || "").slice(0, 80);
+  return {
+    ...fallback,
+    source: "openai",
+    model: String(raw.model || fallback.model || "").slice(0, 80),
+    title: String(raw.title || fallback.title || "AI 操作摘要").slice(0, 40),
+    action: ["buy", "watch", "avoid", "wait"].includes(raw.action) ? raw.action : fallback.action,
+    confidence: ["low", "medium", "high"].includes(raw.confidence) ? raw.confidence : fallback.confidence,
+    stake: String(raw.stake || fallback.stake || "small-watch").slice(0, 40),
+    summary: String(raw.summary || fallback.summary || "").slice(0, 220),
+    entryText: String(raw.entryText || fallback.entryText || "").slice(0, 180),
+    primaryName: primaryName || undefined,
+    rationale: Array.isArray(raw.rationale)
+      ? raw.rationale.map((item) => String(item).slice(0, 160)).filter(Boolean).slice(0, 4)
+      : fallback.rationale,
+    riskNotes: Array.isArray(raw.riskNotes)
+      ? raw.riskNotes.map((item) => String(item).slice(0, 160)).filter(Boolean).slice(0, 4)
+      : fallback.riskNotes,
+    disclaimer: fallback.disclaimer,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function fetchAiTradePlans(matches) {
+  if (!AI_TRADE_PLAN_ENABLED || !matches?.length) return new Map();
+  const config = await getOpenAiConfig();
+  if (!config.apiKey) return new Map();
+  const fallbackById = new Map(matches.map((match) => [match.id, match.aiTradePlan]));
+  const prompt = {
+    task: "为世界杯比赛看板生成每场比赛的中文操作摘要。只根据给定结构化模型、盘口、持仓、动态情报状态输出，不要编造新数据，不要承诺收益，不要自动下单。",
+    output: "返回 JSON：{plans:[{matchId,title,action,confidence,stake,summary,entryText,rationale:[...],riskNotes:[...]}]}",
+    rules: [
+      "action 只能是 buy/watch/avoid/wait。",
+      "首发未确认或强交易不允许时，不要写重仓、强买入、梭哈等表达。",
+      "胜平负长赔冷门和平局不能作为首选；除非该方向是模型最高概率、概率至少48%、且强交易闸门打开，否则只能写激进小注/观察。首选优先让球或大小球。",
+      "如果没有实时价格或曲线，写等待/观察，不给硬价格。",
+      "summary 要像给人看的短结论，例如：首选小于2.5球，49¢附近可观察，小仓，不追高。",
+      "entryText 必须包含明确价格纪律或等待条件。"
+    ],
+    matches: matches.map((match) => ({
+      matchId: match.id,
+      matchup: `${match.homeName} vs ${match.awayName}`,
+      kickoffShanghai: match.kickoffShanghai,
+      mode: match.completeness?.modeLabel,
+      confidence: match.completeness?.confidence,
+      tradingGate: match.tradingGate,
+      aiPrediction: {
+        label: match.aiPrediction?.label,
+        probability: match.aiPrediction?.probability,
+        tradeLabel: match.aiPrediction?.tradeLabel,
+        restrictions: match.aiPrediction?.restrictions
+      },
+      topScores: (match.probabilities?.topScores || []).slice(0, 5),
+      candidates: (match.aiTradePlan?.primary ? [match.aiTradePlan.primary, ...(match.aiTradePlan.secondary || [])] : [])
+        .map((rec) => ({
+          name: rec.name,
+          type: rec.marketTypeLabel,
+          modelProbability: rec.modelProbability,
+          marketPrice: rec.marketPrice,
+          edge: rec.edge,
+          maxBuyPrice: rec.maxBuyPrice,
+          decision: rec.decisionLabel
+        })),
+      avoid: match.aiTradePlan?.avoid || [],
+      context: {
+        aiSummary: match.context?.aiAnalysis?.summary,
+        riskFlags: match.context?.riskFlags,
+        recentForm: match.context?.recentForm,
+        weather: match.context?.weather?.summary
+      }
+    }))
+  };
+
+  const result = await withTimeout(timedFetchJson(openAiEndpoint(config), {
+    method: "POST",
+    timeoutMs: AI_TRADE_PLAN_TIMEOUT_MS,
+    headers: {
+      "authorization": `Bearer ${config.apiKey}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_output_tokens: 1600,
+      reasoning: { effort: "none" },
+      input: [
+        {
+          role: "system",
+          content: "你只输出 JSON，不输出 Markdown。你是保守的赛事研究助手，只能做决策辅助，不能承诺收益或自动下单。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify(prompt)
+        }
+      ]
+    })
+  }), AI_TRADE_PLAN_TIMEOUT_MS + 500, "AI trade plan");
+  if (!result.ok) {
+    console.error(`AI trade plan unavailable: ${result.error}`);
+    return new Map();
+  }
+  const parsed = safeJsonFromText(extractOpenAiText(result.data));
+  const plans = Array.isArray(parsed?.plans) ? parsed.plans : [];
+  const out = new Map();
+  for (const plan of plans) {
+    const matchId = String(plan.matchId || "");
+    if (!fallbackById.has(matchId)) continue;
+    out.set(matchId, normalizeAiTradePlan({ ...plan, model: config.model }, fallbackById.get(matchId)));
+  }
+  return out;
+}
+
+async function attachAiPredictions(matches) {
   for (const match of matches || []) {
     match.aiPrediction = buildAiPrediction(match);
+    match.aiTradePlan = buildRuleTradePlan(match);
+  }
+  try {
+    const aiPlans = await fetchAiTradePlans(matches || []);
+    for (const match of matches || []) {
+      if (aiPlans.has(match.id)) match.aiTradePlan = aiPlans.get(match.id);
+    }
+  } catch (error) {
+    console.error(`Failed to attach AI trade plans: ${error.message}`);
   }
 }
 
@@ -1792,16 +2215,18 @@ function scheduleAutoBaselineContext(event, fifaRankings = {}) {
 
 async function timedFetchJson(url, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeoutMs = Number(options.timeoutMs || FETCH_TIMEOUT_MS);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
       headers: {
         "accept": "application/json,text/plain,*/*",
         "user-agent": "worldcup-polymarket-dashboard/0.1",
-        ...(options.headers || {})
+        ...(fetchOptions.headers || {})
       }
     });
     const text = await response.text();
@@ -3070,7 +3495,7 @@ async function buildDashboard({ force = false, recordHistory = true } = {}) {
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, h2hOverrides);
   attachMarketCharts(matches, polymarket);
   const eliteTraders = await attachEliteSignals(matches, polymarket, { force });
-  attachAiPredictions(matches);
+  await attachAiPredictions(matches);
   const payload = {
     meta: {
       ...local.meta,
