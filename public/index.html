@@ -2291,7 +2291,7 @@
           if (points.length < 2) {
             ctx.fillStyle = "#8b958f";
             ctx.font = "11px system-ui, sans-serif";
-            ctx.fillText("无实时曲线", 26, 21);
+            ctx.fillText(currentLang === "en" ? "Local ref" : "本地参考", 26, 21);
             return;
           }
 
@@ -2341,9 +2341,10 @@
           const liveSeries = series.filter((item) => Array.isArray(item.history) && item.history.length >= 2);
           const values = liveSeries.flatMap((item) => item.history.map((point) => point.p));
           if (!values.length) {
+            const emptyMessage = canvas.dataset.emptyMessage || "Polymarket 暂未返回这个盘口的实时历史曲线；当前只显示参考价";
             ctx.fillStyle = "#66706b";
             ctx.font = "13px system-ui, sans-serif";
-            ctx.fillText("未匹配到实时历史曲线；当前只显示价格快照", pad.left, pad.top + 24);
+            ctx.fillText(emptyMessage, pad.left, pad.top + 24);
             return;
           }
 
@@ -2395,17 +2396,38 @@
       }
 
       function renderOddsBoard(match) {
+        const marketTypeEmptyMessage = {
+          moneyline: currentLang === "en"
+            ? "Polymarket has not returned live history for this match-result market; showing reference prices."
+            : "Polymarket 暂未返回这场胜平负的实时历史曲线；当前只显示参考价",
+          handicap: currentLang === "en"
+            ? "Polymarket has not opened a live handicap curve for this match; showing local handicap references."
+            : "Polymarket 暂未开出这场让球盘的实时曲线；当前只显示本地让球参考价",
+          total: currentLang === "en"
+            ? "Polymarket has not returned live history for this totals market; showing reference prices."
+            : "Polymarket 暂未返回这场大小球的实时历史曲线；当前只显示参考价"
+        };
         const groups = [
-          { type: "moneyline", label: "胜平负" },
-          { type: "handicap", label: "让球盘" },
-          { type: "total", label: "大小球" }
+          { type: "moneyline", label: currentLang === "en" ? "Result" : "胜平负" },
+          { type: "handicap", label: currentLang === "en" ? "Handicap" : "让球盘" },
+          { type: "total", label: currentLang === "en" ? "Totals" : "大小球" }
         ].map((group) => ({
           ...group,
           rows: match.recommendations.filter((rec) => rec.marketType === group.type)
-        })).filter((group) => group.rows.length);
+        })).filter((group) => group.rows.length).map((group) => {
+          const liveCount = group.rows.filter((rec) => rec.chart?.source === "Polymarket" && Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2).length;
+          return {
+            ...group,
+            liveCount,
+            tabLabel: liveCount
+              ? `${group.label} · ${currentLang === "en" ? "Live" : "实时"} ${liveCount}`
+              : `${group.label} · ${currentLang === "en" ? "Local" : "本地"}`
+          };
+        });
+        const activeIndex = Math.max(0, groups.findIndex((group) => group.liveCount > 0));
 
         const tabs = groups.map((group, index) => `
-          <button class="odds-board-tab ${index === 0 ? "active" : ""}" data-odds-tab="${escapeHtml(group.type)}" type="button">${escapeHtml(group.label)}</button>
+          <button class="odds-board-tab ${index === activeIndex ? "active" : ""}" data-odds-tab="${escapeHtml(group.type)}" type="button">${escapeHtml(group.tabLabel)}</button>
         `).join("");
 
         const panels = groups.map((group, index) => {
@@ -2416,7 +2438,7 @@
             history: Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2 ? rec.chart.history : []
           }));
           return `
-            <div class="odds-board-panel ${index === 0 ? "active" : ""}" data-odds-panel="${escapeHtml(group.type)}">
+            <div class="odds-board-panel ${index === activeIndex ? "active" : ""}" data-odds-panel="${escapeHtml(group.type)}">
               <div class="odds-market-row">
                 ${group.rows.map((rec) => `
                   <div class="odds-pill">
@@ -2427,7 +2449,7 @@
                 `).join("")}
               </div>
               <div class="odds-chart-wrap">
-                <canvas class="odds-big-chart" data-series="${encodeURIComponent(JSON.stringify(series))}" aria-label="${escapeHtml(group.label)} 盘口曲线"></canvas>
+                <canvas class="odds-big-chart" data-empty-message="${escapeHtml(marketTypeEmptyMessage[group.type] || (currentLang === "en" ? "Polymarket has not returned live history for this market; showing reference prices." : "Polymarket 暂未返回这个盘口的实时历史曲线；当前只显示参考价"))}" data-series="${encodeURIComponent(JSON.stringify(series))}" aria-label="${escapeHtml(`${group.label} ${currentLang === "en" ? "market curve" : "盘口曲线"}`)}"></canvas>
               </div>
             </div>
           `;
@@ -2442,6 +2464,7 @@
               </div>
             </div>
             <div class="odds-board-tabs" role="tablist" aria-label="盘口切换">${tabs}</div>
+            <div class="odds-board-meta">${escapeHtml(currentLang === "en" ? "A Live tab has matched Polymarket history. A Local tab means Polymarket has not returned that single-match market yet." : "标签里的“实时”表示该类盘口已匹配 Polymarket 历史曲线；“本地”表示 Polymarket 当前未返回对应单场盘口。")}</div>
             ${panels}
           </section>
         `;
@@ -2680,6 +2703,14 @@
           const advicePriceLabel = rec.decision?.gated
             ? (typeof rec.marketPrice === "number" ? "观察" : "等待")
             : fmtPrice(rec.maxBuyPrice);
+          const hasLiveChart = rec.chart?.source === "Polymarket" && Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2;
+          const chartStatus = hasLiveChart
+            ? (currentLang === "en" ? "Polymarket live curve" : "Polymarket 实时曲线")
+            : rec.chart?.source === "本地盘口快照" && rec.marketType === "handicap"
+              ? (currentLang === "en" ? "No Polymarket handicap yet; local reference" : "Polymarket 暂无让球盘，显示本地参考价")
+              : rec.chart?.source === "本地盘口快照"
+                ? (currentLang === "en" ? "No Polymarket single-match market yet; local reference" : "Polymarket 暂无单场盘，显示本地参考价")
+                : (currentLang === "en" ? "No Polymarket live curve yet" : "Polymarket 暂无实时曲线");
           return `
           <tr class="recommendation-main-row ${hasExpandableSignals ? "expandable" : ""}" data-detail-id="${detailId}" aria-expanded="false" ${hasExpandableSignals ? 'tabindex="0"' : ""}>
             <td>${escapeHtml(rec.marketTypeLabel || "-")}</td>
@@ -2698,8 +2729,8 @@
             <td class="numeric">${fmtPct(rec.edge)}</td>
             <td class="numeric">${escapeHtml(advicePriceLabel)}</td>
             <td class="chart-cell">
-              <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2 ? rec.chart.history : []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
-              <div class="chart-source ${rec.chart?.source === "Polymarket" && rec.chart?.history?.length >= 2 ? "live" : ""}">${escapeHtml(rec.chart?.source === "Polymarket" && rec.chart?.history?.length >= 2 ? "Polymarket 实时曲线" : rec.chart?.source === "本地盘口快照" ? "本地参考价，无实时曲线" : "未匹配实时曲线")}</div>
+              <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(hasLiveChart ? rec.chart.history : []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
+              <div class="chart-source ${hasLiveChart ? "live" : ""}">${escapeHtml(chartStatus)}</div>
             </td>
             <td>
               <span class="decision ${rec.decision.action}">${escapeHtml(rec.decision.label)}</span>
