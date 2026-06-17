@@ -67,6 +67,8 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Each team should include recent match form against other opponents when a public results feed is available: date, opponent, score, W/D/L, competition, source URL, update time, and a compact W/D/L plus goals summary.
 - Recent form belongs in the Static tab as historical context. It can inform low-weight model review, but missing or stale recent-form data must not be invented or treated as confirmed team news.
 - Each team should include all-time FIFA World Cup finals record when available: appearances, matches, W/D/L, goals for/against, best finish, source, update date, and as-of scope. Exclude qualifiers; explicitly mark teams with no pre-2026 finals appearances.
+- Each team should include squad physical and line-profile context when a public squad source is available: average height, age, caps, GK/DF/MF/FW splits, club-tier proxy, source, update date, and data limits. Do not infer market value, goalkeeper shot-stopping, player ratings, or fitness from this proxy; label unavailable value/rating fields explicitly.
+- AI "human read" notes may summarize squad-profile contrasts only after structured data exists. They must not invent transfer values, injuries, lineups, save rates, or tactical facts not present in the payload.
 - If head-to-head is not yet available for an auto-baseline fixture, show a structured missing/pending status with source target, not a blank value.
 - Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
 - Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.
@@ -139,6 +141,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - elite account positions
 - top holder snapshots
 - static world rankings, team recent form, and head-to-head context
+- squad physical/line-profile context and AI human-read notes
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.

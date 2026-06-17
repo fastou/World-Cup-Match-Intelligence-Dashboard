@@ -834,6 +834,88 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .matchup-insight-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .matchup-insight-card {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .matchup-insight-card.strong-home {
+        border-color: rgba(34, 139, 92, 0.26);
+        background: #f6fbf7;
+      }
+
+      .matchup-insight-card.strong-away {
+        border-color: rgba(44, 123, 229, 0.22);
+        background: #f6f9fe;
+      }
+
+      .matchup-insight-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 5px;
+      }
+
+      .matchup-insight-head strong {
+        font-size: 13px;
+      }
+
+      .matchup-insight-head span {
+        color: var(--muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .line-profile-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .line-profile-card {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #edf1ee;
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .line-profile-card h5 {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+
+      .line-profile-row {
+        display: grid;
+        grid-template-columns: 42px 1fr;
+        gap: 6px;
+        padding: 5px 0;
+        border-top: 1px solid #edf1ee;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .line-profile-row:first-of-type {
+        border-top: 0;
+      }
+
+      .line-profile-row strong {
+        color: var(--ink);
+      }
+
       .form-match-list {
         display: grid;
         gap: 6px;
@@ -1471,6 +1553,8 @@
         .intel-grid,
         .static-grid,
         .h2h-summary-grid,
+        .matchup-insight-grid,
+        .line-profile-grid,
         .form-grid,
         .lineup-box,
         .framework-grid,
@@ -1655,6 +1739,9 @@
         "世界杯战绩": "World Cup Record",
         "参赛次数": "Appearances",
         "最好成绩": "Best finish",
+        "身体与阵容对位": "Physical and Squad Matchup",
+        "分线 profile": "Line Profiles",
+        "数据限制": "Data Limits",
         "AI 综合分析": "AI Analysis",
         "状态": "Status",
         "结论": "Summary",
@@ -2050,6 +2137,72 @@
         `;
       }
 
+      function formatLineProfile(group) {
+        if (!group || !group.players) return currentLang === "en" ? "No data" : "无数据";
+        const topTierPct = typeof group.topTierShare === "number" ? `${(group.topTierShare * 100).toFixed(1)}%` : "-";
+        return currentLang === "en"
+          ? `${group.players} players · height ${group.avgHeightCm || "-"}cm · caps ${group.avgCaps || "-"} · Tier1/2 ${topTierPct}`
+          : `${group.players}人 · 身高 ${group.avgHeightCm || "-"}cm · 出场 ${group.avgCaps || "-"} · Tier1/2 ${topTierPct}`;
+      }
+
+      function renderLineProfileTeam(title, profile) {
+        const groups = profile?.groups || {};
+        return `
+          <div class="line-profile-card">
+            <h5>${escapeHtml(title)}</h5>
+            ${["all", "GK", "DF", "MF", "FW"].map((key) => `
+              <div class="line-profile-row">
+                <strong>${escapeHtml(key === "all" ? (currentLang === "en" ? "All" : "整体") : key)}</strong>
+                <span>${escapeHtml(formatLineProfile(groups[key]))}</span>
+              </div>
+            `).join("")}
+            <div class="form-meta">${escapeHtml(profile?.marketValue?.noteZh && currentLang !== "en" ? profile.marketValue.noteZh : profile?.marketValue?.note || "")}</div>
+          </div>
+        `;
+      }
+
+      function renderHumanMatchup(match) {
+        const matchup = match.humanMatchup || {};
+        const insights = Array.isArray(matchup.insights) ? matchup.insights : [];
+        const limits = currentLang === "en" ? matchup.limitsEn || matchup.limits : matchup.limits || [];
+        const aiRead = matchup.aiRead || {};
+        const statusText = matchup.ok
+          ? (currentLang === "en" ? matchup.summaryEn || matchup.summary : matchup.summary)
+          : (currentLang === "en" ? matchup.summaryEn || "Squad profile unavailable." : matchup.summary || "阵容 profile 未同步。");
+        return `
+          <section class="static-block wide">
+            <h4>身体与阵容对位</h4>
+            <div class="form-summary">${escapeHtml(statusText || "")}</div>
+            ${aiRead.summary ? `<div class="form-team-card" style="margin-top:10px">
+              <h5>${escapeHtml(currentLang === "en" ? "AI human read" : aiRead.title || "AI 人类复核")}</h5>
+              <div class="form-summary">${escapeHtml(currentLang === "en" ? aiRead.summary : aiRead.summary)}</div>
+              ${Array.isArray(aiRead.notes) && aiRead.notes.length ? `<div class="form-match-list">${aiRead.notes.map((note) => `<div class="form-meta">• ${escapeHtml(note)}</div>`).join("")}</div>` : ""}
+              <div class="form-meta">${escapeHtml(aiRead.source === "openai" ? "OpenAI" : currentLang === "en" ? "Rule fallback" : "规则 fallback")} · ${fmtTime(aiRead.updatedAt)}</div>
+            </div>` : ""}
+            <div class="matchup-insight-grid">
+              ${insights.map((item) => `
+                <div class="matchup-insight-card ${item.side === "home" ? "strong-home" : item.side === "away" ? "strong-away" : ""}">
+                  <div class="matchup-insight-head">
+                    <strong>${escapeHtml(currentLang === "en" ? item.labelEn || item.label : item.label)}</strong>
+                    <span>${escapeHtml(currentLang === "en" ? item.valueTextEn || item.valueText || "" : item.valueText || "")}</span>
+                  </div>
+                  <div class="form-summary">${escapeHtml(currentLang === "en" ? item.en || item.zh : item.zh || item.en)}</div>
+                </div>
+              `).join("")}
+            </div>
+            <div class="line-profile-grid">
+              ${renderLineProfileTeam(homeName(match), match.homeTeam?.squadProfile)}
+              ${renderLineProfileTeam(awayName(match), match.awayTeam?.squadProfile)}
+            </div>
+            <ul class="info-list" style="margin-top:10px">
+              <li><strong>${currentLang === "en" ? "Method" : "口径"}</strong><span>${escapeHtml(currentLang === "en" ? matchup.methodology || "" : matchup.methodologyZh || matchup.methodology || "")}</span></li>
+              ${limits.length ? `<li><strong>${currentLang === "en" ? "Data limits" : "数据限制"}</strong><span>${escapeHtml(limits.join("；"))}</span></li>` : ""}
+              <li><strong>${currentLang === "en" ? "Source" : "来源"}</strong><span>${matchup.sourceUrl ? `<a href="${escapeHtml(matchup.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(matchup.source || matchup.sourceUrl)}</a>` : escapeHtml(matchup.source || "-")} · ${fmtTime(matchup.updatedAt)}</span></li>
+            </ul>
+          </section>
+        `;
+      }
+
       function recentFormInline(match, side) {
         const records = match.recentFormRecords || match.context?.recentFormRecords || {};
         const record = records[side];
@@ -2069,6 +2222,7 @@
             ${renderHeadToHead(match)}
             ${renderRecentForm(match)}
             ${renderWorldCupRecords(match)}
+            ${renderHumanMatchup(match)}
             <section class="static-block">
               <h4>静态信息</h4>
               <ul class="info-list">

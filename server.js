@@ -10,6 +10,7 @@ const ROOT = __dirname;
 const DATA_PATH = path.join(ROOT, "data", "worldcup-dashboard.json");
 const FIFA_RANKINGS_PATH = path.join(ROOT, "data", "fifa-rankings.json");
 const WORLD_CUP_RECORDS_PATH = path.join(ROOT, "data", "world-cup-records.json");
+const SQUAD_PROFILES_PATH = path.join(ROOT, "data", "squad-profiles.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
@@ -1436,10 +1437,113 @@ async function fetchAiTradePlans(matches) {
   return out;
 }
 
+function normalizeAiHumanRead(raw, fallback) {
+  if (!raw || typeof raw !== "object") return fallback;
+  return {
+    ...fallback,
+    source: "openai",
+    title: String(raw.title || fallback.title || "人类对位复核").slice(0, 40),
+    summary: String(raw.summary || fallback.summary || "").slice(0, 260),
+    notes: Array.isArray(raw.notes)
+      ? raw.notes.map((item) => String(item).slice(0, 180)).filter(Boolean).slice(0, 5)
+      : fallback.notes,
+    limits: Array.isArray(raw.limits)
+      ? raw.limits.map((item) => String(item).slice(0, 180)).filter(Boolean).slice(0, 4)
+      : fallback.limits,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function fetchAiHumanReads(matches) {
+  if (!AI_TRADE_PLAN_ENABLED || !matches?.length) return new Map();
+  const config = await getOpenAiConfig();
+  if (!config.apiKey) return new Map();
+  const fallbackById = new Map(matches.map((match) => [match.id, match.humanMatchup?.aiRead]));
+  const prompt = {
+    task: "为世界杯看板生成每场比赛的中文'人类对位复核'。只能基于给定的身高、GK/DF/MF/FW proxy、俱乐部分层和已有限制说明，不要编造身价、扑救率、伤停或首发。",
+    output: "返回 JSON：{reads:[{matchId,title,summary,notes:[...],limits:[...]}]}",
+    rules: [
+      "不要写下注、买入、赚钱、梭哈等交易动作。",
+      "如果某项只是 proxy，必须说清楚是 proxy，不是官方能力评分。",
+      "summary 用一两句话说明这场从身体、门将、后防、中场、锋线角度最值得复核什么。",
+      "notes 给 2-4 条具体观察，例如高空球、定位球、中场控制、锋线转化、门将身高/经验。",
+      "缺失身价时明确说身价未接入，不要猜身价。"
+    ],
+    matches: matches.map((match) => ({
+      matchId: match.id,
+      matchup: `${match.homeName} vs ${match.awayName}`,
+      summary: match.humanMatchup?.summary,
+      insights: (match.humanMatchup?.insights || []).map((item) => ({
+        label: item.label,
+        side: item.side,
+        value: item.valueText,
+        text: item.zh
+      })),
+      homeProfile: {
+        team: match.homeName,
+        groups: match.homeTeam?.squadProfile?.groups,
+        marketValue: match.homeTeam?.squadProfile?.marketValue
+      },
+      awayProfile: {
+        team: match.awayName,
+        groups: match.awayTeam?.squadProfile?.groups,
+        marketValue: match.awayTeam?.squadProfile?.marketValue
+      },
+      limits: match.humanMatchup?.limits
+    }))
+  };
+
+  const result = await withTimeout(timedFetchJson(openAiEndpoint(config), {
+    method: "POST",
+    timeoutMs: AI_TRADE_PLAN_TIMEOUT_MS,
+    headers: {
+      "authorization": `Bearer ${config.apiKey}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_output_tokens: 1800,
+      reasoning: { effort: "none" },
+      input: [
+        {
+          role: "system",
+          content: "你只输出 JSON，不输出 Markdown。你是谨慎的足球研究助手，只能基于给定结构化数据做对位复核，不能编造数据。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify(prompt)
+        }
+      ]
+    })
+  }), AI_TRADE_PLAN_TIMEOUT_MS + 500, "AI human matchup");
+  if (!result.ok) {
+    console.error(`AI human matchup unavailable: ${result.error}`);
+    return new Map();
+  }
+  const parsed = safeJsonFromText(extractOpenAiText(result.data));
+  const reads = Array.isArray(parsed?.reads) ? parsed.reads : [];
+  const out = new Map();
+  for (const read of reads) {
+    const matchId = String(read.matchId || "");
+    if (!fallbackById.has(matchId)) continue;
+    out.set(matchId, normalizeAiHumanRead(read, fallbackById.get(matchId) || {}));
+  }
+  return out;
+}
+
 async function attachAiPredictions(matches, { useOpenAi = true } = {}) {
   for (const match of matches || []) {
     match.aiPrediction = buildAiPrediction(match);
     match.aiTradePlan = buildRuleTradePlan(match);
+    match.humanMatchup = match.humanMatchup || buildHumanMatchup(match);
+    match.humanMatchup.aiRead = {
+      source: "rule",
+      title: "人类对位复核",
+      summary: match.humanMatchup.summary,
+      notes: (match.humanMatchup.insights || []).slice(0, 4).map((item) => item.zh).filter(Boolean),
+      limits: match.humanMatchup.limits || [],
+      updatedAt: new Date().toISOString()
+    };
   }
   if (!useOpenAi) return;
   try {
@@ -1449,6 +1553,14 @@ async function attachAiPredictions(matches, { useOpenAi = true } = {}) {
     }
   } catch (error) {
     console.error(`Failed to attach AI trade plans: ${error.message}`);
+  }
+  try {
+    const aiReads = await fetchAiHumanReads(matches || []);
+    for (const match of matches || []) {
+      if (aiReads.has(match.id)) match.humanMatchup.aiRead = aiReads.get(match.id);
+    }
+  } catch (error) {
+    console.error(`Failed to attach AI human matchup reads: ${error.message}`);
   }
 }
 
@@ -1620,7 +1732,7 @@ function h2hFromOverride(event, h2hOverrides, fifaRankings) {
   };
 }
 
-function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, h2hOverrides, nowMs = Date.now()) {
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
@@ -1628,8 +1740,8 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   if (modeledKeys.has(key)) return null;
   if (hasRecordedFinal(event.scheduleId, finalResults)) return null;
 
-  const homeTeam = scheduleTeamRecord(event.home, fifaRankings, worldCupRecords);
-  const awayTeam = scheduleTeamRecord(event.away, fifaRankings, worldCupRecords);
+  const homeTeam = scheduleTeamRecord(event.home, fifaRankings, worldCupRecords, squadProfiles);
+  const awayTeam = scheduleTeamRecord(event.away, fifaRankings, worldCupRecords, squadProfiles);
   const { lambdaHome, lambdaAway } = autoBaselineLambda(homeTeam.rating, awayTeam.rating);
   const id = `schedule-${event.scheduleId || key}`;
   const syncedContext = contextForMatch(context, id);
@@ -1704,6 +1816,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     },
     context: mergedContext
   };
+  baseMatch.humanMatchup = buildHumanMatchup(baseMatch);
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
   baseMatch.manualMarkets = autoBaselineManualMarkets(baseMatch, baseMatch.probabilities);
@@ -1714,13 +1827,13 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, h2hOverrides) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
-    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, h2hOverrides, nowMs))
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, nowMs))
     .filter(Boolean);
   const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
@@ -1745,9 +1858,9 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   };
 }
 
-function normalizeMatch(match, teams, context, polymarket, worldCupRecords) {
-  const homeTeam = attachWorldCupRecord(teams[match.home], match.home, worldCupRecords);
-  const awayTeam = attachWorldCupRecord(teams[match.away], match.away, worldCupRecords);
+function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles) {
+  const homeTeam = attachStaticProfiles(teams[match.home], match.home, worldCupRecords, squadProfiles);
+  const awayTeam = attachStaticProfiles(teams[match.away], match.away, worldCupRecords, squadProfiles);
   const matchContext = contextForMatch(context, match.id);
   const mergedMatch = deepMerge(match, { context: matchContext });
   const dynamicModel = applyDynamicAdjustments(mergedMatch);
@@ -1763,6 +1876,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords) {
     probabilities,
     dynamicModel
   };
+  enriched.humanMatchup = buildHumanMatchup(enriched);
   const withInitialRecommendations = {
     ...enriched,
     recommendations: []
@@ -2057,6 +2171,258 @@ function attachWorldCupRecord(team, code, worldCupRecords) {
   };
 }
 
+function squadProfileForTeam(code, squadProfiles) {
+  const normalizedCode = String(code || "").toUpperCase();
+  const profile = squadProfiles?.teams?.[normalizedCode];
+  const base = {
+    teamCode: normalizedCode,
+    source: squadProfiles?.source || "World Cup 2026 Team Stats: Age, Height & Club Tiers by Country",
+    sourceUrl: squadProfiles?.sourceUrl || "",
+    rawSquadsUrl: squadProfiles?.rawSquadsUrl || "",
+    updatedAt: squadProfiles?.updatedAt || "",
+    methodology: squadProfiles?.methodology || "",
+    methodologyZh: squadProfiles?.methodologyZh || ""
+  };
+  if (!profile) {
+    return {
+      ...base,
+      ok: false,
+      status: "missing",
+      error: "阵容身高/分线 profile 快照未覆盖该队。"
+    };
+  }
+  return {
+    ...base,
+    ...profile,
+    ok: profile.ok !== false,
+    status: profile.status || "synced"
+  };
+}
+
+function attachStaticProfiles(team, code, worldCupRecords, squadProfiles) {
+  return {
+    ...(team || {}),
+    worldCupRecord: worldCupRecordForTeam(code, worldCupRecords),
+    squadProfile: squadProfileForTeam(code, squadProfiles)
+  };
+}
+
+function safeNum(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function topTierShare(group) {
+  const value = safeNum(group?.topTierShare);
+  return value === null ? 0 : value;
+}
+
+function avgCaps(group) {
+  const value = safeNum(group?.avgCaps);
+  return value === null ? 0 : value;
+}
+
+function avgHeight(group) {
+  const value = safeNum(group?.avgHeightCm);
+  return value === null ? 0 : value;
+}
+
+function proxyLineScore(group, weights = {}) {
+  if (!group || !group.players) return null;
+  const height = avgHeight(group);
+  const caps = avgCaps(group);
+  const tier = topTierShare(group);
+  const heightScore = clamp((height - 170) / 25, 0, 1);
+  const capsScore = clamp(caps / 60, 0, 1);
+  return roundTo(100 * (
+    heightScore * (weights.height ?? 0.25)
+    + capsScore * (weights.caps ?? 0.25)
+    + tier * (weights.tier ?? 0.5)
+  ), 1);
+}
+
+function lineupAdvantage(homeValue, awayValue, threshold, higherIsBetter = true) {
+  if (homeValue === null || awayValue === null) return { side: "none", diff: null };
+  const diff = higherIsBetter ? homeValue - awayValue : awayValue - homeValue;
+  if (Math.abs(diff) < threshold) return { side: "even", diff: roundTo(diff, 1) };
+  return { side: diff > 0 ? "home" : "away", diff: roundTo(Math.abs(diff), 1) };
+}
+
+function advantageTeamName(match, side) {
+  if (side === "home") return match.homeName;
+  if (side === "away") return match.awayName;
+  return "";
+}
+
+function matchupInsight({ key, label, labelEn, side, valueText, valueTextEn, zh, en, confidence = "medium" }) {
+  return { key, label, labelEn, side, valueText, valueTextEn, zh, en, confidence };
+}
+
+function buildHumanMatchup(match) {
+  const homeProfile = match.homeTeam?.squadProfile;
+  const awayProfile = match.awayTeam?.squadProfile;
+  if (!homeProfile?.ok || !awayProfile?.ok) {
+    return {
+      ok: false,
+      status: "missing",
+      updatedAt: new Date().toISOString(),
+      source: homeProfile?.source || awayProfile?.source || "World Cup 2026 Team Stats",
+      sourceUrl: homeProfile?.sourceUrl || awayProfile?.sourceUrl || "",
+      summary: "阵容身高/分线 profile 缺失，暂不做身体和分线对位判断。",
+      summaryEn: "Squad physical and line-profile data is missing; no matchup read is generated.",
+      insights: [],
+      limits: ["身价、扑救率、球员评分未接入；当前只使用公开阵容 proxy。"]
+    };
+  }
+
+  const h = homeProfile.groups || {};
+  const a = awayProfile.groups || {};
+  const insights = [];
+  const overallHeight = lineupAdvantage(avgHeight(h.all), avgHeight(a.all), 2);
+  if (overallHeight.side !== "none") {
+    const sideName = advantageTeamName(match, overallHeight.side);
+    insights.push(matchupInsight({
+      key: "overall-height",
+      label: "整体身高",
+      labelEn: "Overall height",
+      side: overallHeight.side,
+      valueText: `${avgHeight(h.all) || "-"}cm vs ${avgHeight(a.all) || "-"}cm`,
+      valueTextEn: `${avgHeight(h.all) || "-"}cm vs ${avgHeight(a.all) || "-"}cm`,
+      zh: overallHeight.side === "even"
+        ? "两队整体平均身高接近，身体对抗不构成明显单边优势。"
+        : `${sideName} 平均身高高出约 ${overallHeight.diff}cm，定位球、二点球和高空防守要重点看。`,
+      en: overallHeight.side === "even"
+        ? "Overall average height is close; physical size is not a clear one-sided edge."
+        : `${sideName} are about ${overallHeight.diff}cm taller on average; set pieces, second balls and aerial defending matter more.`
+    }));
+  }
+
+  const gkScoreHome = proxyLineScore(h.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
+  const gkScoreAway = proxyLineScore(a.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
+  const gkAdv = lineupAdvantage(gkScoreHome, gkScoreAway, 8);
+  insights.push(matchupInsight({
+    key: "goalkeeper-proxy",
+    label: "门将 proxy",
+    labelEn: "Goalkeeper proxy",
+    side: gkAdv.side,
+    valueText: `${gkScoreHome ?? "-"} vs ${gkScoreAway ?? "-"}`,
+    valueTextEn: `${gkScoreHome ?? "-"} vs ${gkScoreAway ?? "-"}`,
+    zh: gkAdv.side === "even"
+      ? "门将组 proxy 接近；不能仅凭门将维度偏向一边。"
+      : `${advantageTeamName(match, gkAdv.side)} 门将组在身高、出场经验或俱乐部分层 proxy 上更占优。`,
+    en: gkAdv.side === "even"
+      ? "Goalkeeper proxy is close; do not lean on this dimension alone."
+      : `${advantageTeamName(match, gkAdv.side)} have the stronger goalkeeper proxy from height, caps or club tier.`
+  }));
+
+  const dfScoreHome = proxyLineScore(h.DF, { height: 0.25, caps: 0.25, tier: 0.5 });
+  const dfScoreAway = proxyLineScore(a.DF, { height: 0.25, caps: 0.25, tier: 0.5 });
+  const dfAdv = lineupAdvantage(dfScoreHome, dfScoreAway, 10);
+  insights.push(matchupInsight({
+    key: "defence-proxy",
+    label: "后防 proxy",
+    labelEn: "Defensive line proxy",
+    side: dfAdv.side,
+    valueText: `${dfScoreHome ?? "-"} vs ${dfScoreAway ?? "-"}`,
+    valueTextEn: `${dfScoreHome ?? "-"} vs ${dfScoreAway ?? "-"}`,
+    zh: dfAdv.side === "even"
+      ? "后防线 proxy 接近，更多要看临场站位、速度和个人失误。"
+      : `${advantageTeamName(match, dfAdv.side)} 后防线俱乐部分层/经验/身高 proxy 更强，理论上更能承受持续压迫。`,
+    en: dfAdv.side === "even"
+      ? "Defensive-line proxy is close; live shape, pace and errors matter more."
+      : `${advantageTeamName(match, dfAdv.side)} rate stronger on defensive club-tier, experience and height proxy.`
+  }));
+
+  const mfScoreHome = proxyLineScore(h.MF, { height: 0.12, caps: 0.28, tier: 0.6 });
+  const mfScoreAway = proxyLineScore(a.MF, { height: 0.12, caps: 0.28, tier: 0.6 });
+  const mfAdv = lineupAdvantage(mfScoreHome, mfScoreAway, 10);
+  insights.push(matchupInsight({
+    key: "midfield-proxy",
+    label: "中场 proxy",
+    labelEn: "Midfield proxy",
+    side: mfAdv.side,
+    valueText: `${mfScoreHome ?? "-"} vs ${mfScoreAway ?? "-"}`,
+    valueTextEn: `${mfScoreHome ?? "-"} vs ${mfScoreAway ?? "-"}`,
+    zh: mfAdv.side === "even"
+      ? "中场 proxy 接近；控球和推进优势需要结合首发与临场压迫强度再判断。"
+      : `${advantageTeamName(match, mfAdv.side)} 中场俱乐部分层/国家队经验 proxy 更强，控球、推进和反抢稳定性可能更好。`,
+    en: mfAdv.side === "even"
+      ? "Midfield proxy is close; possession and progression should be checked after lineups."
+      : `${advantageTeamName(match, mfAdv.side)} have the stronger midfield proxy for club tier and international experience.`
+  }));
+
+  const fwScoreHome = proxyLineScore(h.FW, { height: 0.15, caps: 0.25, tier: 0.6 });
+  const fwScoreAway = proxyLineScore(a.FW, { height: 0.15, caps: 0.25, tier: 0.6 });
+  const fwAdv = lineupAdvantage(fwScoreHome, fwScoreAway, 10);
+  insights.push(matchupInsight({
+    key: "attack-proxy",
+    label: "锋线 proxy",
+    labelEn: "Attack proxy",
+    side: fwAdv.side,
+    valueText: `${fwScoreHome ?? "-"} vs ${fwScoreAway ?? "-"}`,
+    valueTextEn: `${fwScoreHome ?? "-"} vs ${fwScoreAway ?? "-"}`,
+    zh: fwAdv.side === "even"
+      ? "锋线 proxy 接近；大小球要更多看节奏、双方防线和临场阵型。"
+      : `${advantageTeamName(match, fwAdv.side)} 锋线俱乐部分层/经验 proxy 更强，转化机会的理论质量更好。`,
+    en: fwAdv.side === "even"
+      ? "Attack proxy is close; totals need pace, defensive line and lineup context."
+      : `${advantageTeamName(match, fwAdv.side)} have a stronger attack proxy for club tier and experience.`
+  }));
+
+  const topTierHome = topTierShare(h.all);
+  const topTierAway = topTierShare(a.all);
+  const tierAdv = lineupAdvantage(topTierHome, topTierAway, 0.12);
+  insights.push(matchupInsight({
+    key: "club-tier-depth",
+    label: "高水平俱乐部占比",
+    labelEn: "Top club-tier share",
+    side: tierAdv.side,
+    valueText: `${roundTo(topTierHome * 100, 1)}% vs ${roundTo(topTierAway * 100, 1)}%`,
+    valueTextEn: `${roundTo(topTierHome * 100, 1)}% vs ${roundTo(topTierAway * 100, 1)}%`,
+    zh: tierAdv.side === "even"
+      ? "高水平俱乐部球员占比接近；不能用阵容身价 proxy 拉开明显差距。"
+      : `${advantageTeamName(match, tierAdv.side)} Tier 1/2 俱乐部球员占比更高，可作为身价不可用时的阵容质量 proxy。`,
+    en: tierAdv.side === "even"
+      ? "Top club-tier share is close; squad-value proxy does not separate the teams much."
+      : `${advantageTeamName(match, tierAdv.side)} have a higher Tier 1/2 club share, a proxy while market value is unavailable.`
+  }));
+
+  const summaryInsights = insights
+    .filter((item) => item.side && item.side !== "even" && item.side !== "none")
+    .slice(0, 3)
+    .map((item) => `${item.label}偏${advantageTeamName(match, item.side)}`);
+  const summary = summaryInsights.length
+    ? `人类复核重点：${summaryInsights.join("，")}。这些是阵容 proxy，不替代首发、伤停和真实比赛状态。`
+    : "人类复核重点：身体、门将、后防、中场、锋线 proxy 没有明显单边碾压，临场阵容和节奏更关键。";
+  const summaryEn = summaryInsights.length
+    ? `Human-check focus: ${summaryInsights.map((text) => text.replace("偏", " leans ")).join(", ")}. These are squad proxies, not replacements for lineups, injuries or live state.`
+    : "Human-check focus: physical, GK, defensive, midfield and attacking proxies do not show a clear one-sided gap; lineups and tempo matter more.";
+
+  return {
+    ok: true,
+    status: "synced",
+    updatedAt: new Date().toISOString(),
+    source: homeProfile.source,
+    sourceUrl: homeProfile.sourceUrl,
+    rawSquadsUrl: homeProfile.rawSquadsUrl,
+    summary,
+    summaryEn,
+    methodology: homeProfile.methodology,
+    methodologyZh: homeProfile.methodologyZh,
+    insights,
+    limits: [
+      "身价字段当前未接入可靠可抓取源；用 Tier 1/2 俱乐部占比作临时 proxy。",
+      "门将强弱暂用身高、国家队出场和俱乐部分层 proxy；不等同于扑救率或真实状态。",
+      "这些静态对位不会自动覆盖首发、伤停、天气和盘口曲线。"
+    ],
+    limitsEn: [
+      "Market value is not connected to a reliably fetchable source yet; Tier 1/2 club share is used as a proxy.",
+      "Goalkeeper strength uses height, international caps and club tier proxy; it is not save percentage or current form.",
+      "These static matchups do not override lineups, injuries, weather or market curves."
+    ]
+  };
+}
+
 function cloneWorldCupRecords(worldCupRecords) {
   return {
     ...(worldCupRecords || {}),
@@ -2134,12 +2500,13 @@ function rankBand(rank) {
   return "低排名队，模型降低基线强度";
 }
 
-function scheduleTeamRecord(team, fifaRankings, worldCupRecords) {
+function scheduleTeamRecord(team, fifaRankings, worldCupRecords, squadProfiles) {
   const code = String(team?.code || "").toUpperCase();
   const name = TEAM_DISPLAY_NAMES_ZH[code] || team?.name || "TBD";
   const rating = teamRatingForScheduleTeam(team);
   const worldRanking = rankingForTeam(code, fifaRankings);
   const worldCupRecord = worldCupRecordForTeam(code, worldCupRecords);
+  const squadProfile = squadProfileForTeam(code, squadProfiles);
   return {
     name,
     englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
@@ -2160,6 +2527,7 @@ function scheduleTeamRecord(team, fifaRankings, worldCupRecords) {
     ],
     worldRanking,
     worldCupRecord,
+    squadProfile,
     code
   };
 }
@@ -3773,6 +4141,15 @@ async function buildDashboard({
     ok: false,
     error: "data/world-cup-records.json 缺失或未初始化"
   });
+  const squadProfiles = await readOptionalJson(SQUAD_PROFILES_PATH, {
+    source: "World Cup 2026 Team Stats: Age, Height & Club Tiers by Country",
+    sourceUrl: "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/English-ver/WorldCupNations-En.html",
+    rawSquadsUrl: "https://mikami3345.cloudfree.jp/WorldCup2026/WorldCupNations/all_squads-manual.json",
+    updatedAt: "",
+    teams: {},
+    ok: false,
+    error: "data/squad-profiles.json 缺失或未初始化；请运行 npm run sync:squad-profiles"
+  });
   const researchFramework = await readOptionalJson(RESEARCH_FRAMEWORK_PATH, {
     ok: false,
     dimensions: [],
@@ -3794,8 +4171,8 @@ async function buildDashboard({
   ]);
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
   const polymarket = await fetchPolymarket(schedule);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, effectiveWorldCupRecords));
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, h2hOverrides);
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, effectiveWorldCupRecords, squadProfiles));
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides);
   attachMarketCharts(matches, polymarket);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
   if (!includeElite) {
@@ -3838,6 +4215,13 @@ async function buildDashboard({
         detail: `${Object.keys(effectiveWorldCupRecords.records || {}).length} 队世界杯正赛历史快照${effectiveWorldCupRecords.appliedFinalResults ? ` · 已叠加 ${effectiveWorldCupRecords.appliedFinalResults} 场本地完赛结果` : ""}`
       },
       {
+        source: "阵容身体与分线 profile",
+        ok: squadProfiles.ok !== false,
+        lastUpdated: squadProfiles.updatedAt || "",
+        error: squadProfiles.error,
+        detail: `${Object.keys(squadProfiles.teams || {}).length} 队 · 身高/年龄/出场/俱乐部分层 proxy`
+      },
+      {
         source: "动态情报快照",
         ok: context.meta?.ok !== false,
         lastUpdated: context.meta?.lastUpdated || "",
@@ -3875,6 +4259,15 @@ async function buildDashboard({
       asOfZh: effectiveWorldCupRecords.asOfZh,
       appliedFinalResults: effectiveWorldCupRecords.appliedFinalResults || 0,
       count: Object.keys(effectiveWorldCupRecords.records || {}).length
+    },
+    squadProfiles: {
+      source: squadProfiles.source,
+      sourceUrl: squadProfiles.sourceUrl,
+      rawSquadsUrl: squadProfiles.rawSquadsUrl,
+      updatedAt: squadProfiles.updatedAt,
+      count: Object.keys(squadProfiles.teams || {}).length,
+      methodology: squadProfiles.methodology,
+      methodologyZh: squadProfiles.methodologyZh
     },
     researchFramework,
     contextMeta: context.meta || {},

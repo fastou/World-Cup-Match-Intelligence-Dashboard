@@ -259,6 +259,44 @@ CREATE TABLE IF NOT EXISTS world_cup_record_snapshots (
   FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
 );
 
+CREATE TABLE IF NOT EXISTS squad_profile_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id TEXT NOT NULL,
+  match_id TEXT NOT NULL,
+  side TEXT NOT NULL,
+  team_code TEXT,
+  team_name TEXT,
+  source TEXT,
+  source_url TEXT,
+  status TEXT,
+  updated_at TEXT,
+  avg_height_cm REAL,
+  avg_age REAL,
+  avg_caps REAL,
+  top_tier_share REAL,
+  gk_score REAL,
+  df_score REAL,
+  mf_score REAL,
+  fw_score REAL,
+  market_value_status TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
+);
+
+CREATE TABLE IF NOT EXISTS human_matchup_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  match_id TEXT NOT NULL,
+  source TEXT,
+  source_url TEXT,
+  status TEXT,
+  updated_at TEXT,
+  summary TEXT,
+  ai_source TEXT,
+  ai_summary TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
+);
+
 CREATE TABLE IF NOT EXISTS polymarket_holder_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
@@ -344,6 +382,8 @@ CREATE INDEX IF NOT EXISTS idx_top_holders_match_key ON top_holder_snapshots(mat
 CREATE INDEX IF NOT EXISTS idx_h2h_match ON head_to_head_snapshots(match_id, window_start, window_end);
 CREATE INDEX IF NOT EXISTS idx_recent_form_match ON recent_form_snapshots(match_id, side, updated_at);
 CREATE INDEX IF NOT EXISTS idx_world_cup_record_match ON world_cup_record_snapshots(match_id, side, updated_at);
+CREATE INDEX IF NOT EXISTS idx_squad_profile_match ON squad_profile_snapshots(match_id, side, updated_at);
+CREATE INDEX IF NOT EXISTS idx_human_matchup_match ON human_matchup_snapshots(match_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_polymarket_holders_market ON polymarket_holder_snapshots(condition_id, token_id);
 CREATE INDEX IF NOT EXISTS idx_results_updated ON match_results(updated_at);
 
@@ -452,6 +492,12 @@ async function recordDashboardSnapshot(payload, options = {}) {
       params: [snapshotId]
     }, {
       sql: "DELETE FROM world_cup_record_snapshots WHERE snapshot_id = ?;",
+      params: [snapshotId]
+    }, {
+      sql: "DELETE FROM squad_profile_snapshots WHERE snapshot_id = ?;",
+      params: [snapshotId]
+    }, {
+      sql: "DELETE FROM human_matchup_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
     }, {
       sql:
@@ -581,6 +627,72 @@ async function recordDashboardSnapshot(payload, options = {}) {
         ]
       });
     }
+
+    for (const side of ["home", "away"]) {
+      const team = side === "home" ? match.homeTeam : match.awayTeam;
+      const profile = team?.squadProfile || {};
+      const groups = profile.groups || {};
+      const all = groups.all || {};
+      const lineScore = (group, weights) => {
+        if (!group || !group.players) return null;
+        const height = Number(group.avgHeightCm);
+        const caps = Number(group.avgCaps);
+        const tier = Number(group.topTierShare);
+        const heightScore = Number.isFinite(height) ? Math.max(0, Math.min(1, (height - 170) / 25)) : 0;
+        const capsScore = Number.isFinite(caps) ? Math.max(0, Math.min(1, caps / 60)) : 0;
+        const tierScore = Number.isFinite(tier) ? tier : 0;
+        return Math.round(1000 * (heightScore * weights.height + capsScore * weights.caps + tierScore * weights.tier)) / 10;
+      };
+      operations.push({
+        sql:
+        `INSERT INTO squad_profile_snapshots
+         (snapshot_id, match_id, side, team_code, team_name, source, source_url, status, updated_at,
+          avg_height_cm, avg_age, avg_caps, top_tier_share, gk_score, df_score, mf_score, fw_score,
+          market_value_status, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        params: [
+          snapshotId,
+          match.id,
+          side,
+          textOrNull(profile.teamCode || (side === "home" ? match.home : match.away)),
+          textOrNull(profile.teamZh || profile.team || (side === "home" ? match.homeName : match.awayName)),
+          textOrNull(profile.source),
+          textOrNull(profile.sourceUrl),
+          textOrNull(profile.status),
+          textOrNull(profile.updatedAt),
+          numberOrNull(all.avgHeightCm),
+          numberOrNull(all.avgAge),
+          numberOrNull(all.avgCaps),
+          numberOrNull(all.topTierShare),
+          numberOrNull(lineScore(groups.GK, { height: 0.35, caps: 0.3, tier: 0.35 })),
+          numberOrNull(lineScore(groups.DF, { height: 0.25, caps: 0.25, tier: 0.5 })),
+          numberOrNull(lineScore(groups.MF, { height: 0.12, caps: 0.28, tier: 0.6 })),
+          numberOrNull(lineScore(groups.FW, { height: 0.15, caps: 0.25, tier: 0.6 })),
+          textOrNull(profile.marketValue?.status),
+          json(profile)
+        ]
+      });
+    }
+
+    const humanMatchup = match.humanMatchup || {};
+    operations.push({
+      sql:
+      `INSERT OR REPLACE INTO human_matchup_snapshots
+       (snapshot_id, match_id, source, source_url, status, updated_at, summary, ai_source, ai_summary, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      params: [
+        snapshotId,
+        match.id,
+        textOrNull(humanMatchup.source),
+        textOrNull(humanMatchup.sourceUrl),
+        textOrNull(humanMatchup.status),
+        textOrNull(humanMatchup.updatedAt),
+        textOrNull(humanMatchup.summary),
+        textOrNull(humanMatchup.aiRead?.source),
+        textOrNull(humanMatchup.aiRead?.summary),
+        json(humanMatchup)
+      ]
+    });
 
     for (const rec of match.recommendations || []) {
       pushMarketSnapshotOps(operations, snapshotId, match.id, rec);

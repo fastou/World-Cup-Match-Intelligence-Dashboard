@@ -7,6 +7,7 @@
     "start": "node server.js",
     "update:data": "node scripts/update-dashboard-data.js",
     "sync:context": "node scripts/sync-worldcup-context.js",
+    "sync:squad-profiles": "node scripts/sync-squad-profiles.js",
     "archive:dashboard": "node scripts/archive-dashboard.js",
     "record:result": "node scripts/record-match-result.js",
     "validate:skills": "node scripts/validate-skills.js"

@@ -110,6 +110,12 @@ Sync public match context:
 npm run sync:context
 ```
 
+Sync squad physical and line-profile context:
+
+```bash
+npm run sync:squad-profiles
+```
+
 Archive the current dashboard snapshot into SQLite:
 
 ```bash
