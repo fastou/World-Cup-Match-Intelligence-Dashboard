@@ -87,6 +87,47 @@
         gap: 10px;
       }
 
+      .opportunity-button {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 40px;
+        padding: 0 11px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 760;
+      }
+
+      .opportunity-button.live {
+        border-color: rgba(20, 125, 100, 0.45);
+        background: #e8f2ee;
+        color: var(--green);
+      }
+
+      .opportunity-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--green);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .opportunity-button.empty .opportunity-count {
+        background: #c4ccc7;
+      }
+
       .language-toggle {
         display: inline-flex;
         align-items: center;
@@ -128,6 +169,138 @@
 
       .icon-button:hover {
         border-color: #9fb0a8;
+      }
+
+      .opportunity-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: none;
+        align-items: flex-start;
+        justify-content: flex-end;
+        padding: 78px 28px 28px;
+        background: rgba(20, 28, 24, 0.32);
+      }
+
+      .opportunity-modal.open {
+        display: flex;
+      }
+
+      .opportunity-dialog {
+        width: min(560px, 100%);
+        max-height: calc(100vh - 110px);
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: 0 24px 70px rgba(20, 28, 24, 0.22);
+      }
+
+      .opportunity-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .opportunity-head h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .opportunity-body {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+      }
+
+      .opportunity-card {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .opportunity-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .opportunity-title {
+        font-size: 15px;
+        font-weight: 850;
+        line-height: 1.3;
+      }
+
+      .opportunity-summary {
+        margin-top: 6px;
+        color: var(--ink);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .opportunity-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .opportunity-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 7px;
+        border-radius: 6px;
+        background: #edf0ef;
+        color: #59645f;
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .opportunity-chip.good {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .opportunity-chip.warn {
+        background: #f7ead1;
+        color: #8a5a0a;
+      }
+
+      .opportunity-section {
+        margin-top: 10px;
+      }
+
+      .opportunity-section strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+      }
+
+      .opportunity-section ul {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding-left: 17px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .opportunity-empty {
+        padding: 20px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
       }
 
       .content {
@@ -1531,6 +1704,19 @@
           padding: 16px;
         }
 
+        .actions {
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+
+        .opportunity-button span:not(.opportunity-count) {
+          display: none;
+        }
+
+        .opportunity-modal {
+          padding: 70px 14px 14px;
+        }
+
         .content {
           padding: 16px;
         }
@@ -1584,6 +1770,10 @@
             <button type="button" data-lang="zh">中文</button>
             <button type="button" data-lang="en">EN</button>
           </div>
+          <button class="opportunity-button empty" id="opportunityButton" title="AI 机会雷达" aria-label="AI 机会雷达">
+            <span id="opportunityLabel">机会雷达</span>
+            <strong class="opportunity-count" id="opportunityCount">0</strong>
+          </button>
           <button class="icon-button" id="refresh" title="刷新数据" aria-label="刷新数据">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1631,6 +1821,25 @@
       </main>
     </div>
 
+    <div class="opportunity-modal" id="opportunityModal" aria-hidden="true">
+      <div class="opportunity-dialog" role="dialog" aria-modal="true" aria-labelledby="opportunityTitle">
+        <div class="opportunity-head">
+          <div>
+            <h2 id="opportunityTitle">AI 机会雷达</h2>
+            <div class="confidence-note" id="opportunityMeta">每小时扫描一次</div>
+          </div>
+          <button class="icon-button" id="opportunityClose" title="关闭" aria-label="关闭">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <div class="opportunity-body" id="opportunityList">
+          <div class="opportunity-empty">等待服务器扫描。</div>
+        </div>
+      </div>
+    </div>
+
     <script>
       const APP_LABELS = {
         zh: {
@@ -1642,6 +1851,10 @@
           marketsTitle: "世界杯市场池",
           eliteTitle: "足球表现 Top 100",
           methodTitle: "研究方法",
+          opportunityLabel: "机会雷达",
+          opportunityTitle: "AI 机会雷达",
+          opportunityMetaEmpty: "每小时扫描一次；只展示未过期机会。",
+          opportunityEmpty: "当前没有达到纪律要求的机会。等待下一轮扫描。",
           methodItems: [
             ["概率差", "模型概率与公开价格差异超过阈值时标记"],
             ["置信度", "阵容、伤停、天气和新闻越完整，信号越可靠"],
@@ -1659,6 +1872,10 @@
           marketsTitle: "World Cup Market Pool",
           eliteTitle: "Football Performance Top 100",
           methodTitle: "Research Method",
+          opportunityLabel: "Radar",
+          opportunityTitle: "AI Opportunity Radar",
+          opportunityMetaEmpty: "Scans hourly; only active items are shown.",
+          opportunityEmpty: "No disciplined opportunity is active right now. Waiting for the next scan.",
           methodItems: [
             ["Probability Gap", "Flag outcomes when model probability differs from public prices."],
             ["Confidence", "Lineups, injuries, weather, and news improve signal reliability."],
@@ -1685,6 +1902,18 @@
         "世界杯市场池": "World Cup Market Pool",
         "足球表现 Top 100": "Football Performance Top 100",
         "研究方法": "Research Method",
+        "机会雷达": "Radar",
+        "AI 机会雷达": "AI Opportunity Radar",
+        "每小时扫描一次": "Scans hourly",
+        "等待服务器扫描。": "Waiting for server scan.",
+        "当前没有达到纪律要求的机会。等待下一轮扫描。": "No disciplined opportunity is active right now. Waiting for the next scan.",
+        "研究辅助提醒，不自动下单，不承诺收益。": "Research alert only. No automated execution or guaranteed outcome.",
+        "买价纪律": "Entry discipline",
+        "理由": "Reasons",
+        "风险": "Risks",
+        "过期": "Expires",
+        "扫描日期": "Scan date",
+        "关闭": "Close",
         "刷新数据": "Refresh data",
         "正常": "OK",
         "失败": "Failed",
@@ -1891,6 +2120,7 @@
 
       let currentLang = localStorage.getItem("worldcup-dashboard-lang") || "zh";
       let currentDashboard = null;
+      let currentOpportunities = { meta: {}, items: [] };
 
       function translateText(text) {
         if (currentLang !== "en" || !text) return text;
@@ -1915,14 +2145,22 @@
         document.getElementById("marketsTitle").textContent = labels.marketsTitle;
         document.getElementById("eliteTitle").textContent = labels.eliteTitle;
         document.getElementById("methodTitle").textContent = labels.methodTitle;
+        document.getElementById("opportunityLabel").textContent = labels.opportunityLabel;
+        document.getElementById("opportunityTitle").textContent = labels.opportunityTitle;
         document.getElementById("methodList").innerHTML = labels.methodItems.map(([title, body]) => `<li><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></li>`).join("");
         document.getElementById("methodNote").textContent = labels.methodNote;
         const refresh = document.getElementById("refresh");
         refresh.title = labels.refreshTitle;
         refresh.setAttribute("aria-label", labels.refreshTitle);
+        const opportunityButton = document.getElementById("opportunityButton");
+        opportunityButton.title = labels.opportunityTitle;
+        opportunityButton.setAttribute("aria-label", labels.opportunityTitle);
+        document.getElementById("opportunityClose").title = currentLang === "en" ? "Close" : "关闭";
+        document.getElementById("opportunityClose").setAttribute("aria-label", currentLang === "en" ? "Close" : "关闭");
         document.querySelectorAll("[data-lang]").forEach((button) => {
           button.classList.toggle("active", button.dataset.lang === currentLang);
         });
+        renderOpportunities(currentOpportunities);
       }
 
       function translateRenderedContent(scope = document) {
@@ -1961,6 +2199,11 @@
       const fmtPrice = (value) => {
         if (typeof value !== "number") return "-";
         return value.toFixed(2);
+      };
+
+      const fmtEdge = (value) => {
+        if (typeof value !== "number") return "-";
+        return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
       };
 
       function formatWorldRanking(team) {
@@ -2336,6 +2579,121 @@
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
+
+      function basePath() {
+        return window.location.pathname.endsWith("/")
+          ? window.location.pathname
+          : window.location.pathname.replace(/\/[^/]*$/, "/");
+      }
+
+      function activeOpportunities(payload) {
+        const now = Date.now();
+        return (payload?.items || []).filter((item) => {
+          const expiresAt = Date.parse(item.expiresAt || "");
+          return !Number.isFinite(expiresAt) || expiresAt > now;
+        });
+      }
+
+      function opportunityActionLabel(action) {
+        const labels = {
+          watch: currentLang === "en" ? "Watch" : "观察",
+          wait: currentLang === "en" ? "Wait" : "等待",
+          avoid: currentLang === "en" ? "Avoid" : "回避"
+        };
+        return labels[action] || labels.watch;
+      }
+
+      function opportunityConfidenceLabel(confidence) {
+        const labels = {
+          high: currentLang === "en" ? "High confidence" : "高置信",
+          medium: currentLang === "en" ? "Medium confidence" : "中置信",
+          low: currentLang === "en" ? "Low confidence" : "低置信"
+        };
+        return labels[confidence] || labels.low;
+      }
+
+      function renderOpportunities(payload = currentOpportunities) {
+        currentOpportunities = payload || { meta: {}, items: [] };
+        const labels = APP_LABELS[currentLang];
+        const items = activeOpportunities(currentOpportunities);
+        const button = document.getElementById("opportunityButton");
+        const count = document.getElementById("opportunityCount");
+        const list = document.getElementById("opportunityList");
+        const meta = document.getElementById("opportunityMeta");
+        if (!button || !count || !list || !meta) return;
+
+        button.classList.toggle("live", items.length > 0);
+        button.classList.toggle("empty", items.length === 0);
+        count.textContent = String(items.length);
+        const scanDate = currentOpportunities.meta?.scanDate ? `${currentLang === "en" ? "Scan date" : "扫描日期"} ${currentOpportunities.meta.scanDate}` : "";
+        meta.textContent = [
+          scanDate,
+          currentOpportunities.meta?.nextRefreshAt ? `${currentLang === "en" ? "Next" : "下次"} ${fmtTime(currentOpportunities.meta.nextRefreshAt)}` : labels.opportunityMetaEmpty,
+          currentOpportunities.meta?.backgroundRefresh ? (currentLang === "en" ? "refreshing" : "刷新中") : ""
+        ].filter(Boolean).join(" · ");
+
+        if (!items.length) {
+          list.innerHTML = `<div class="opportunity-empty">${escapeHtml(labels.opportunityEmpty)}<div class="confidence-note">${escapeHtml(currentOpportunities.meta?.disclaimer || "研究辅助提醒，不自动下单，不承诺收益。")}</div></div>`;
+          translateRenderedContent(list);
+          return;
+        }
+
+        list.innerHTML = items.map((item) => `
+          <article class="opportunity-card">
+            <div class="opportunity-card-head">
+              <div>
+                <div class="opportunity-title">${escapeHtml(item.title || `${item.matchName} · ${item.name}`)}</div>
+                <div class="confidence-note">${escapeHtml(item.marketTypeLabel || "")} · ${escapeHtml(fmtTime(item.kickoffShanghai))}</div>
+              </div>
+              <span class="opportunity-chip ${item.action === "watch" ? "good" : "warn"}">${escapeHtml(opportunityActionLabel(item.action))}</span>
+            </div>
+            <div class="opportunity-summary">${escapeHtml(item.summary || "")}</div>
+            <div class="opportunity-meta">
+              <span class="opportunity-chip good">${escapeHtml(opportunityConfidenceLabel(item.confidence))}</span>
+              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Price" : "价格")} ${escapeHtml(fmtPrice(item.marketPrice))}</span>
+              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(item.maxBuyPrice))}</span>
+              <span class="opportunity-chip">${escapeHtml("Edge")} ${escapeHtml(fmtEdge(item.edge))}</span>
+              <span class="opportunity-chip">${escapeHtml(item.source || "-")}</span>
+              <span class="opportunity-chip warn">${escapeHtml(currentLang === "en" ? "Expires" : "过期")} ${escapeHtml(fmtTime(item.expiresAt))}</span>
+            </div>
+            <div class="opportunity-section">
+              <strong>${escapeHtml(currentLang === "en" ? "Entry discipline" : "买价纪律")}</strong>
+              <div class="confidence-note">${escapeHtml(item.entryText || "")}</div>
+            </div>
+            <div class="opportunity-section">
+              <strong>${escapeHtml(currentLang === "en" ? "Reasons" : "理由")}</strong>
+              <ul>${(item.reasons || []).slice(0, 5).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+            </div>
+            <div class="opportunity-section">
+              <strong>${escapeHtml(currentLang === "en" ? "Risks" : "风险")}</strong>
+              <ul>${(item.risks || []).slice(0, 5).map((risk) => `<li>${escapeHtml(risk)}</li>`).join("")}</ul>
+            </div>
+          </article>
+        `).join("");
+        translateRenderedContent(list);
+      }
+
+      async function loadOpportunities(force = false) {
+        if (window.location.protocol === "file:") return;
+        try {
+          const params = new URLSearchParams();
+          if (force) params.set("force", "1");
+          const query = params.toString();
+          const response = await fetch(`${basePath()}api/opportunities${query ? `?${query}` : ""}`, { cache: "no-store" });
+          const data = await response.json();
+          renderOpportunities(data);
+        } catch (error) {
+          currentOpportunities = {
+            meta: {
+              ok: false,
+              error: error.message,
+              disclaimer: currentLang === "en" ? "Opportunity radar is temporarily unavailable." : "机会雷达暂时不可用。"
+            },
+            items: []
+          };
+          renderOpportunities(currentOpportunities);
+        }
+      }
 
       function renderSources(sources) {
         const root = document.getElementById("sources");
@@ -3252,15 +3610,12 @@
           if (window.location.protocol === "file:") {
             throw new Error("当前是 file:// 打开的静态文件，请通过 Node 服务或远端 /worldcup/ 访问页面，否则 API 数据无法加载。");
           }
-          const basePath = window.location.pathname.endsWith("/")
-            ? window.location.pathname
-            : window.location.pathname.replace(/\/[^/]*$/, "/");
           const params = new URLSearchParams({
             light: "1",
             skipHistory: "1"
           });
           if (force) params.set("force", "1");
-          const apiPath = `${basePath}api/dashboard?${params.toString()}`;
+          const apiPath = `${basePath()}api/dashboard?${params.toString()}`;
           const response = await fetch(apiPath, { cache: "no-store" });
           const data = await response.json();
           window.dashboardResearchFramework = data.researchFramework || {};
@@ -3276,10 +3631,37 @@
       document.querySelectorAll("[data-lang]").forEach((button) => {
         button.addEventListener("click", () => setLanguage(button.dataset.lang));
       });
-      document.getElementById("refresh").addEventListener("click", () => loadDashboard(true));
+      document.getElementById("refresh").addEventListener("click", () => {
+        loadDashboard(true);
+        loadOpportunities(true);
+      });
+      document.getElementById("opportunityButton").addEventListener("click", () => {
+        const modal = document.getElementById("opportunityModal");
+        modal.classList.add("open");
+        modal.setAttribute("aria-hidden", "false");
+      });
+      document.getElementById("opportunityClose").addEventListener("click", () => {
+        const modal = document.getElementById("opportunityModal");
+        modal.classList.remove("open");
+        modal.setAttribute("aria-hidden", "true");
+      });
+      document.getElementById("opportunityModal").addEventListener("click", (event) => {
+        if (event.target.id !== "opportunityModal") return;
+        event.currentTarget.classList.remove("open");
+        event.currentTarget.setAttribute("aria-hidden", "true");
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        const modal = document.getElementById("opportunityModal");
+        modal.classList.remove("open");
+        modal.setAttribute("aria-hidden", "true");
+      });
       applyLanguageStatic();
       loadDashboard();
+      loadOpportunities();
       setInterval(() => loadDashboard(true), 5 * 60 * 1000);
+      setInterval(() => loadOpportunities(false), 5 * 60 * 1000);
+      setInterval(() => renderOpportunities(currentOpportunities), 60 * 1000);
     </script>
   </body>
 </html>

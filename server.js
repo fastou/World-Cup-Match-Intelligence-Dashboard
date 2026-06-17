@@ -14,6 +14,7 @@ const SQUAD_PROFILES_PATH = path.join(ROOT, "data", "squad-profiles.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
+const OPPORTUNITY_CACHE_PATH = path.join(ROOT, "data", "worldcup-opportunity-cache.json");
 const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
@@ -24,6 +25,9 @@ const FETCH_TIMEOUT_MS = 6500;
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 4000);
 const AI_TRADE_PLAN_ENABLED = process.env.AI_TRADE_PLAN_ENABLED !== "0";
+const OPPORTUNITY_REFRESH_MS = Number(process.env.OPPORTUNITY_REFRESH_MS || 60 * 60 * 1000);
+const OPPORTUNITY_AI_TIMEOUT_MS = Number(process.env.OPPORTUNITY_AI_TIMEOUT_MS || 25000);
+const OPPORTUNITY_MAX_ITEMS = Number(process.env.OPPORTUNITY_MAX_ITEMS || 8);
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
@@ -111,6 +115,8 @@ let dashboardCacheAt = 0;
 let lightDashboardCache = null;
 let lightDashboardCacheAt = 0;
 let backgroundRefreshPromise = null;
+let opportunityCache = null;
+let opportunityRefreshPromise = null;
 let eliteLeaderboardCache = null;
 let eliteLeaderboardCacheAt = 0;
 let envFileCache = null;
@@ -497,6 +503,11 @@ function shanghaiDateKey(date = new Date()) {
     return acc;
   }, {});
   return `${parts.year}${parts.month}${parts.day}`;
+}
+
+function shanghaiDateDashed(date = new Date()) {
+  const key = shanghaiDateKey(date);
+  return key ? `${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}` : "";
 }
 
 function addDays(date, days) {
@@ -1185,6 +1196,283 @@ function topRiskNotes(match, primary) {
   notes.push(...contextRisks.slice(0, 2));
   if (!notes.length) notes.push("按价格纪律执行；超过建议价不追。");
   return [...new Set(notes)].slice(0, 4);
+}
+
+function recommendationSourceText(rec) {
+  return rec.chart?.source || rec.source || "";
+}
+
+function opportunityExpiryForMatch(match) {
+  const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
+  if (!kickoffMs) return new Date(Date.now() + OPPORTUNITY_REFRESH_MS).toISOString();
+  return new Date(kickoffMs + 90 * 60 * 1000).toISOString();
+}
+
+function opportunityScanDate(matches, now = new Date()) {
+  const today = shanghaiDateDashed(now);
+  const futureMatches = (matches || [])
+    .filter((match) => !isFinishedStatus(match.scheduleStatus))
+    .filter((match) => {
+      const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
+      return kickoffMs && kickoffMs > Date.now() - MATCH_LIVE_GRACE_HOURS * 60 * 60 * 1000;
+    })
+    .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
+  const todayMatches = futureMatches.filter((match) => shanghaiDateDashed(new Date(match.kickoffShanghai || match.kickoffLocal)) === today);
+  if (todayMatches.length) return today;
+  const next = futureMatches[0];
+  return next ? shanghaiDateDashed(new Date(next.kickoffShanghai || next.kickoffLocal)) : today;
+}
+
+function opportunityCandidateRows(matches, scanDate) {
+  const rows = [];
+  for (const match of matches || []) {
+    const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
+    if (!kickoffMs) continue;
+    if (shanghaiDateDashed(new Date(match.kickoffShanghai || match.kickoffLocal)) !== scanDate) continue;
+    if (isFinishedStatus(match.scheduleStatus)) continue;
+    if (kickoffMs < Date.now() - MATCH_LIVE_GRACE_HOURS * 60 * 60 * 1000) continue;
+    for (const rec of match.recommendations || []) {
+      const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
+      const hasPrice = typeof rec.marketPrice === "number";
+      const decisionAction = rec.decision?.action || "";
+      if (!hasPrice || typeof rec.edge !== "number") continue;
+      if (!["BUY", "BUY_SMALL", "WATCH"].includes(decisionAction)) continue;
+      if (rec.edge < 0.025) continue;
+      if (!hasLiveChart && !match.tradingGate?.allowPriceAdvice) continue;
+      rows.push({
+        match,
+        rec,
+        hasLiveChart,
+        score: tradableRecommendationScore(rec) + (hasLiveChart ? 0.01 : 0) + (match.tradingGate?.allowStrongTrade ? 0.012 : 0)
+      });
+    }
+  }
+  return rows.sort((a, b) => b.score - a.score);
+}
+
+function buildRuleOpportunity(row, index) {
+  const { match, rec, hasLiveChart, score } = row;
+  const expiresAt = opportunityExpiryForMatch(match);
+  const confidence = match.tradingGate?.allowStrongTrade && hasLiveChart
+    ? "high"
+    : hasLiveChart
+      ? "medium"
+      : "low";
+  const action = rec.decision?.action === "BUY" || rec.decision?.action === "BUY_SMALL" ? "watch" : "wait";
+  const source = recommendationSourceText(rec);
+  const reasons = [
+    `模型概率 ${formatPercent(rec.modelProbability)}，当前价格 ${formatCents(rec.marketPrice)}，edge ${formatPercent(rec.edge)}。`,
+    `建议价不高于 ${formatCents(rec.maxBuyPrice)}；超过上限不追。`,
+    hasLiveChart ? "已匹配 Polymarket 实时历史曲线。" : "实时曲线不足，先观察价格。",
+    rec.eliteSummary?.count ? `足球 Top100 公开持仓命中 ${rec.eliteSummary.count} 人。` : "",
+    rec.holderSummary?.count ? `公开持仓 ${rec.holderSummary.count} 人，Top holder ${rec.holderSummary.topHolder || "-"}。` : ""
+  ].filter(Boolean);
+  return {
+    id: `${match.id}:${rec.key}:${Math.round((rec.marketPrice || 0) * 1000)}:${index}`,
+    matchId: match.id,
+    matchName: `${match.homeName} vs ${match.awayName}`,
+    kickoffShanghai: match.kickoffShanghai,
+    marketKey: rec.key,
+    marketType: rec.marketType,
+    marketTypeLabel: rec.marketTypeLabel,
+    name: rec.name,
+    action,
+    confidence,
+    stake: match.tradingGate?.allowStrongTrade ? rec.decision?.stake || "small" : "small-watch",
+    modelProbability: rec.modelProbability,
+    marketPrice: rec.marketPrice,
+    edge: rec.edge,
+    maxBuyPrice: rec.maxBuyPrice,
+    source,
+    score: roundTo(score, 4),
+    title: `${match.homeName} vs ${match.awayName} · ${rec.name}`,
+    summary: `${rec.name} ${formatCents(rec.marketPrice)} 附近观察，建议价不高于 ${formatCents(rec.maxBuyPrice)}。`,
+    entryText: `只在 ${formatCents(rec.maxBuyPrice)} 或以下考虑；首发/伤停/价格跳动后重新评估。`,
+    reasons: reasons.slice(0, 5),
+    risks: topRiskNotes(match, rec),
+    expiresAt,
+    createdAt: new Date().toISOString(),
+    status: Date.parse(expiresAt) > Date.now() ? "active" : "expired"
+  };
+}
+
+function normalizeAiOpportunity(raw, fallback, model) {
+  if (!raw || typeof raw !== "object") return fallback;
+  return {
+    ...fallback,
+    source: fallback.source || "Polymarket",
+    aiSource: "openai",
+    model,
+    action: ["watch", "wait", "avoid"].includes(raw.action) ? raw.action : fallback.action,
+    confidence: ["low", "medium", "high"].includes(raw.confidence) ? raw.confidence : fallback.confidence,
+    title: String(raw.title || fallback.title || "").slice(0, 100),
+    summary: String(raw.summary || fallback.summary || "").slice(0, 240),
+    entryText: String(raw.entryText || fallback.entryText || "").slice(0, 200),
+    reasons: Array.isArray(raw.reasons)
+      ? raw.reasons.map((item) => String(item).slice(0, 180)).filter(Boolean).slice(0, 5)
+      : fallback.reasons,
+    risks: Array.isArray(raw.risks)
+      ? raw.risks.map((item) => String(item).slice(0, 180)).filter(Boolean).slice(0, 5)
+      : fallback.risks
+  };
+}
+
+async function enhanceOpportunitiesWithAi(opportunities, matches) {
+  if (!AI_TRADE_PLAN_ENABLED || !opportunities.length) return opportunities;
+  const config = await getOpenAiConfig();
+  if (!config.apiKey) return opportunities;
+  const byId = new Map(opportunities.map((item) => [item.id, item]));
+  const matchById = new Map((matches || []).map((match) => [match.id, match]));
+  const prompt = {
+    task: "为世界杯机会雷达生成中文提醒。只基于给定模型、盘口、曲线、数据完整度和持仓信息；这是研究提醒，不是自动下单，不承诺收益。",
+    output: "返回 JSON：{opportunities:[{id,title,action,confidence,summary,entryText,reasons:[...],risks:[...]}]}",
+    rules: [
+      "action 只能是 watch/wait/avoid；不要写强买入、重仓、梭哈、稳赚。",
+      "如果数据闸门限制或曲线不足，必须写观察/等待。",
+      "entryText 必须给价格纪律：不高于建议价，超过等待。",
+      "理由只引用输入里的数字和事实，不要编造首发、伤停或外部消息。",
+      "每条 summary 保持一行短结论。"
+    ],
+    opportunities: opportunities.map((item) => {
+      const match = matchById.get(item.matchId) || {};
+      return {
+        id: item.id,
+        matchup: item.matchName,
+        kickoffShanghai: item.kickoffShanghai,
+        market: item.name,
+        marketType: item.marketTypeLabel,
+        modelProbability: item.modelProbability,
+        marketPrice: item.marketPrice,
+        edge: item.edge,
+        maxBuyPrice: item.maxBuyPrice,
+        source: item.source,
+        confidence: item.confidence,
+        tradingGate: match.tradingGate,
+        aiPrediction: match.aiPrediction,
+        topScores: (match.probabilities?.topScores || []).slice(0, 4),
+        contextRisks: match.context?.riskFlags || [],
+        reasons: item.reasons,
+        risks: item.risks
+      };
+    })
+  };
+  const result = await withTimeout(timedFetchJson(openAiEndpoint(config), {
+    method: "POST",
+    timeoutMs: OPPORTUNITY_AI_TIMEOUT_MS,
+    headers: {
+      "authorization": `Bearer ${config.apiKey}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_output_tokens: 1800,
+      reasoning: { effort: "none" },
+      input: [
+        {
+          role: "system",
+          content: "你只输出 JSON，不输出 Markdown。你是谨慎的足球研究提醒助手。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify(prompt)
+        }
+      ]
+    })
+  }), OPPORTUNITY_AI_TIMEOUT_MS + 500, "AI opportunity scan");
+  if (!result.ok) {
+    console.error(`AI opportunity scan unavailable: ${result.error}`);
+    return opportunities;
+  }
+  const parsed = safeJsonFromText(extractOpenAiText(result.data));
+  const aiItems = Array.isArray(parsed?.opportunities) ? parsed.opportunities : [];
+  for (const item of aiItems) {
+    const id = String(item.id || "");
+    if (!byId.has(id)) continue;
+    byId.set(id, normalizeAiOpportunity(item, byId.get(id), config.model));
+  }
+  return opportunities.map((item) => byId.get(item.id) || item);
+}
+
+async function buildOpportunityRadar({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && opportunityCache && now - (Date.parse(opportunityCache.meta?.generatedAt || "") || 0) < OPPORTUNITY_REFRESH_MS) {
+    return opportunityCache;
+  }
+  if (!force) {
+    const persisted = await readOptionalJson(OPPORTUNITY_CACHE_PATH, null);
+    const generatedAt = Date.parse(persisted?.meta?.generatedAt || "") || 0;
+    if (persisted?.meta && now - generatedAt < OPPORTUNITY_REFRESH_MS) {
+      opportunityCache = persisted;
+      return opportunityCache;
+    }
+  }
+  const dashboard = await buildDashboard({
+    force,
+    recordHistory: false,
+    includeElite: true,
+    includeOpenAi: false,
+    light: true
+  });
+  const scanDate = opportunityScanDate(dashboard.matches || []);
+  const candidates = opportunityCandidateRows(dashboard.matches || [], scanDate).slice(0, OPPORTUNITY_MAX_ITEMS);
+  const ruleItems = candidates.map(buildRuleOpportunity);
+  const items = await enhanceOpportunitiesWithAi(ruleItems, dashboard.matches || []);
+  const activeItems = items
+    .filter((item) => Date.parse(item.expiresAt || "") > Date.now())
+    .slice(0, OPPORTUNITY_MAX_ITEMS);
+  const payload = {
+    meta: {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      refreshMs: OPPORTUNITY_REFRESH_MS,
+      scanDate,
+      nextRefreshAt: new Date(Date.now() + OPPORTUNITY_REFRESH_MS).toISOString(),
+      source: "AI opportunity radar",
+      disclaimer: "研究辅助提醒，不自动下单，不承诺收益。"
+    },
+    items: activeItems
+  };
+  opportunityCache = payload;
+  writeJsonAtomic(OPPORTUNITY_CACHE_PATH, payload).catch((error) => {
+    console.error(`Failed to persist opportunity cache: ${error.message}`);
+  });
+  return payload;
+}
+
+async function getOpportunityCache() {
+  if (opportunityCache) return opportunityCache;
+  const persisted = await readOptionalJson(OPPORTUNITY_CACHE_PATH, null);
+  if (persisted?.meta) opportunityCache = persisted;
+  return opportunityCache;
+}
+
+function pendingOpportunityPayload() {
+  return {
+    meta: {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      refreshMs: OPPORTUNITY_REFRESH_MS,
+      scanDate: shanghaiDateDashed(),
+      nextRefreshAt: new Date(Date.now() + OPPORTUNITY_REFRESH_MS).toISOString(),
+      source: "AI opportunity radar",
+      backgroundRefresh: true,
+      disclaimer: "研究辅助提醒，不自动下单，不承诺收益。",
+      status: "scanning"
+    },
+    items: []
+  };
+}
+
+function scheduleOpportunityRefresh({ force = true } = {}) {
+  if (opportunityRefreshPromise) return opportunityRefreshPromise;
+  opportunityRefreshPromise = buildOpportunityRadar({ force: true })
+    .catch((error) => {
+      console.error(`Opportunity radar refresh failed: ${error.message}`);
+    })
+    .finally(() => {
+      opportunityRefreshPromise = null;
+    });
+  return opportunityRefreshPromise;
 }
 
 function buildRuleTradePlan(match) {
@@ -4642,6 +4930,26 @@ const server = http.createServer(async (req, res) => {
       }));
       return;
     }
+    if (pathname === "/api/opportunities") {
+      const force = url.searchParams.get("force") === "1";
+      let payload = await getOpportunityCache();
+      if (force || !payload) {
+        scheduleOpportunityRefresh({ force: true });
+      }
+      if (!payload) payload = pendingOpportunityPayload();
+      const generatedAt = Date.parse(payload.meta?.generatedAt || "") || 0;
+      const staleMs = Date.now() - generatedAt;
+      if (!force && staleMs > OPPORTUNITY_REFRESH_MS) scheduleOpportunityRefresh();
+      jsonResponse(res, 200, {
+        ...payload,
+        meta: {
+          ...(payload.meta || {}),
+          backgroundRefresh: Boolean(opportunityRefreshPromise),
+          cacheAgeSeconds: generatedAt ? Math.max(0, Math.round(staleMs / 1000)) : null
+        }
+      });
+      return;
+    }
     if (pathname === "/api/health") {
       jsonResponse(res, 200, { ok: true, now: new Date().toISOString() });
       return;
@@ -4659,6 +4967,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`World Cup Polymarket dashboard running at http://localhost:${PORT}${BASE_PATH || "/"}`);
 });
+
+setTimeout(scheduleOpportunityRefresh, 60 * 1000);
+setInterval(scheduleOpportunityRefresh, OPPORTUNITY_REFRESH_MS);
 
 function stripBasePath(pathname) {
   if (!BASE_PATH) return pathname;
