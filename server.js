@@ -1985,10 +1985,11 @@ function findChartToken(match, recommendation, tokens) {
       }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && (token.labelText.includes("draw") || token.labelText.includes("平"))) || null;
     }
     const teamAliases = recommendation.key === "home" ? homeAliases : awayAliases;
-    return sameMatchTokens.find((token) => {
-      const text = `${token.marketQuestionText} ${token.labelText}`;
-      return !isSpreadOrTotalToken(token) && teamAliases.some((team) => token.marketQuestionText.includes(team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
-    }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && aliasesMatchText(teamAliases, token.labelText)) || null;
+    return sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && aliasesMatchText(teamAliases, token.labelText))
+      || sameMatchTokens.find((token) => {
+        const text = `${token.marketQuestionText} ${token.labelText}`;
+        return !isSpreadOrTotalToken(token) && teamAliases.some((team) => token.marketQuestionText.includes(team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
+      }) || null;
   }
 
   if (recommendation.marketType === "total") {
@@ -2086,7 +2087,8 @@ function teamNameVariants(teamCode, displayName) {
     URU: ["uruguay"],
     IRN: ["iran"],
     NZL: ["new zealand"],
-    COD: ["congo dr", "dr congo", "congo", "drc", "democratic republic of congo"]
+    POR: ["portugal", "prt"],
+    COD: ["congo dr", "dr congo", "congo", "drc", "cdr", "democratic republic of congo", "democratic republic congo", "刚果（金）", "刚果金"]
   }[teamCode] || [];
   return [...new Set([...base, ...extra].filter(Boolean))];
 }
@@ -2919,15 +2921,15 @@ function buildPolymarketSearches(schedule = null) {
     .map((event) => {
       const homeName = eventTeamSearchName(event, "home");
       const awayName = eventTeamSearchName(event, "away");
-      const homeNeedle = homeName.toLowerCase();
-      const awayNeedle = awayName.toLowerCase();
+      const homeNeedle = teamNeedleGroup(event, "home");
+      const awayNeedle = teamNeedleGroup(event, "away");
       return {
         label: `${homeName} vs ${awayName}`,
         q: `${homeName} ${awayName}`,
         teamNeedles: [homeNeedle, awayNeedle]
       };
     })
-    .filter((search) => search.teamNeedles.every((needle) => needle && needle !== "tbd"));
+    .filter((search) => search.teamNeedles.every((needle) => needle.length));
   const combined = [...WORLDCUP_MARKET_SEARCHES, ...scheduleSearches];
   const seen = new Set();
   return combined.filter((search) => {
@@ -2938,30 +2940,49 @@ function buildPolymarketSearches(schedule = null) {
   });
 }
 
+function teamNeedleGroup(event, side) {
+  const code = eventTeamCode(event, side);
+  const searchName = eventTeamSearchName(event, side);
+  return [
+    searchName,
+    event?.[side]?.name,
+    ...teamNameVariants(code, searchName),
+    ...polymarketTeamSlugCandidates(code)
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase().trim())
+    .filter((value) => value && value !== "tbd")
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
+
 function buildPolymarketEventSlugSearches(schedule = null) {
   const searches = [];
   for (const event of schedule?.matches || []) {
     if (event.completed || isFinishedStatus(event.status)) continue;
-    const homeCode = polymarketTeamSlug(eventTeamCode(event, "home"));
-    const awayCode = polymarketTeamSlug(eventTeamCode(event, "away"));
-    if (!homeCode || !awayCode || homeCode === "tbd" || awayCode === "tbd") continue;
+    const homeCodes = polymarketTeamSlugCandidates(eventTeamCode(event, "home"));
+    const awayCodes = polymarketTeamSlugCandidates(eventTeamCode(event, "away"));
+    if (!homeCodes.length || !awayCodes.length) continue;
     for (const dateKey of polymarketDateCandidates(event.kickoffUtc)) {
-      searches.push({
-        label: `${eventTeamSearchName(event, "home")} vs ${eventTeamSearchName(event, "away")} (${dateKey})`,
-        slug: `fifwc-${homeCode}-${awayCode}-${dateKey}`,
-        teamNeedles: [
-          eventTeamSearchName(event, "home").toLowerCase(),
-          eventTeamSearchName(event, "away").toLowerCase()
-        ]
-      });
-      searches.push({
-        label: `${eventTeamSearchName(event, "away")} vs ${eventTeamSearchName(event, "home")} (${dateKey})`,
-        slug: `fifwc-${awayCode}-${homeCode}-${dateKey}`,
-        teamNeedles: [
-          eventTeamSearchName(event, "away").toLowerCase(),
-          eventTeamSearchName(event, "home").toLowerCase()
-        ]
-      });
+      for (const homeCode of homeCodes) {
+        for (const awayCode of awayCodes) {
+          searches.push({
+            label: `${eventTeamSearchName(event, "home")} vs ${eventTeamSearchName(event, "away")} (${dateKey})`,
+            slug: `fifwc-${homeCode}-${awayCode}-${dateKey}`,
+            teamNeedles: [
+              eventTeamSearchName(event, "home").toLowerCase(),
+              eventTeamSearchName(event, "away").toLowerCase()
+            ]
+          });
+          searches.push({
+            label: `${eventTeamSearchName(event, "away")} vs ${eventTeamSearchName(event, "home")} (${dateKey})`,
+            slug: `fifwc-${awayCode}-${homeCode}-${dateKey}`,
+            teamNeedles: [
+              eventTeamSearchName(event, "away").toLowerCase(),
+              eventTeamSearchName(event, "home").toLowerCase()
+            ]
+          });
+        }
+      }
     }
   }
   const seen = new Set();
@@ -2973,11 +2994,18 @@ function buildPolymarketEventSlugSearches(schedule = null) {
 }
 
 function polymarketTeamSlug(code) {
+  return polymarketTeamSlugCandidates(code)[0] || "";
+}
+
+function polymarketTeamSlugCandidates(code) {
   const overrides = {
-    CPV: "cvi"
+    CPV: ["cvi", "cpv"],
+    POR: ["prt", "por"],
+    COD: ["cdr", "cod", "drc", "cgo"]
   };
   const normalized = String(code || "").trim().toUpperCase();
-  return overrides[normalized] || normalized.toLowerCase();
+  const values = overrides[normalized] || [normalized.toLowerCase()];
+  return values.filter(Boolean).filter((value) => value !== "tbd");
 }
 
 function polymarketDateCandidates(kickoffUtc) {
@@ -3119,7 +3147,7 @@ function extractSportsPageMarkets(html, eventSlug) {
   const text = String(html || "");
   if (!text || !eventSlug) return [];
   const marketObjects = [];
-  const slugPattern = new RegExp(`\\\"slug\\\":\\\"${escapeRegExp(eventSlug)}-(?:total-2pt5|spread-(?:home|away)-1pt5)\\\"`, "g");
+  const slugPattern = new RegExp(`\\\"slug\\\":\\\"${escapeRegExp(eventSlug)}(?:\\\"|-(?:draw|[a-z0-9]{2,4}|total-2pt5|spread-(?:home|away)-1pt5)\\\")`, "g");
   for (const match of text.matchAll(slugPattern)) {
     const start = findEmbeddedMarketStart(text, match.index || 0);
     if (start < 0) continue;
@@ -3174,7 +3202,7 @@ function parseEmbeddedMarketObject(text) {
     const market = JSON.parse(text);
     if (!market || typeof market !== "object") return null;
     const slug = String(market.slug || "");
-    if (!slug.includes("-total-2pt5") && !slug.includes("-spread-home-1pt5") && !slug.includes("-spread-away-1pt5")) return null;
+    if (!isSupportedSportsPageMarketSlug(slug)) return null;
     const outcomes = parseJsonField(market.outcomes);
     const outcomePrices = parseJsonField(market.outcomePrices);
     const clobTokenIds = parseJsonField(market.clobTokenIds);
@@ -3197,6 +3225,14 @@ function parseEmbeddedMarketObject(text) {
   } catch {
     return null;
   }
+}
+
+function isSupportedSportsPageMarketSlug(slug) {
+  const value = String(slug || "");
+  return /^fifwc-[a-z0-9-]+-\d{4}-\d{2}-\d{2}(?:-(?:draw|[a-z0-9]{2,4}))?$/.test(value)
+    || value.includes("-total-2pt5")
+    || value.includes("-spread-home-1pt5")
+    || value.includes("-spread-away-1pt5");
 }
 
 function escapeRegExp(value) {
@@ -3317,12 +3353,20 @@ function isRelevantPolymarketEvent(event, search) {
   if (!text) return false;
   if (NON_SOCCER_POSITION_KEYWORDS.some((keyword) => text.includes(keyword))) return false;
   if (search.teamNeedles) {
-    return search.teamNeedles.every((needle) => text.includes(needle));
+    return search.teamNeedles.every((needle) => needleMatchesText(needle, text));
   }
   if (search.worldCupOnly) {
     return (text.includes("world cup") || text.includes("fifa")) && (text.includes("soccer") || text.includes("fifa") || text.includes("world-cup"));
   }
   return true;
+}
+
+function needleMatchesText(needle, text) {
+  if (Array.isArray(needle)) {
+    return needle.some((item) => needleMatchesText(item, text));
+  }
+  const value = String(needle || "").toLowerCase().trim();
+  return Boolean(value) && text.includes(value);
 }
 
 function isWorldCupSoccerMarket(market) {
