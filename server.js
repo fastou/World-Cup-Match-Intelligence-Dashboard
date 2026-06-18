@@ -2905,9 +2905,9 @@ function findChartToken(match, recommendation, tokens) {
   const matchTokens = tokens.filter((token) => {
     const text = token.marketText;
     return tokenBelongsToMatch(token, homeAliases, awayAliases)
-      || homeAliases.some((alias) => text.includes(alias))
-      || awayAliases.some((alias) => text.includes(alias))
-      || aliases.some((alias) => alias && text.includes(alias));
+      || homeAliases.some((alias) => textContainsAlias(text, alias))
+      || awayAliases.some((alias) => textContainsAlias(text, alias))
+      || aliases.some((alias) => alias && textContainsAlias(text, alias));
   });
 
   if (!matchTokens.length) return null;
@@ -2923,7 +2923,7 @@ function findChartToken(match, recommendation, tokens) {
     return sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && aliasesMatchText(teamAliases, token.labelText))
       || sameMatchTokens.find((token) => {
         const text = `${token.marketQuestionText} ${token.labelText}`;
-        return !isSpreadOrTotalToken(token) && teamAliases.some((team) => token.marketQuestionText.includes(team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
+        return !isSpreadOrTotalToken(token) && teamAliases.some((team) => textContainsAlias(token.marketQuestionText, team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
       }) || null;
   }
 
@@ -2968,8 +2968,17 @@ function aliasesMatchText(aliases, text) {
   return (aliases || []).some((alias) => {
     const normalizedAlias = String(alias || "").toLowerCase().trim();
     if (!normalizedAlias) return false;
-    return normalizedText === normalizedAlias || normalizedText.includes(normalizedAlias);
+    return textContainsAlias(normalizedText, normalizedAlias);
   });
+}
+
+function textContainsAlias(normalizedText, normalizedAlias) {
+  if (!normalizedText || !normalizedAlias) return false;
+  if (normalizedText === normalizedAlias) return true;
+  if (normalizedAlias.length <= 3) {
+    return new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedAlias)}([^a-z0-9]|$)`, "i").test(normalizedText);
+  }
+  return normalizedText.includes(normalizedAlias);
 }
 
 function lineMatchesText(handicap, recommendationKey, text) {
@@ -2995,7 +3004,8 @@ function isSpreadOrTotalToken(token) {
 
 function tokenBelongsToMatch(token, homeAliases, awayAliases) {
   const text = token.marketText;
-  return homeAliases.some((alias) => text.includes(alias)) && awayAliases.some((alias) => text.includes(alias));
+  return homeAliases.some((alias) => textContainsAlias(text, String(alias || "").toLowerCase().trim()))
+    && awayAliases.some((alias) => textContainsAlias(text, String(alias || "").toLowerCase().trim()));
 }
 
 function teamNameVariants(teamCode, displayName) {
