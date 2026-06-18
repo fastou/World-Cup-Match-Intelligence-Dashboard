@@ -2,7 +2,7 @@ const http = require("http");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
-const { recordDashboardSnapshot, ensureHistorySchema, historyDbPath, runSql } = require("./scripts/history-store");
+const { recordDashboardSnapshot, recordMatchResult, ensureHistorySchema, historyDbPath, runSql } = require("./scripts/history-store");
 
 const PORT = Number(process.env.PORT || 4173);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || "");
@@ -29,6 +29,7 @@ const OPPORTUNITY_REFRESH_MS = Number(process.env.OPPORTUNITY_REFRESH_MS || 60 *
 const OPPORTUNITY_AI_TIMEOUT_MS = Number(process.env.OPPORTUNITY_AI_TIMEOUT_MS || 25000);
 const OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS = Number(process.env.OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS || 18000);
 const OPPORTUNITY_MAX_ITEMS = Number(process.env.OPPORTUNITY_MAX_ITEMS || 8);
+const OPPORTUNITY_REVIEW_LIMIT = Number(process.env.OPPORTUNITY_REVIEW_LIMIT || 40);
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
@@ -484,6 +485,11 @@ function clamp(value, min, max) {
 function roundTo(value, digits = 2) {
   const factor = Math.pow(10, digits);
   return Math.round(value * factor) / factor;
+}
+
+function numberOrNull(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 
 function hoursSince(iso, now = Date.now()) {
@@ -1632,6 +1638,275 @@ function scheduleOpportunityRefresh({ force = true } = {}) {
   return opportunityRefreshPromise;
 }
 
+function parseSnapshotPayload(raw, fallback = {}) {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function handicapLineFromKey(key) {
+  const match = String(key || "").match(/^h([+-]?\d+(?:_\d+)?)-(home|away)$/);
+  if (!match) return null;
+  return Number(match[1].replace("_", "."));
+}
+
+function settleRecommendationFromResult(rec, result) {
+  const homeGoals = Number(result.homeGoals);
+  const awayGoals = Number(result.awayGoals);
+  if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) {
+    return {
+      status: "pending",
+      label: "待比分",
+      outcomeText: "没有最终比分，暂不结算。"
+    };
+  }
+  if (rec.marketType === "moneyline") {
+    const won = rec.key === result.resultKey;
+    return {
+      status: won ? "hit" : "miss",
+      label: won ? "命中" : "未命中",
+      outcomeText: `赛果 ${homeGoals}-${awayGoals}，胜平负结果为 ${result.resultLabel || result.resultKey}。`,
+      profitPerShare: typeof rec.marketPrice === "number"
+        ? (won ? 1 - rec.marketPrice : -rec.marketPrice)
+        : null
+    };
+  }
+  if (rec.marketType === "total") {
+    const total = homeGoals + awayGoals;
+    const won = rec.key === "under25" ? total < 2.5 : rec.key === "over25" ? total > 2.5 : null;
+    if (won == null) {
+      return { status: "pending", label: "待结算", outcomeText: "大小球盘口暂未识别。" };
+    }
+    return {
+      status: won ? "hit" : "miss",
+      label: won ? "命中" : "未命中",
+      outcomeText: `总进球 ${total}，${rec.key === "under25" ? "小于 2.5" : "大于 2.5"} ${won ? "成立" : "未成立"}。`,
+      profitPerShare: typeof rec.marketPrice === "number"
+        ? (won ? 1 - rec.marketPrice : -rec.marketPrice)
+        : null
+    };
+  }
+  if (rec.marketType === "handicap") {
+    const line = Number(rec.payload?.handicap?.homeLine ?? handicapLineFromKey(rec.key));
+    const side = String(rec.key || "").endsWith("-away") ? "away" : "home";
+    if (!Number.isFinite(line)) {
+      return { status: "pending", label: "待结算", outcomeText: "让球线未结构化，暂不结算。" };
+    }
+    const adjustedHome = homeGoals + line;
+    const diff = adjustedHome - awayGoals;
+    const sideDiff = side === "home" ? diff : -diff;
+    const status = sideDiff > 0 ? "hit" : sideDiff === 0 ? "push" : "miss";
+    return {
+      status,
+      label: status === "hit" ? "命中" : status === "push" ? "走水" : "未命中",
+      outcomeText: `赛果 ${homeGoals}-${awayGoals}，${side === "home" ? "主队" : "客队"}让球结算为${status === "hit" ? "赢" : status === "push" ? "走水" : "输"}。`,
+      profitPerShare: typeof rec.marketPrice === "number"
+        ? (status === "hit" ? 1 - rec.marketPrice : status === "push" ? 0 : -rec.marketPrice)
+        : null
+    };
+  }
+  return {
+    status: "pending",
+    label: "待结算",
+    outcomeText: "这个市场类型暂未纳入自动复盘结算。"
+  };
+}
+
+function reviewReasonSummary(matchPayload, recPayload, settled) {
+  const reasons = [];
+  if (matchPayload?.aiPrediction?.reasons?.length) {
+    reasons.push(...matchPayload.aiPrediction.reasons.slice(0, 2));
+  }
+  if (recPayload?.decision?.reasons?.length) {
+    reasons.push(`当时限制：${recPayload.decision.reasons.slice(0, 3).join("、")}。`);
+  }
+  if (settled.status === "miss") {
+    reasons.push("复盘重点：模型方向与最终赛果不一致，优先检查首发、伤停、临场价格变化和强弱队低价价值判断。");
+  } else if (settled.status === "hit") {
+    reasons.push("复盘重点：记录命中时的数据完整度、盘口位置和曲线是否支持重复使用。");
+  } else if (settled.status === "push") {
+    reasons.push("复盘重点：让球走水说明方向未错但价格空间有限。");
+  }
+  return [...new Set(reasons.filter(Boolean))].slice(0, 5);
+}
+
+async function buildOpportunityReview({ limit = OPPORTUNITY_REVIEW_LIMIT } = {}) {
+  await ensureHistorySchema();
+  const safeLimit = Math.max(1, Math.min(120, Number(limit) || OPPORTUNITY_REVIEW_LIMIT));
+  const resultsOutput = await runSql(`
+SELECT match_id, home_goals, away_goals, result_key, result_label, finished_at, updated_at, source
+FROM match_results
+WHERE status = 'final'
+ORDER BY COALESCE(finished_at, updated_at) DESC
+LIMIT ?;
+`, [safeLimit], "all");
+  const results = JSON.parse(resultsOutput.trim().split("\n").filter(Boolean).pop() || "[]");
+  const rows = [];
+  for (const result of results) {
+    const ids = [result.match_id, `schedule-${result.match_id}`].filter(Boolean);
+    const snapshotOutput = await runSql(`
+SELECT
+  ms.snapshot_id,
+  ms.match_id,
+  ms.captured_at,
+  ms.prediction_label,
+  ms.prediction_key,
+  ms.prediction_probability,
+  ms.prediction_confidence,
+  ms.trade_label,
+  ms.ai_trade_action,
+  ms.ai_trade_primary,
+  ms.ai_trade_summary,
+  ms.completeness_mode,
+  ms.completeness_score,
+  ms.payload_json AS match_payload_json,
+  m.home_name,
+  m.away_name,
+  m.kickoff_shanghai
+FROM match_snapshots ms
+LEFT JOIN matches m ON m.match_id = ms.match_id
+WHERE ms.match_id IN (?, ?)
+  AND ms.captured_at <= ?
+ORDER BY ms.captured_at DESC
+LIMIT 1;
+`, [ids[0] || "", ids[1] || "", result.finished_at || result.updated_at || new Date().toISOString()], "one");
+    const line = snapshotOutput.trim().split("\n").filter(Boolean).pop();
+    const snapshot = line ? JSON.parse(line) : null;
+    if (!snapshot) continue;
+    const marketsOutput = await runSql(`
+SELECT
+  recommendation_key,
+  market_type,
+  market_name,
+  model_probability,
+  push_probability,
+  market_price,
+  market_source,
+  edge,
+  max_buy_price,
+  decision_label,
+  decision_action,
+  elite_count,
+  elite_current_value,
+  payload_json AS rec_payload_json
+FROM market_snapshots
+WHERE snapshot_id = ?
+  AND (recommendation_key = ? OR market_name = ? OR edge >= 0.025)
+ORDER BY edge DESC
+LIMIT 8;
+`, [snapshot.snapshot_id, snapshot.prediction_key || "", snapshot.ai_trade_primary || ""], "all");
+    const markets = JSON.parse(marketsOutput.trim().split("\n").filter(Boolean).pop() || "[]");
+    for (const market of markets.length ? markets : [{}]) {
+      rows.push({
+        ...snapshot,
+        ...result,
+        result_source: result.source,
+        ...market
+      });
+    }
+  }
+  const byMatch = new Map();
+  for (const row of rows) {
+    if (!byMatch.has(row.match_id)) {
+      const matchPayload = parseSnapshotPayload(row.match_payload_json, {});
+      const result = {
+        homeGoals: numberOrNull(row.home_goals),
+        awayGoals: numberOrNull(row.away_goals),
+        resultKey: row.result_key,
+        resultLabel: row.result_label,
+        finishedAt: row.finished_at,
+        source: row.result_source
+      };
+      byMatch.set(row.match_id, {
+        matchId: row.match_id,
+        matchName: `${row.home_name || matchPayload.homeName || "Home"} vs ${row.away_name || matchPayload.awayName || "Away"}`,
+        kickoffShanghai: row.kickoff_shanghai || matchPayload.kickoffShanghai,
+        capturedAt: row.captured_at,
+        result,
+        prediction: {
+          label: row.prediction_label,
+          key: row.prediction_key,
+          probability: numberOrNull(row.prediction_probability),
+          confidence: row.prediction_confidence,
+          tradeLabel: row.trade_label
+        },
+        aiTradePlan: {
+          action: row.ai_trade_action,
+          primary: row.ai_trade_primary,
+          summary: row.ai_trade_summary
+        },
+        completeness: {
+          mode: row.completeness_mode,
+          score: numberOrNull(row.completeness_score)
+        },
+        items: []
+      });
+    }
+    if (!row.recommendation_key) continue;
+    const matchRecord = byMatch.get(row.match_id);
+    const matchPayload = parseSnapshotPayload(row.match_payload_json, {});
+    const recPayload = parseSnapshotPayload(row.rec_payload_json, {});
+    const rec = {
+      key: row.recommendation_key,
+      marketType: row.market_type,
+      name: row.market_name,
+      modelProbability: numberOrNull(row.model_probability),
+      pushProbability: numberOrNull(row.push_probability),
+      marketPrice: numberOrNull(row.market_price),
+      marketSource: row.market_source,
+      edge: numberOrNull(row.edge),
+      maxBuyPrice: numberOrNull(row.max_buy_price),
+      decisionLabel: row.decision_label,
+      decisionAction: row.decision_action,
+      eliteCount: numberOrNull(row.elite_count),
+      eliteCurrentValue: numberOrNull(row.elite_current_value),
+      payload: recPayload
+    };
+    const settled = settleRecommendationFromResult(rec, matchRecord.result);
+    matchRecord.items.push({
+      ...rec,
+      settled,
+      reasons: reviewReasonSummary(matchPayload, recPayload, settled)
+    });
+  }
+  const reviews = [...byMatch.values()].map((record) => {
+    const primary = record.items.find((item) => item.key === record.prediction.key)
+      || record.items.find((item) => item.name === record.aiTradePlan.primary)
+      || record.items[0]
+      || null;
+    const statusCounts = record.items.reduce((acc, item) => {
+      acc[item.settled.status] = (acc[item.settled.status] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      ...record,
+      primary,
+      statusCounts,
+      reviewStatus: primary?.settled?.status || "pending",
+      items: record.items.slice(0, 8)
+    };
+  });
+  const totals = reviews.reduce((acc, review) => {
+    acc.matches += 1;
+    acc[review.reviewStatus] = (acc[review.reviewStatus] || 0) + 1;
+    return acc;
+  }, { matches: 0, hit: 0, miss: 0, push: 0, pending: 0 });
+  return {
+    meta: {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      source: "dashboard history backtest",
+      limit: safeLimit,
+      disclaimer: "复盘只比较历史预测与最终赛果，用于模型校准；不代表真实交易记录。"
+    },
+    totals,
+    items: reviews
+  };
+}
+
 function buildRuleTradePlan(match) {
   const primaryCandidates = sortedPrimaryRecommendations(match);
   const actionable = sortedActionableRecommendations(match);
@@ -2019,6 +2294,72 @@ async function fetchFinalResults() {
     console.error(`Failed to read match results: ${error.message}`);
     return new Map();
   }
+}
+
+function finalResultFromScores(homeGoals, awayGoals, homeName, awayName) {
+  const resultKey = homeGoals > awayGoals ? "home" : homeGoals === awayGoals ? "draw" : "away";
+  const winner = resultKey === "home" ? homeName : resultKey === "away" ? awayName : "平局";
+  return {
+    resultKey,
+    resultLabel: resultKey === "draw" ? "平局" : `${winner}胜`
+  };
+}
+
+function modeledMatchIdForScheduleEvent(event, modeledMatches = []) {
+  const eventKey = scheduleEventKey(event);
+  const match = (modeledMatches || []).find((item) => {
+    const key = matchScheduleKey(TEAM_SEARCH_NAMES[item.home] || item.homeName, TEAM_SEARCH_NAMES[item.away] || item.awayName);
+    return key === eventKey;
+  });
+  return match?.id || "";
+}
+
+async function syncFinalResultsFromSchedule(schedule, modeledMatches = [], existingResults = new Map()) {
+  const completed = (schedule.matches || [])
+    .filter((event) => event.completed || isFinishedStatus(event.status))
+    .filter((event) => Number.isFinite(Number(event.homeScore)) && Number.isFinite(Number(event.awayScore)));
+  if (!completed.length) return { written: 0 };
+  let written = 0;
+  for (const event of completed) {
+    const homeGoals = Number(event.homeScore);
+    const awayGoals = Number(event.awayScore);
+    const { resultKey, resultLabel } = finalResultFromScores(homeGoals, awayGoals, event.home?.name || "主队", event.away?.name || "客队");
+    const ids = [
+      modeledMatchIdForScheduleEvent(event, modeledMatches),
+      event.scheduleId,
+      event.scheduleId ? `schedule-${event.scheduleId}` : ""
+    ].filter(Boolean);
+    for (const matchId of [...new Set(ids)]) {
+      if (existingResults.has(matchId)) continue;
+      const finishedAt = new Date().toISOString();
+      await recordMatchResult({
+        matchId,
+        homeGoals,
+        awayGoals,
+        resultKey,
+        resultLabel,
+        status: "final",
+        finishedAt,
+        source: event.source || "ESPN FIFA World Cup scoreboard",
+        scheduleId: event.scheduleId,
+        kickoffUtc: event.kickoffUtc,
+        homeName: event.home?.name,
+        awayName: event.away?.name,
+        statusDetail: event.statusDetail
+      });
+      existingResults.set(matchId, {
+        match_id: matchId,
+        home_goals: homeGoals,
+        away_goals: awayGoals,
+        result_key: resultKey,
+        result_label: resultLabel,
+        status: "final",
+        finished_at: finishedAt
+      });
+      written += 1;
+    }
+  }
+  return { written };
 }
 
 function matchScheduleKey(homeName, awayName) {
@@ -3712,6 +4053,8 @@ async function fetchScheduleWindow(now = new Date()) {
     const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
     const away = competitors.find((item) => item.homeAway === "away") || competitors[1] || {};
     const venue = normalizedVenueInfo(competition.venue || event.venue || {});
+    const homeScore = Number(home.score);
+    const awayScore = Number(away.score);
     return {
       scheduleId: String(event.id || ""),
       name: event.name || event.shortName || "",
@@ -3727,6 +4070,8 @@ async function fetchScheduleWindow(now = new Date()) {
         code: away.team?.abbreviation || "",
         name: away.team?.displayName || away.team?.name || ""
       },
+      homeScore: Number.isFinite(homeScore) ? homeScore : null,
+      awayScore: Number.isFinite(awayScore) ? awayScore : null,
       venue,
       source: "ESPN FIFA World Cup scoreboard"
     };
@@ -4842,13 +5187,22 @@ async function buildDashboard({
     },
     matches: {}
   });
-  const [schedule, finalResults] = await Promise.all([
+  const [schedule, initialFinalResults] = await Promise.all([
     fetchScheduleWindow(),
     fetchFinalResults()
   ]);
-  const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
+  let finalResults = initialFinalResults;
   const polymarket = await fetchPolymarket(schedule);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, effectiveWorldCupRecords, squadProfiles, fifaRankings));
+  const preliminaryWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings));
+  if (!DISABLE_HISTORY_RECORDING && schedule.ok) {
+    try {
+      await syncFinalResultsFromSchedule(schedule, allModeledMatches, finalResults);
+    } catch (error) {
+      console.error(`Failed to sync final results from schedule: ${error.message}`);
+    }
+  }
+  const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides);
   attachMarketCharts(matches, polymarket);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
@@ -5122,6 +5476,14 @@ const server = http.createServer(async (req, res) => {
           : null
       });
       jsonResponse(res, payload.ok === false ? 422 : 200, payload);
+      return;
+    }
+    if (pathname === "/api/opportunities/review") {
+      const limitParam = Number(url.searchParams.get("limit"));
+      const payload = await buildOpportunityReview({
+        limit: Number.isFinite(limitParam) ? limitParam : OPPORTUNITY_REVIEW_LIMIT
+      });
+      jsonResponse(res, 200, payload);
       return;
     }
     if (pathname === "/api/health") {

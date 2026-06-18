@@ -214,6 +214,31 @@
         font-size: 17px;
       }
 
+      .opportunity-tabs {
+        display: flex;
+        gap: 6px;
+        padding: 10px 14px 0;
+        background: var(--panel);
+      }
+
+      .opportunity-tab {
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f7f9f6;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 0 11px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .opportunity-tab.active {
+        border-color: rgba(20, 125, 100, 0.35);
+        background: #e8f2ee;
+        color: var(--green);
+      }
+
       .opportunity-body {
         display: grid;
         gap: 10px;
@@ -346,6 +371,57 @@
       .opportunity-live-check p {
         margin: 0;
         color: var(--ink);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .review-card {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .review-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .review-title {
+        font-size: 15px;
+        font-weight: 850;
+        line-height: 1.3;
+      }
+
+      .review-market-list {
+        display: grid;
+        gap: 7px;
+        margin-top: 10px;
+      }
+
+      .review-market {
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .review-market-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .review-market ul {
+        margin: 7px 0 0;
+        padding-left: 17px;
+        color: var(--muted);
         font-size: 12px;
         line-height: 1.45;
       }
@@ -1888,6 +1964,10 @@
             </svg>
           </button>
         </div>
+        <div class="opportunity-tabs" role="tablist" aria-label="Opportunity radar views">
+          <button class="opportunity-tab active" type="button" id="opportunityCurrentTab" data-opportunity-tab="current" role="tab" aria-selected="true">当前机会</button>
+          <button class="opportunity-tab" type="button" id="opportunityReviewTab" data-opportunity-tab="review" role="tab" aria-selected="false">预测复盘</button>
+        </div>
         <div class="opportunity-body" id="opportunityList">
           <div class="opportunity-empty">等待服务器扫描。</div>
         </div>
@@ -1909,6 +1989,9 @@
           opportunityTitle: "AI 机会雷达",
           opportunityMetaEmpty: "每小时扫描一次；只展示未过期机会。",
           opportunityEmpty: "当前没有达到纪律要求的机会。等待下一轮扫描。",
+          opportunityCurrentTab: "当前机会",
+          opportunityReviewTab: "预测复盘",
+          opportunityReviewEmpty: "还没有可复盘的完赛预测。赛果入库后会显示。",
           methodItems: [
             ["概率差", "模型概率与公开价格差异超过阈值时标记"],
             ["置信度", "阵容、伤停、天气和新闻越完整，信号越可靠"],
@@ -1930,6 +2013,9 @@
           opportunityTitle: "AI Opportunity Radar",
           opportunityMetaEmpty: "Scans hourly; only active items are shown.",
           opportunityEmpty: "No disciplined opportunity is active right now. Waiting for the next scan.",
+          opportunityCurrentTab: "Current",
+          opportunityReviewTab: "Review",
+          opportunityReviewEmpty: "No settled forecast is available yet. Reviews appear after results are recorded.",
           methodItems: [
             ["Probability Gap", "Flag outcomes when model probability differs from public prices."],
             ["Confidence", "Lineups, injuries, weather, and news improve signal reliability."],
@@ -2126,7 +2212,14 @@
         "当前价复核": "Current price check",
         "可按纪律观察": "Disciplined watch",
         "小仓观察": "Small-watch",
-        "等回落": "Wait for pullback"
+        "等回落": "Wait for pullback",
+        "当前机会": "Current",
+        "预测复盘": "Review",
+        "命中": "Hit",
+        "未命中": "Miss",
+        "走水": "Push",
+        "待比分": "Pending score",
+        "待结算": "Pending settlement"
       };
 
       const UI_REGEX_TRANSLATIONS = [
@@ -2197,6 +2290,9 @@
       let currentLang = localStorage.getItem("worldcup-dashboard-lang") || "zh";
       let currentDashboard = null;
       let currentOpportunities = { meta: {}, items: [] };
+      let currentOpportunityTab = "current";
+      let currentOpportunityReview = { meta: {}, totals: {}, items: [] };
+      let opportunityReviewLoading = false;
       const opportunityChecks = new Map();
 
       function translateText(text) {
@@ -2224,6 +2320,8 @@
         document.getElementById("methodTitle").textContent = labels.methodTitle;
         document.getElementById("opportunityLabel").textContent = labels.opportunityLabel;
         document.getElementById("opportunityTitle").textContent = labels.opportunityTitle;
+        document.getElementById("opportunityCurrentTab").textContent = labels.opportunityCurrentTab;
+        document.getElementById("opportunityReviewTab").textContent = labels.opportunityReviewTab;
         document.getElementById("methodList").innerHTML = labels.methodItems.map(([title, body]) => `<li><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></li>`).join("");
         document.getElementById("methodNote").textContent = labels.methodNote;
         const refresh = document.getElementById("refresh");
@@ -2689,6 +2787,22 @@
         return labels[confidence] || labels.low;
       }
 
+      function reviewStatusLabel(status) {
+        const labels = {
+          hit: currentLang === "en" ? "Hit" : "命中",
+          miss: currentLang === "en" ? "Miss" : "未命中",
+          push: currentLang === "en" ? "Push" : "走水",
+          pending: currentLang === "en" ? "Pending" : "待结算"
+        };
+        return labels[status] || labels.pending;
+      }
+
+      function reviewStatusClass(status) {
+        if (status === "hit") return "good";
+        if (status === "miss") return "warn";
+        return "";
+      }
+
       function opportunityCheckClass(check) {
         if (!check) return "";
         if (check.loading) return "warn";
@@ -2743,6 +2857,74 @@
         `;
       }
 
+      function renderOpportunityReview() {
+        const labels = APP_LABELS[currentLang];
+        const list = document.getElementById("opportunityList");
+        const meta = document.getElementById("opportunityMeta");
+        const items = currentOpportunityReview.items || [];
+        if (!list || !meta) return;
+        const totals = currentOpportunityReview.totals || {};
+        meta.textContent = opportunityReviewLoading
+          ? (currentLang === "en" ? "Loading review..." : "正在加载复盘...")
+          : [
+              currentLang === "en" ? "Forecast review" : "预测复盘",
+              `${currentLang === "en" ? "Matches" : "场次"} ${totals.matches || 0}`,
+              `${currentLang === "en" ? "Hit" : "命中"} ${totals.hit || 0}`,
+              `${currentLang === "en" ? "Miss" : "未命中"} ${totals.miss || 0}`
+            ].join(" · ");
+        if (opportunityReviewLoading && !items.length) {
+          list.innerHTML = `<div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "Loading settled forecast review..." : "正在加载已完赛预测复盘...")}</div>`;
+          return;
+        }
+        if (!items.length) {
+          list.innerHTML = `<div class="opportunity-empty">${escapeHtml(labels.opportunityReviewEmpty)}<div class="confidence-note">${escapeHtml(currentOpportunityReview.meta?.disclaimer || "复盘只用于模型校准，不代表真实交易记录。")}</div></div>`;
+          translateRenderedContent(list);
+          return;
+        }
+        list.innerHTML = items.map((review) => {
+          const primary = review.primary || {};
+          const result = review.result || {};
+          const markets = (review.items || []).slice(0, 5);
+          return `
+            <article class="review-card">
+              <div class="review-card-head">
+                <div>
+                  <div class="review-title">${escapeHtml(review.matchName || "-")}</div>
+                  <div class="confidence-note">${escapeHtml(fmtTime(review.kickoffShanghai))} · ${escapeHtml(currentLang === "en" ? "Forecast saved" : "预测记录")} ${escapeHtml(fmtDateTime(review.capturedAt))}</div>
+                </div>
+                <span class="opportunity-chip ${escapeHtml(reviewStatusClass(review.reviewStatus))}">${escapeHtml(reviewStatusLabel(review.reviewStatus))}</span>
+              </div>
+              <div class="opportunity-meta">
+                <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Result" : "赛果")} ${escapeHtml(`${result.homeGoals ?? "-"}-${result.awayGoals ?? "-"}`)}</span>
+                <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "AI pick" : "AI预测")} ${escapeHtml(review.prediction?.label || "-")} ${escapeHtml(fmtPct(review.prediction?.probability))}</span>
+                <span class="opportunity-chip">${escapeHtml(confidenceLabel(review.prediction?.confidence))}</span>
+                <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Primary" : "主复盘")} ${escapeHtml(primary.name || "-")}</span>
+              </div>
+              ${review.aiTradePlan?.summary ? `<div class="opportunity-summary">${escapeHtml(review.aiTradePlan.summary)}</div>` : ""}
+              <div class="review-market-list">
+                ${markets.map((item) => `
+                  <div class="review-market">
+                    <div class="review-market-row">
+                      <span>${escapeHtml(item.name || item.key || "-")}</span>
+                      <span class="opportunity-chip ${escapeHtml(reviewStatusClass(item.settled?.status))}">${escapeHtml(reviewStatusLabel(item.settled?.status))}</span>
+                    </div>
+                    <div class="opportunity-meta">
+                      <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Model" : "模型")} ${escapeHtml(fmtPct(item.modelProbability))}</span>
+                      <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Price" : "价格")} ${escapeHtml(fmtPrice(item.marketPrice))}</span>
+                      <span class="opportunity-chip">${escapeHtml("Edge")} ${escapeHtml(fmtEdge(item.edge))}</span>
+                      <span class="opportunity-chip">${escapeHtml(item.decisionLabel || "-")}</span>
+                    </div>
+                    <div class="confidence-note">${escapeHtml(item.settled?.outcomeText || "")}</div>
+                    ${item.reasons?.length ? `<ul>${item.reasons.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}
+                  </div>
+                `).join("")}
+              </div>
+            </article>
+          `;
+        }).join("");
+        translateRenderedContent(list);
+      }
+
       function renderOpportunities(payload = currentOpportunities) {
         currentOpportunities = payload || { meta: {}, items: [] };
         const labels = APP_LABELS[currentLang];
@@ -2752,10 +2934,19 @@
         const list = document.getElementById("opportunityList");
         const meta = document.getElementById("opportunityMeta");
         if (!button || !count || !list || !meta) return;
+        document.querySelectorAll("[data-opportunity-tab]").forEach((tab) => {
+          const active = tab.dataset.opportunityTab === currentOpportunityTab;
+          tab.classList.toggle("active", active);
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+        });
 
         button.classList.toggle("live", items.length > 0);
         button.classList.toggle("empty", items.length === 0);
         count.textContent = String(items.length);
+        if (currentOpportunityTab === "review") {
+          renderOpportunityReview();
+          return;
+        }
         const scanDate = currentOpportunities.meta?.scanDate ? `${currentLang === "en" ? "Scan date" : "扫描日期"} ${currentOpportunities.meta.scanDate}` : "";
         meta.textContent = [
           scanDate,
@@ -2833,6 +3024,38 @@
           };
           renderOpportunities(currentOpportunities);
         }
+      }
+
+      async function loadOpportunityReview(force = false) {
+        if (window.location.protocol === "file:") return;
+        if (opportunityReviewLoading) return;
+        if (!force && currentOpportunityReview.items?.length) return;
+        opportunityReviewLoading = true;
+        renderOpportunities(currentOpportunities);
+        try {
+          const response = await fetch(`${basePath()}api/opportunities/review?limit=40`, { cache: "no-store" });
+          const data = await response.json();
+          currentOpportunityReview = data;
+        } catch (error) {
+          currentOpportunityReview = {
+            meta: {
+              ok: false,
+              error: error.message,
+              disclaimer: currentLang === "en" ? "Forecast review is temporarily unavailable." : "预测复盘暂时不可用。"
+            },
+            totals: {},
+            items: []
+          };
+        } finally {
+          opportunityReviewLoading = false;
+          renderOpportunities(currentOpportunities);
+        }
+      }
+
+      function setOpportunityTab(tab) {
+        currentOpportunityTab = tab === "review" ? "review" : "current";
+        if (currentOpportunityTab === "review") loadOpportunityReview(false);
+        renderOpportunities(currentOpportunities);
       }
 
       function findOpportunityItem(id) {
@@ -3816,11 +4039,15 @@
       document.getElementById("refresh").addEventListener("click", () => {
         loadDashboard(true);
         loadOpportunities(true);
+        loadOpportunityReview(true);
       });
       document.getElementById("opportunityButton").addEventListener("click", () => {
         const modal = document.getElementById("opportunityModal");
         modal.classList.add("open");
         modal.setAttribute("aria-hidden", "false");
+      });
+      document.querySelectorAll("[data-opportunity-tab]").forEach((tab) => {
+        tab.addEventListener("click", () => setOpportunityTab(tab.dataset.opportunityTab));
       });
       document.getElementById("opportunityClose").addEventListener("click", () => {
         const modal = document.getElementById("opportunityModal");
