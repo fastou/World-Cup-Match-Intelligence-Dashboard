@@ -467,6 +467,105 @@
         display: block;
       }
 
+      .schedule-section {
+        margin: 0 0 16px;
+      }
+
+      .schedule-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+
+      .schedule-head h3 {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      .schedule-strip {
+        display: grid;
+        gap: 10px;
+      }
+
+      .schedule-day {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        overflow: hidden;
+      }
+
+      .schedule-day-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfa;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 780;
+      }
+
+      .schedule-list {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 10px;
+      }
+
+      .schedule-item {
+        flex: 0 0 218px;
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .schedule-item.live {
+        border-color: rgba(20, 125, 100, 0.45);
+        background: #f1faf6;
+      }
+
+      .schedule-time {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .schedule-teams {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        margin-top: 4px;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 820;
+      }
+
+      .schedule-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      .schedule-status strong {
+        color: var(--green);
+        font-weight: 780;
+        white-space: nowrap;
+      }
+
       .match-switcher {
         display: flex;
         gap: 8px;
@@ -1859,6 +1958,15 @@
           min-width: 160px;
         }
 
+        .schedule-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .schedule-item {
+          flex-basis: 190px;
+        }
+
         .match-header {
           flex-direction: column;
         }
@@ -1918,6 +2026,13 @@
             <h2 id="matchesTitle">未来三天比赛与模型信号</h2>
             <div class="last-update" id="lastUpdate"></div>
           </div>
+          <section class="schedule-section" aria-labelledby="scheduleTitle">
+            <div class="schedule-head">
+              <h3 id="scheduleTitle">未来三天赛程</h3>
+              <div class="confidence-note" id="scheduleNote">赛程显示完整三天；下方交易 Tab 只显示当前 Polymarket 可交易焦点日。</div>
+            </div>
+            <div id="scheduleStrip" class="schedule-strip"></div>
+          </section>
           <div id="matches" class="match-grid"></div>
         </section>
 
@@ -1981,6 +2096,8 @@
           loading: "加载中",
           refreshTitle: "刷新数据",
           matchesTitle: "Polymarket 可交易比赛与模型信号",
+          scheduleTitle: "未来三天赛程",
+          scheduleNote: "赛程显示完整三天；下方交易 Tab 只显示当前 Polymarket 可交易焦点日。",
           sourcesTitle: "数据源状态",
           marketsTitle: "世界杯市场池",
           eliteTitle: "足球表现 Top 100",
@@ -2005,6 +2122,8 @@
           loading: "Loading",
           refreshTitle: "Refresh data",
           matchesTitle: "Polymarket Tradable Matches and Model Signals",
+          scheduleTitle: "Next Three Days Schedule",
+          scheduleNote: "The schedule shows all three days; the trading tabs below show the current Polymarket focus date only.",
           sourcesTitle: "Data Sources",
           marketsTitle: "World Cup Market Pool",
           eliteTitle: "Football Performance Top 100",
@@ -2317,6 +2436,8 @@
         document.title = labels.appTitle;
         document.getElementById("appTitle").textContent = labels.appTitle;
         document.getElementById("matchesTitle").textContent = labels.matchesTitle;
+        document.getElementById("scheduleTitle").textContent = labels.scheduleTitle;
+        document.getElementById("scheduleNote").textContent = labels.scheduleNote;
         document.getElementById("sourcesTitle").textContent = labels.sourcesTitle;
         document.getElementById("marketsTitle").textContent = labels.marketsTitle;
         document.getElementById("eliteTitle").textContent = labels.eliteTitle;
@@ -2731,6 +2852,50 @@
         const nextMarketDate = marketDates.find((date) => date > todayUtc) || marketDates.find((date) => date >= todayUtc) || marketDates[0];
         const targetDate = inProgress ? polymarketEventDateKey(inProgress) : nextMarketDate;
         return tradable.filter((match) => polymarketEventDateKey(match) === targetDate);
+      };
+
+      const shanghaiDateKey = (value) => {
+        if (!value) return "";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "";
+        try {
+          return new Intl.DateTimeFormat("sv-SE", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            timeZone: "Asia/Shanghai"
+          }).format(date);
+        } catch {
+          return date.toISOString().slice(0, 10);
+        }
+      };
+
+      const fmtScheduleDay = (value) => {
+        if (!value) return "-";
+        try {
+          return new Intl.DateTimeFormat(currentLang === "en" ? "en-US" : "zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            weekday: "short",
+            timeZone: "Asia/Shanghai"
+          }).format(new Date(`${value}T00:00:00+08:00`));
+        } catch {
+          return value;
+        }
+      };
+
+      const fmtClock = (value) => {
+        if (!value) return "-";
+        try {
+          return new Intl.DateTimeFormat(currentLang === "en" ? "en-US" : "zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+            timeZone: "Asia/Shanghai"
+          }).format(new Date(value));
+        } catch {
+          return value;
+        }
       };
 
       const fmtTime = (value) => {
@@ -3970,6 +4135,55 @@
         `;
       }
 
+      function renderScheduleStrip(matches) {
+        const sorted = [...(matches || [])]
+          .filter((match) => match && (match.kickoffShanghai || match.kickoffLocal))
+          .sort((a, b) => (new Date(a.kickoffShanghai || a.kickoffLocal || "").getTime() || 0) - (new Date(b.kickoffShanghai || b.kickoffLocal || "").getTime() || 0));
+        if (!sorted.length) {
+          return `<div class="empty">${escapeHtml(currentLang === "en" ? "No upcoming fixtures returned for the three-day window." : "三天窗口内没有返回赛程。")}</div>`;
+        }
+        const groups = new Map();
+        sorted.forEach((match) => {
+          const key = shanghaiDateKey(match.kickoffShanghai || match.kickoffLocal) || (currentLang === "en" ? "Unknown date" : "未知日期");
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(match);
+        });
+        return [...groups.entries()].map(([day, dayMatches]) => {
+          const liveCount = dayMatches.filter((match) => livePolymarketRecommendations(match).length).length;
+          const countLabel = currentLang === "en"
+            ? `${dayMatches.length} fixtures · ${liveCount} live markets`
+            : `${dayMatches.length} 场 · ${liveCount} 场实时盘`;
+          const rows = dayMatches.map((match) => {
+            const hasLive = livePolymarketRecommendations(match).length > 0;
+            const liveLabel = hasLive
+              ? (currentLang === "en" ? "Polymarket live" : "Polymarket 实时盘")
+              : (currentLang === "en" ? "Schedule / awaiting market" : "赛程 / 待盘口");
+            const status = match.scheduleStatusDetail || match.scheduleStatus || (match.autoBaseline
+              ? (currentLang === "en" ? "Auto baseline" : "自动基线")
+              : "");
+            return `
+              <div class="schedule-item ${hasLive ? "live" : ""}">
+                <span class="schedule-time">${escapeHtml(fmtClock(match.kickoffShanghai || match.kickoffLocal))}</span>
+                <strong class="schedule-teams">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</strong>
+                <span class="schedule-status">
+                  <span>${escapeHtml(status || "-")}</span>
+                  <strong>${escapeHtml(liveLabel)}</strong>
+                </span>
+              </div>
+            `;
+          }).join("");
+          return `
+            <section class="schedule-day" aria-label="${escapeHtml(day)}">
+              <div class="schedule-day-title">
+                <span>${escapeHtml(fmtScheduleDay(day))}</span>
+                <span>${escapeHtml(countLabel)}</span>
+              </div>
+              <div class="schedule-list">${rows}</div>
+            </section>
+          `;
+        }).join("");
+      }
+
       function wireMatchTabs() {
         const root = document.getElementById("matches");
         root.querySelectorAll(".match-tab").forEach((tab) => {
@@ -4048,6 +4262,7 @@
         renderSources(data.sources);
         renderPolymarket(data.polymarket);
         renderEliteTradersPanel(data.eliteTraders);
+        document.getElementById("scheduleStrip").innerHTML = renderScheduleStrip(data.matches);
         document.getElementById("matches").innerHTML = renderMatchTabs(data.matches);
         translateRenderedContent(document.body);
         wireMatchTabs();
