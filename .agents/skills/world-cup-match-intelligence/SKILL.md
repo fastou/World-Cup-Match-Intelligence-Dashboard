@@ -122,6 +122,8 @@ When updating source collection:
 When maintaining public market data:
 
 - Fetch live curves for match result, handicap, and totals separately when markets exist.
+- Treat BTTS / Both Teams To Score as a first-class market alongside match result, handicap, and totals: generate Yes/No probabilities, match Polymarket BTTS tokens when available, show curves, archive snapshots, and settle reviews from final scores.
+- Opportunity radar should scan the dashboard's full next-three-day match window and diversify surfaced candidates across BTTS, totals, handicap, and match result. Do not let high-edge longshot moneyline rows crowd out structured market opportunities with live curves.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
 - Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`.
 - Keep chart controls usable for each market type and each outcome.
@@ -137,6 +139,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 
 - model probability at the time
 - public market prices and curves
+- BTTS Yes/No model probability, price, edge, recommendation, and final settlement
 - dynamic context state
 - elite account positions
 - top holder snapshots

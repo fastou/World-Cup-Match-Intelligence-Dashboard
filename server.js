@@ -575,6 +575,18 @@ function poisson(lambda, goals) {
   return Math.exp(-lambda) * Math.pow(lambda, goals) / factorial;
 }
 
+function calibratedBttsProbability(rawBtts, lambdaHome, lambdaAway) {
+  const minLambda = Math.min(lambdaHome, lambdaAway);
+  const maxLambda = Math.max(lambdaHome, lambdaAway);
+  const balance = maxLambda > 0 ? minLambda / maxLambda : 0;
+  const bothCanScoreBoost = clamp((minLambda - 0.72) * 0.11, 0, 0.055);
+  const balanceBoost = clamp((balance - 0.62) * 0.09, 0, 0.045);
+  const lowTempoPenalty = lambdaHome + lambdaAway < 1.95 ? 0.025 : 0;
+  const mismatchPenalty = balance < 0.5 ? 0.04 : 0;
+  const recentCalibration = 0.035;
+  return clamp(rawBtts + recentCalibration + bothCanScoreBoost + balanceBoost - lowTempoPenalty - mismatchPenalty, 0.18, 0.62);
+}
+
 function scoreModel(lambdaHome, lambdaAway) {
   const maxGoals = 10;
   let home = 0;
@@ -599,13 +611,15 @@ function scoreModel(lambdaHome, lambdaAway) {
   }
 
   scores.sort((a, b) => b.probability - a.probability);
+  const calibratedBtts = calibratedBttsProbability(btts, lambdaHome, lambdaAway);
   return {
     home,
     draw,
     away,
     under25,
     over25: 1 - under25,
-    btts,
+    btts: calibratedBtts,
+    rawBtts: btts,
     topScores: scores.slice(0, 6),
     topScoresFull: scores
   };
@@ -758,6 +772,7 @@ function buildRecommendations(match, probabilities) {
   const markets = match.manualMarkets || {};
   const moneyline = markets.moneyline || {};
   const totals = markets.totals || {};
+  const bttsMarkets = markets.btts || {};
   const homeMarketAliases = marketTeamAliases(match, "home");
   const awayMarketAliases = marketTeamAliases(match, "away");
   const rows = [
@@ -810,6 +825,26 @@ function buildRecommendations(match, probabilities) {
       side: "YES",
       modelProbability: probabilities.over25,
       marketPrice: totals.over25
+    },
+    {
+      key: "bttsYes",
+      marketType: "btts",
+      marketTypeLabel: "双方进球",
+      name: "两队都有进球",
+      aliases: ["两队都有进球", "both teams to score", "both teams score", "btts", "yes"],
+      side: "YES",
+      modelProbability: probabilities.btts,
+      marketPrice: bttsMarkets.yes
+    },
+    {
+      key: "bttsNo",
+      marketType: "btts",
+      marketTypeLabel: "双方进球",
+      name: "不是两队都有进球",
+      aliases: ["不是两队都有进球", "both teams to score no", "both teams score no", "btts no", "no"],
+      side: "NO",
+      modelProbability: 1 - probabilities.btts,
+      marketPrice: bttsMarkets.no
     }
   ];
 
@@ -1150,6 +1185,7 @@ function formatCents(value) {
 
 function recommendationMarketPriority(rec) {
   if (rec.marketType === "total") return 3;
+  if (rec.marketType === "btts") return 2.6;
   if (rec.marketType === "handicap") return 2;
   if (rec.marketType === "moneyline" && rec.key === "draw") return 1;
   return 0;
@@ -1230,14 +1266,16 @@ function opportunityScanDate(matches, now = new Date()) {
   return next ? shanghaiDateDashed(new Date(next.kickoffShanghai || next.kickoffLocal)) : today;
 }
 
-function opportunityCandidateRows(matches, scanDate) {
+function opportunityCandidateRows(matches, scanDate, nowMs = Date.now()) {
   const rows = [];
+  const windowEndMs = nowMs + MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   for (const match of matches || []) {
     const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
     if (!kickoffMs) continue;
-    if (shanghaiDateDashed(new Date(match.kickoffShanghai || match.kickoffLocal)) !== scanDate) continue;
+    if (kickoffMs > windowEndMs) continue;
     if (isFinishedStatus(match.scheduleStatus)) continue;
-    if (kickoffMs < Date.now() - MATCH_LIVE_GRACE_HOURS * 60 * 60 * 1000) continue;
+    if (kickoffMs < nowMs - MATCH_LIVE_GRACE_HOURS * 60 * 60 * 1000) continue;
+    const matchScanDate = shanghaiDateDashed(new Date(match.kickoffShanghai || match.kickoffLocal));
     for (const rec of match.recommendations || []) {
       const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
       const hasPrice = typeof rec.marketPrice === "number";
@@ -1250,11 +1288,58 @@ function opportunityCandidateRows(matches, scanDate) {
         match,
         rec,
         hasLiveChart,
-        score: tradableRecommendationScore(rec) + (hasLiveChart ? 0.01 : 0) + (match.tradingGate?.allowStrongTrade ? 0.012 : 0)
+        matchScanDate,
+        score: tradableRecommendationScore(rec)
+          + (hasLiveChart ? 0.01 : 0)
+          + (match.tradingGate?.allowStrongTrade ? 0.012 : 0)
+          + (matchScanDate === scanDate ? 0.006 : 0)
       });
     }
   }
   return rows.sort((a, b) => b.score - a.score);
+}
+
+function opportunityRowId(row) {
+  return `${row.match?.id || ""}:${row.rec?.key || ""}:${row.rec?.marketType || ""}`;
+}
+
+function diversifiedOpportunityRows(rows, limit = OPPORTUNITY_MAX_ITEMS) {
+  const sorted = [...(rows || [])].sort((a, b) => b.score - a.score);
+  const selected = [];
+  const used = new Set();
+  const perMatch = new Map();
+  let moneylineCount = 0;
+  const moneylineCap = Math.max(2, Math.floor(limit * 0.35));
+
+  const add = (row, options = {}) => {
+    if (!row || selected.length >= limit) return false;
+    const id = opportunityRowId(row);
+    if (used.has(id)) return false;
+    const matchId = row.match?.id || "";
+    const matchCount = perMatch.get(matchId) || 0;
+    if (matchCount >= 2) return false;
+    const isMoneyline = row.rec?.marketType === "moneyline";
+    if (isMoneyline && options.capMoneyline !== false && moneylineCount >= moneylineCap) return false;
+    selected.push(row);
+    used.add(id);
+    perMatch.set(matchId, matchCount + 1);
+    if (isMoneyline) moneylineCount += 1;
+    return true;
+  };
+
+  for (const marketType of ["btts", "total", "handicap"]) {
+    add(sorted.find((row) => row.hasLiveChart && row.rec?.marketType === marketType), { capMoneyline: false });
+  }
+  for (const row of sorted) {
+    if (row.hasLiveChart && row.rec?.marketType !== "moneyline") add(row, { capMoneyline: false });
+  }
+  for (const row of sorted) {
+    if (row.rec?.marketType !== "moneyline") add(row, { capMoneyline: false });
+  }
+  for (const row of sorted) add(row);
+  for (const row of sorted) add(row, { capMoneyline: false });
+
+  return selected;
 }
 
 function buildRuleOpportunity(row, index) {
@@ -1577,7 +1662,8 @@ async function buildOpportunityRadar({ force = false } = {}) {
     light: true
   });
   const scanDate = opportunityScanDate(dashboard.matches || []);
-  const candidates = opportunityCandidateRows(dashboard.matches || [], scanDate).slice(0, OPPORTUNITY_MAX_ITEMS);
+  const candidateRows = opportunityCandidateRows(dashboard.matches || [], scanDate, now);
+  const candidates = diversifiedOpportunityRows(candidateRows, OPPORTUNITY_MAX_ITEMS);
   const ruleItems = candidates.map(buildRuleOpportunity);
   const items = await enhanceOpportunitiesWithAi(ruleItems, dashboard.matches || []);
   const activeItems = items
@@ -1589,6 +1675,8 @@ async function buildOpportunityRadar({ force = false } = {}) {
       generatedAt: new Date().toISOString(),
       refreshMs: OPPORTUNITY_REFRESH_MS,
       scanDate,
+      scanWindowDays: MATCH_WINDOW_DAYS,
+      candidateCount: candidateRows.length,
       nextRefreshAt: new Date(Date.now() + OPPORTUNITY_REFRESH_MS).toISOString(),
       source: "AI opportunity radar",
       disclaimer: "研究辅助提醒，不自动下单，不承诺收益。"
@@ -1689,6 +1777,21 @@ function settleRecommendationFromResult(rec, result) {
         : null
     };
   }
+  if (rec.marketType === "btts") {
+    const bothScored = homeGoals > 0 && awayGoals > 0;
+    const won = rec.key === "bttsYes" ? bothScored : rec.key === "bttsNo" ? !bothScored : null;
+    if (won == null) {
+      return { status: "pending", label: "待结算", outcomeText: "双方进球盘口暂未识别。" };
+    }
+    return {
+      status: won ? "hit" : "miss",
+      label: won ? "命中" : "未命中",
+      outcomeText: `赛果 ${homeGoals}-${awayGoals}，两队${bothScored ? "都有进球" : "没有都进球"}。`,
+      profitPerShare: typeof rec.marketPrice === "number"
+        ? (won ? 1 - rec.marketPrice : -rec.marketPrice)
+        : null
+    };
+  }
   if (rec.marketType === "handicap") {
     const line = Number(rec.payload?.handicap?.homeLine ?? handicapLineFromKey(rec.key));
     const side = String(rec.key || "").endsWith("-away") ? "away" : "home";
@@ -1724,9 +1827,13 @@ function reviewReasonSummary(matchPayload, recPayload, settled) {
     reasons.push(`当时限制：${recPayload.decision.reasons.slice(0, 3).join("、")}。`);
   }
   if (settled.status === "miss") {
-    reasons.push("复盘重点：模型方向与最终赛果不一致，优先检查首发、伤停、临场价格变化和强弱队低价价值判断。");
+    reasons.push(recPayload?.marketType === "btts"
+      ? "复盘重点：BTTS 判断错误，优先检查弱队进球能力、强队零封能力、定位球/反击和临场进攻阵容。"
+      : "复盘重点：模型方向与最终赛果不一致，优先检查首发、伤停、临场价格变化和强弱队低价价值判断。");
   } else if (settled.status === "hit") {
-    reasons.push("复盘重点：记录命中时的数据完整度、盘口位置和曲线是否支持重复使用。");
+    reasons.push(recPayload?.marketType === "btts"
+      ? "复盘重点：记录 BTTS 命中时双方 xG、近期进失球、定位球/反击证据和盘口价格。"
+      : "复盘重点：记录命中时的数据完整度、盘口位置和曲线是否支持重复使用。");
   } else if (settled.status === "push") {
     reasons.push("复盘重点：让球走水说明方向未错但价格空间有限。");
   }
@@ -2785,6 +2892,21 @@ function findChartToken(match, recommendation, tokens) {
       || sameMatchTokens.find((token) => `${token.marketText} ${token.labelText}`.includes(needle)) || null;
   }
 
+  if (recommendation.marketType === "btts") {
+    const outcomeNeedle = recommendation.key === "bttsYes" ? "yes" : "no";
+    return sameMatchTokens.find((token) => {
+      const text = `${token.marketQuestionText} ${token.marketSlug} ${token.labelText}`;
+      const isBttsMarket = text.includes("both teams")
+        || text.includes("both-teams")
+        || text.includes("btts")
+        || (text.includes("to score") && text.includes("score"));
+      return isBttsMarket && token.labelText.includes(outcomeNeedle);
+    }) || sameMatchTokens.find((token) => {
+      const text = `${token.marketText} ${token.labelText}`;
+      return text.includes("both teams to score") && token.labelText.includes(outcomeNeedle);
+    }) || null;
+  }
+
   if (recommendation.marketType === "handicap") {
     const lineAliases = aliases.map((alias) => alias.replace(/\s+/g, ""));
     const teamAliases = recommendation.key.endsWith("-home") ? homeAliases : awayAliases;
@@ -3488,6 +3610,14 @@ function impliedTotalsFromModel(probabilities, margin = 0.04) {
   };
 }
 
+function impliedBttsFromModel(probabilities, margin = 0.04) {
+  const yes = probabilities.btts || 0;
+  return {
+    yes: roundTo(clamp(yes * (1 - margin), 0.01, 0.98), 2),
+    no: roundTo(clamp((1 - yes) * (1 - margin), 0.01, 0.98), 2)
+  };
+}
+
 function impliedHandicapFromModel(probabilities, homeLine, margin = 0.04) {
   const home = handicapProbability(probabilities.topScoresFull || [], homeLine, "home");
   const away = handicapProbability(probabilities.topScoresFull || [], homeLine, "away");
@@ -3502,12 +3632,14 @@ function impliedHandicapFromModel(probabilities, homeLine, margin = 0.04) {
 function autoBaselineManualMarkets(match, probabilities) {
   const moneyline = impliedMoneylineFromModel(probabilities);
   const totals = impliedTotalsFromModel(probabilities);
+  const btts = impliedBttsFromModel(probabilities);
   const homeLine = probabilities.home >= 0.57 ? -1.5 : probabilities.home <= 0.25 ? 1.5 : -0.5;
   const handicapPrices = impliedHandicapFromModel(probabilities, homeLine);
   const nowIso = new Date().toISOString();
   return {
     moneyline,
     totals,
+    btts,
     handicaps: [
       {
         id: `${match.id}-auto-handicap`,
@@ -5444,7 +5576,13 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/opportunities") {
       const force = url.searchParams.get("force") === "1";
       let payload = await getOpportunityCache();
-      if (force || !payload) {
+      if (force) {
+        try {
+          payload = await scheduleOpportunityRefresh({ force: true });
+        } catch (error) {
+          console.error(`Forced opportunity refresh failed: ${error.message}`);
+        }
+      } else if (!payload) {
         scheduleOpportunityRefresh({ force: true });
       }
       if (!payload) payload = pendingOpportunityPayload();

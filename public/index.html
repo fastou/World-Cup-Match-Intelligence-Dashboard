@@ -2190,6 +2190,9 @@
         "盘口来源": "Price source",
         "盘口更新时间": "Price updated",
         "大小球": "Totals",
+        "双方进球": "BTTS",
+        "两队都有进球": "Both Teams To Score",
+        "不是两队都有进球": "Both Teams Not To Score",
         "模型 xG": "Model xG",
         "常见比分": "Likely scores",
         "让球盘": "Handicap",
@@ -2947,8 +2950,12 @@
           renderOpportunityReview();
           return;
         }
-        const scanDate = currentOpportunities.meta?.scanDate ? `${currentLang === "en" ? "Scan date" : "扫描日期"} ${currentOpportunities.meta.scanDate}` : "";
+        const scanWindow = currentOpportunities.meta?.scanWindowDays
+          ? `${currentLang === "en" ? "Window" : "扫描窗口"} ${currentOpportunities.meta.scanWindowDays}${currentLang === "en" ? "d" : "天"}`
+          : "";
+        const scanDate = currentOpportunities.meta?.scanDate ? `${currentLang === "en" ? "From" : "起始"} ${currentOpportunities.meta.scanDate}` : "";
         meta.textContent = [
+          scanWindow,
           scanDate,
           currentOpportunities.meta?.nextRefreshAt ? `${currentLang === "en" ? "Next" : "下次"} ${fmtTime(currentOpportunities.meta.nextRefreshAt)}` : labels.opportunityMetaEmpty,
           currentOpportunities.meta?.backgroundRefresh ? (currentLang === "en" ? "refreshing" : "刷新中") : ""
@@ -3444,12 +3451,22 @@
             : {
               title: "暂无 Polymarket 大小球曲线",
               body: "Polymarket 当前未返回这场大小球的实时历史曲线，上方价格只是本地参考价。"
+            },
+          btts: currentLang === "en"
+            ? {
+              title: "No live BTTS market yet",
+              body: "Polymarket has not returned a live Both Teams To Score curve for this match. The prices above are local references."
+            }
+            : {
+              title: "暂无 Polymarket 双方进球曲线",
+              body: "Polymarket 当前未返回这场双方进球的实时曲线，上方价格只是本地参考价。"
             }
         };
         const groups = [
           { type: "moneyline", label: currentLang === "en" ? "Result" : "胜平负" },
           { type: "handicap", label: currentLang === "en" ? "Handicap" : "让球盘" },
-          { type: "total", label: currentLang === "en" ? "Totals" : "大小球" }
+          { type: "total", label: currentLang === "en" ? "Totals" : "大小球" },
+          { type: "btts", label: currentLang === "en" ? "BTTS" : "双方进球" }
         ].map((group) => ({
           ...group,
           rows: match.recommendations.filter((rec) => rec.marketType === group.type)
@@ -3883,6 +3900,7 @@
                 <li><strong>盘口更新时间</strong><span>${fmtTime(match.manualMarkets.lastUpdated)}</span></li>
                 <li><strong>胜平负</strong><span>${escapeHtml(homeName(match))} ${fmtPrice(match.manualMarkets.moneyline?.home)} / 平局 ${fmtPrice(match.manualMarkets.moneyline?.draw)} / ${escapeHtml(awayName(match))} ${fmtPrice(match.manualMarkets.moneyline?.away)}</span></li>
                 <li><strong>大小球</strong><span>小于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.under25)} / 大于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.over25)}</span></li>
+                <li><strong>双方进球</strong><span>是 ${fmtPrice(match.manualMarkets.btts?.yes)} / 否 ${fmtPrice(match.manualMarkets.btts?.no)} · 模型 ${fmtPct(match.probabilities.btts)}</span></li>
                 <li><strong>模型 xG</strong><span>${match.model.lambdaHome.toFixed(2)} - ${match.model.lambdaAway.toFixed(2)}</span></li>
                 <li><strong>常见比分</strong><span>${match.probabilities.topScores.map((s) => `${s.score} ${(s.probability * 100).toFixed(1)}%`).join(", ")}</span></li>
                 ${(match.recommendations || []).filter((rec) => rec.marketType === "handicap").map((rec) => `<li><strong>让球盘</strong><span>${escapeHtml(rec.name)} @ ${fmtPrice(rec.marketPrice)} · ${escapeHtml(fmtOdds(rec.odds))} · 模型 ${fmtPct(rec.modelProbability)}</span></li>`).join("")}
