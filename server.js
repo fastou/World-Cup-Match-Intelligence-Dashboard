@@ -1287,30 +1287,27 @@ function livePolymarketRecommendations(match) {
   );
 }
 
-function polymarketEventDateKey(matchRecord) {
-  const slugText = livePolymarketRecommendations(matchRecord)
-    .map((rec) => `${rec.chart?.eventSlug || ""} ${rec.chart?.marketSlug || ""}`)
-    .join(" ");
-  const dateMatch = slugText.match(/20\d{2}-\d{2}-\d{2}/);
-  if (dateMatch) return dateMatch[0];
+function matchShanghaiDateKey(matchRecord) {
   const kickoffMs = dateMs(matchRecord?.kickoffShanghai || matchRecord?.kickoffLocal);
-  return kickoffMs ? new Date(kickoffMs).toISOString().slice(0, 10) : "";
+  return kickoffMs ? shanghaiDateDashed(new Date(kickoffMs)) : "";
 }
 
-function focusPolymarketMatches(matches, nowMs = Date.now()) {
-  const tradable = (matches || [])
-    .filter((match) => livePolymarketRecommendations(match).length)
+function focusMatchdayMatches(matches, nowMs = Date.now()) {
+  const candidates = (matches || [])
+    .filter((match) => !isFinishedStatus(match.scheduleStatus))
+    .filter((match) => {
+      const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
+      return kickoffMs && kickoffMs > nowMs - MATCH_LIVE_GRACE_HOURS * 60 * 60 * 1000;
+    })
     .sort((a, b) => (dateMs(a.kickoffShanghai || a.kickoffLocal) || 0) - (dateMs(b.kickoffShanghai || b.kickoffLocal) || 0));
-  if (!tradable.length) return { matches: [], marketDate: "" };
-  const inProgress = tradable.find((match) => isInProgressStatus(match.scheduleStatus));
-  const todayUtc = new Date(nowMs).toISOString().slice(0, 10);
-  const marketDates = [...new Set(tradable.map(polymarketEventDateKey).filter(Boolean))].sort();
-  const marketDate = inProgress
-    ? polymarketEventDateKey(inProgress)
-    : marketDates.find((date) => date > todayUtc) || marketDates.find((date) => date >= todayUtc) || marketDates[0] || "";
+  if (!candidates.length) return { matches: [], matchDate: "" };
+  const inProgress = candidates.find((match) => isInProgressStatus(match.scheduleStatus));
+  const matchDate = inProgress
+    ? matchShanghaiDateKey(inProgress)
+    : opportunityScanDate(candidates, new Date(nowMs));
   return {
-    marketDate,
-    matches: tradable.filter((match) => polymarketEventDateKey(match) === marketDate)
+    matchDate,
+    matches: candidates.filter((match) => matchShanghaiDateKey(match) === matchDate)
   };
 }
 
@@ -1735,9 +1732,9 @@ async function buildOpportunityRadar({ force = false } = {}) {
     includeOpenAi: false,
     light: true
   });
-  const focus = focusPolymarketMatches(dashboard.matches || [], now);
+  const focus = focusMatchdayMatches(dashboard.matches || [], now);
   const radarMatches = focus.matches.length ? focus.matches : dashboard.matches || [];
-  const scanDate = focus.marketDate || opportunityScanDate(radarMatches);
+  const scanDate = focus.matchDate || opportunityScanDate(radarMatches);
   const candidateRows = opportunityCandidateRows(radarMatches, scanDate, now);
   const candidates = diversifiedOpportunityRows(candidateRows, OPPORTUNITY_MAX_ITEMS, now);
   const ruleItems = candidates.map(buildRuleOpportunity);
@@ -1752,7 +1749,8 @@ async function buildOpportunityRadar({ force = false } = {}) {
       refreshMs: OPPORTUNITY_REFRESH_MS,
       scanDate,
       scanWindowDays: MATCH_WINDOW_DAYS,
-      focusMarketDate: focus.marketDate || "",
+      focusMatchDate: focus.matchDate || "",
+      focusMarketDate: focus.matchDate || "",
       focusMatchCount: radarMatches.length,
       candidateCount: candidateRows.length,
       nextRefreshAt: new Date(Date.now() + OPPORTUNITY_REFRESH_MS).toISOString(),
