@@ -540,6 +540,21 @@ function isFinishedStatus(status) {
     || normalized.includes("complete");
 }
 
+function isInProgressStatus(status) {
+  const normalized = statusName(status);
+  return normalized.includes("in_progress")
+    || normalized.includes("in-progress")
+    || normalized.includes("live")
+    || normalized.includes("first_half")
+    || normalized.includes("first-half")
+    || normalized.includes("second_half")
+    || normalized.includes("second-half")
+    || normalized.includes("extra_time")
+    || normalized.includes("extra-time")
+    || normalized.includes("halftime")
+    || normalized.includes("half-time");
+}
+
 function inUpcomingWindow(kickoffIso, nowMs = Date.now(), days = MATCH_WINDOW_DAYS) {
   const kickoffMs = dateMs(kickoffIso);
   if (!kickoffMs) return false;
@@ -1296,15 +1311,39 @@ function opportunityCandidateRows(matches, scanDate, nowMs = Date.now()) {
       });
     }
   }
-  return rows.sort((a, b) => b.score - a.score);
+  return opportunitySortRows(rows, nowMs);
 }
 
 function opportunityRowId(row) {
   return `${row.match?.id || ""}:${row.rec?.key || ""}:${row.rec?.marketType || ""}`;
 }
 
-function diversifiedOpportunityRows(rows, limit = OPPORTUNITY_MAX_ITEMS) {
-  const sorted = [...(rows || [])].sort((a, b) => b.score - a.score);
+function opportunityTimePriority(row, nowMs = Date.now()) {
+  const kickoffMs = dateMs(row?.match?.kickoffShanghai || row?.match?.kickoffLocal);
+  if (!kickoffMs) return 0;
+  if (isInProgressStatus(row?.match?.scheduleStatus)) return 5;
+  const minutesToKickoff = (kickoffMs - nowMs) / 60000;
+  if (minutesToKickoff <= 0 && minutesToKickoff >= -120) return 4;
+  if (minutesToKickoff > 0 && minutesToKickoff <= 180) return 3;
+  if (row?.matchScanDate === shanghaiDateDashed(new Date(nowMs))) return 2;
+  if (minutesToKickoff > 0 && minutesToKickoff <= 24 * 60) return 1;
+  return 0;
+}
+
+function opportunitySortRows(rows, nowMs = Date.now()) {
+  return [...(rows || [])].sort((a, b) => {
+    const timeDiff = opportunityTimePriority(b, nowMs) - opportunityTimePriority(a, nowMs);
+    if (timeDiff) return timeDiff;
+    const aKickoff = dateMs(a.match?.kickoffShanghai || a.match?.kickoffLocal) || Number.MAX_SAFE_INTEGER;
+    const bKickoff = dateMs(b.match?.kickoffShanghai || b.match?.kickoffLocal) || Number.MAX_SAFE_INTEGER;
+    const kickoffDiff = aKickoff - bKickoff;
+    if (kickoffDiff) return kickoffDiff;
+    return b.score - a.score;
+  });
+}
+
+function diversifiedOpportunityRows(rows, limit = OPPORTUNITY_MAX_ITEMS, nowMs = Date.now()) {
+  const sorted = opportunitySortRows(rows, nowMs);
   const selected = [];
   const used = new Set();
   const perMatch = new Map();
@@ -1327,6 +1366,8 @@ function diversifiedOpportunityRows(rows, limit = OPPORTUNITY_MAX_ITEMS) {
     return true;
   };
 
+  const activeOrNearRows = sorted.filter((row) => opportunityTimePriority(row, nowMs) >= 3);
+  for (const row of activeOrNearRows) add(row, { capMoneyline: false });
   for (const marketType of ["btts", "total", "handicap"]) {
     add(sorted.find((row) => row.hasLiveChart && row.rec?.marketType === marketType), { capMoneyline: false });
   }
@@ -1663,7 +1704,7 @@ async function buildOpportunityRadar({ force = false } = {}) {
   });
   const scanDate = opportunityScanDate(dashboard.matches || []);
   const candidateRows = opportunityCandidateRows(dashboard.matches || [], scanDate, now);
-  const candidates = diversifiedOpportunityRows(candidateRows, OPPORTUNITY_MAX_ITEMS);
+  const candidates = diversifiedOpportunityRows(candidateRows, OPPORTUNITY_MAX_ITEMS, now);
   const ruleItems = candidates.map(buildRuleOpportunity);
   const items = await enhanceOpportunitiesWithAi(ruleItems, dashboard.matches || []);
   const activeItems = items
