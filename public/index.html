@@ -697,6 +697,53 @@
         line-height: 1.45;
       }
 
+      .trend-panel {
+        margin-top: 12px;
+        padding: 12px;
+        border: 1px solid #d9e7df;
+        border-radius: 8px;
+        background: #f7fbf8;
+      }
+
+      .trend-panel h4 {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+
+      .trend-metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .trend-metric {
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .trend-metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .trend-metric strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 16px;
+      }
+
+      .trend-notes {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
       .confidence-note {
         margin-top: 3px;
         color: var(--muted);
@@ -1866,6 +1913,7 @@
         .confidence-panel,
         .trade-plan-head,
         .trade-plan-grid,
+        .trend-metrics,
         .intel-grid,
         .static-grid,
         .h2h-summary-grid,
@@ -3198,6 +3246,43 @@
         `;
       }
 
+      function renderTournamentTrend(match) {
+        const trend = match.tournamentTrend || {};
+        if (!trend.sampleSize) return "";
+        const rates = trend.rates || {};
+        const notes = Array.isArray(trend.notes) ? trend.notes : [];
+        const signals = Array.isArray(trend.signals) ? trend.signals : [];
+        const title = currentLang === "en" ? "Tournament Trend Adjustment" : "本届趋势修正";
+        const metricLabels = currentLang === "en"
+          ? [
+            ["Sample", trend.sampleSize],
+            ["BTTS", fmtPct(rates.btts)],
+            ["Over 2.5", fmtPct(rates.over25)],
+            ["Underdog scored", fmtPct(rates.underdogGoal)]
+          ]
+          : [
+            ["样本", `${trend.sampleSize} 场`],
+            ["双方进球", fmtPct(rates.btts)],
+            ["大 2.5", fmtPct(rates.over25)],
+            ["弱队进球", fmtPct(rates.underdogGoal)]
+          ];
+        const renderedNotes = notes.length ? notes : signals.map((signal) => signal.text).filter(Boolean);
+        return `
+          <section class="trend-panel">
+            <h4>${escapeHtml(title)}${trend.applied ? "" : ` · ${escapeHtml(currentLang === "en" ? "informational only" : "仅作观察")}`}</h4>
+            <div class="trend-metrics">
+              ${metricLabels.map(([label, value]) => `
+                <div class="trend-metric">
+                  <span>${escapeHtml(label)}</span>
+                  <strong>${escapeHtml(String(value ?? "-"))}</strong>
+                </div>
+              `).join("")}
+            </div>
+            ${renderedNotes.length ? `<ul class="trend-notes">${renderedNotes.slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          </section>
+        `;
+      }
+
       function tradeActionLabel(action) {
         const labels = {
           buy: currentLang === "en" ? "Actionable" : "可参与",
@@ -3869,6 +3954,7 @@
             </div>
 
             ${renderAiPrediction(match)}
+            ${renderTournamentTrend(match)}
             ${renderAiTradePlan(match)}
 
             ${renderOddsBoard(match)}
@@ -3922,6 +4008,7 @@
                 <li><strong>伤病</strong><span>${escapeHtml(match.dynamic.injurySummary)}</span></li>
                 <li><strong>天气</strong><span>${escapeHtml(match.dynamic.weatherSummary)}</span></li>
                 <li><strong>首发信心</strong><span>${escapeHtml(match.dynamic.lineupConfidence)}</span></li>
+                ${match.tournamentTrend?.notes?.length ? `<li><strong>本届趋势</strong><span>${escapeHtml(match.tournamentTrend.notes.join(" "))}</span></li>` : ""}
                 ${watchItems.map(([team, item]) => `<li><strong>${escapeHtml(team)}</strong><span>${escapeHtml(item)}</span></li>`).join("")}
               </ul>
             </div>
@@ -3938,6 +4025,7 @@
                 <li><strong>双方进球</strong><span>是 ${fmtPrice(match.manualMarkets.btts?.yes)} / 否 ${fmtPrice(match.manualMarkets.btts?.no)} · 模型 ${fmtPct(match.probabilities.btts)}</span></li>
                 <li><strong>模型 xG</strong><span>${match.model.lambdaHome.toFixed(2)} - ${match.model.lambdaAway.toFixed(2)}</span></li>
                 <li><strong>常见比分</strong><span>${match.probabilities.topScores.map((s) => `${s.score} ${(s.probability * 100).toFixed(1)}%`).join(", ")}</span></li>
+                ${match.tournamentTrend?.applied ? `<li><strong>趋势修正</strong><span>${escapeHtml(match.tournamentTrend.notes.join(" "))}</span></li>` : ""}
                 ${(match.recommendations || []).filter((rec) => rec.marketType === "handicap").map((rec) => `<li><strong>让球盘</strong><span>${escapeHtml(rec.name)} @ ${fmtPrice(rec.marketPrice)} · ${escapeHtml(fmtOdds(rec.odds))} · 模型 ${fmtPct(rec.modelProbability)}</span></li>`).join("")}
                 ${match.model.manualAdjustments.map((adj) => `<li><strong>${escapeHtml(adj.label)}</strong><span>${escapeHtml(adj.impact)}</span></li>`).join("")}
               </ul>

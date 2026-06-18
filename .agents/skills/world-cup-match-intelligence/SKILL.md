@@ -12,6 +12,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Treat the dashboard as research and monitoring software. Do not automate orders, guarantee outcomes, or present outputs as financial advice.
 - Do not fabricate missing sports, odds, Polymarket, lineup, injury, weather, or account data. Mark unavailable inputs as missing, stale, or source-unreachable.
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
+- Include a tournament-trend layer when current-tournament results exist: compute it from deduplicated final scores, keep the sample size visible, and apply only small weighted adjustments so early-tournament signals do not overfit.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -58,6 +59,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Auto-baseline fixtures may render basic win/draw/loss, total, and handicap probabilities, but must mark missing dynamic context and real markets. Do not render live edge or price advice unless real odds/Polymarket mappings exist.
 - Auto-baseline fixtures must still merge any available generated `worldcup-context.json` dynamic context by schedule id. If the sync produced lineup/news/weather/AI fields, the dashboard should show them instead of default placeholders.
 - Keep full local models and auto-baseline fixtures visually distinct in the UI and API payload.
+- Current-tournament trend analysis should use the full tournament-to-date schedule range when available, not only the visible three-day window. Deduplicate `schedule-...` and bare ESPN ids before calculating rates.
 
 ## Static Match Context
 
@@ -103,6 +105,8 @@ Fallbacks may explain uncertainty and keep the page useful, but they must not fa
 
 Ranking, venue, weather, recent form, tactical matchup, AI synthesis, and four-year head-to-head context should all have either a verified value or a visible low-confidence fallback. A plain `waiting` state should be reserved for source failures, not for dimensions that can be explained from existing baseline inputs.
 
+Tournament trend fields should explain their evidence: sample size, BTTS rate, over/under rate, draw rate, underdog scoring rate, favorite clean-sheet rate, confederation summaries, and per-match adjustment notes. Never hard-code narrative beliefs such as "African teams are strong" as permanent truths; convert them into current-tournament, sample-weighted signals such as CAF goals, underdog scoring, BTTS, and results versus ranking expectation.
+
 ## Public Source Sync
 
 When updating source collection:
@@ -126,6 +130,7 @@ When maintaining public market data:
 - The next-three-day fixture window is a data collection and context sync scope. Do not render it as the primary home-page match list unless explicitly requested.
 - The primary dashboard tabs should default to every match on the current Beijing/Shanghai matchday, not the entire ESPN/FIFA schedule window and not the date embedded in Polymarket market slugs. A late-night match whose Polymarket slug says the prior date should still be grouped by its kickoff date in Asia/Shanghai. Matches without live Polymarket curves may appear as schedule/awaiting-market, but must not generate fake price advice.
 - Opportunity radar should use the same current Beijing/Shanghai matchday as the main tabs, then rank only real priced/curved market candidates within that focused set. Diversify surfaced candidates across BTTS, totals, handicap, and match result, and do not let high-edge longshot moneyline rows crowd out structured market opportunities with live curves.
+- Opportunity radar should consume trend-adjusted probabilities and can add small ranking boosts for trend-supported markets such as BTTS-hot, underdog-scoring, or underdog-handicap signals. It must still obey price, data-quality, and curve gates.
 - Match Polymarket team names with exact team aliases or word-boundary tokens. Do not treat short team codes such as `SCO`, `MAR`, or `CAN` as arbitrary substrings, because they can appear inside unrelated words like `score`, `market`, or `canceled`.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
 - Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`, and South Korea/Korea Republic using `kr` rather than `kor`.
@@ -148,6 +153,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - top holder snapshots
 - static world rankings, team recent form, and head-to-head context
 - squad physical/line-profile context and AI human-read notes
+- tournament-trend sample, signals, and per-match adjustment notes
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.

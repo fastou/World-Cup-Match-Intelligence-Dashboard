@@ -226,6 +226,66 @@ const TEAM_DISPLAY_NAMES_ZH = {
   UZB: "乌兹别克斯坦"
 };
 
+const TEAM_CONFEDERATIONS = {
+  ALG: "CAF",
+  CIV: "CAF",
+  COD: "CAF",
+  CPV: "CAF",
+  EGY: "CAF",
+  GHA: "CAF",
+  HAI: "CONCACAF",
+  MAR: "CAF",
+  RSA: "CAF",
+  SEN: "CAF",
+  TUN: "CAF",
+  CUW: "CONCACAF",
+  CAN: "CONCACAF",
+  MEX: "CONCACAF",
+  PAN: "CONCACAF",
+  USA: "CONCACAF",
+  ARG: "CONMEBOL",
+  BRA: "CONMEBOL",
+  COL: "CONMEBOL",
+  ECU: "CONMEBOL",
+  PAR: "CONMEBOL",
+  URU: "CONMEBOL",
+  AUS: "AFC",
+  IRN: "AFC",
+  IRQ: "AFC",
+  JOR: "AFC",
+  JPN: "AFC",
+  KOR: "AFC",
+  KSA: "AFC",
+  NZL: "OFC",
+  QAT: "AFC",
+  UZB: "AFC",
+  AUT: "UEFA",
+  BEL: "UEFA",
+  BIH: "UEFA",
+  CRO: "UEFA",
+  CZE: "UEFA",
+  ENG: "UEFA",
+  ESP: "UEFA",
+  FRA: "UEFA",
+  GER: "UEFA",
+  NED: "UEFA",
+  NOR: "UEFA",
+  POR: "UEFA",
+  SCO: "UEFA",
+  SUI: "UEFA",
+  SWE: "UEFA",
+  TUR: "UEFA"
+};
+
+const CONFEDERATION_LABELS_ZH = {
+  AFC: "亚洲球队",
+  CAF: "非洲球队",
+  CONCACAF: "中北美球队",
+  CONMEBOL: "南美球队",
+  OFC: "大洋洲球队",
+  UEFA: "欧洲球队"
+};
+
 function teamDisplayName(code, fallback = "") {
   const normalized = String(code || "").toUpperCase();
   return TEAM_DISPLAY_NAMES_ZH[normalized] || TEAM_SEARCH_NAMES[normalized] || fallback || normalized;
@@ -640,6 +700,390 @@ function scoreModel(lambdaHome, lambdaAway) {
   };
 }
 
+function normalizeProbabilityTriplet(values) {
+  const home = Math.max(0.01, Number(values.home) || 0.01);
+  const draw = Math.max(0.01, Number(values.draw) || 0.01);
+  const away = Math.max(0.01, Number(values.away) || 0.01);
+  const total = home + draw + away;
+  return {
+    home: home / total,
+    draw: draw / total,
+    away: away / total
+  };
+}
+
+function recalculateScoreSummaries(probabilities) {
+  const scores = [...(probabilities.topScoresFull || [])].sort((a, b) => b.probability - a.probability);
+  return {
+    ...probabilities,
+    topScoresFull: scores,
+    topScores: scores.slice(0, 6)
+  };
+}
+
+function confederationForTeam(code) {
+  return TEAM_CONFEDERATIONS[String(code || "").toUpperCase()] || "OTHER";
+}
+
+function confederationLabel(code) {
+  return CONFEDERATION_LABELS_ZH[code] || code || "未知地区";
+}
+
+function rankingNumber(code, fifaRankings) {
+  const rank = Number(fifaRankings?.rankings?.[String(code || "").toUpperCase()]);
+  return Number.isFinite(rank) && rank > 0 ? rank : null;
+}
+
+function uniqueCompletedScheduleMatches(schedule) {
+  const seen = new Set();
+  return (schedule?.matches || [])
+    .filter((event) => event.completed || isFinishedStatus(event.status))
+    .filter((event) => Number.isFinite(Number(event.homeScore)) && Number.isFinite(Number(event.awayScore)))
+    .filter((event) => {
+      const key = String(event.scheduleId || scheduleEventKey(event));
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function buildTournamentTrend(schedule, fifaRankings, now = new Date()) {
+  const completed = uniqueCompletedScheduleMatches(schedule);
+  const stats = {
+    matches: completed.length,
+    btts: 0,
+    over25: 0,
+    draws: 0,
+    underdogGoalMatches: 0,
+    favoriteCleanSheets: 0,
+    favoriteWins: 0,
+    rankedMatches: 0,
+    confederations: {}
+  };
+
+  const teamResults = {};
+  const addTeamResult = (code, goalsFor, goalsAgainst, opponentCode, rankGapSigned) => {
+    const confed = confederationForTeam(code);
+    if (!stats.confederations[confed]) {
+      stats.confederations[confed] = {
+        code: confed,
+        label: confederationLabel(confed),
+        teams: new Set(),
+        matches: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        goalsFor: 0,
+        goalsAgainst: 0,
+        bttsMatches: 0,
+        over25Matches: 0,
+        underdogMatches: 0,
+        underdogGoals: 0,
+        underdogResults: 0
+      };
+    }
+    const bucket = stats.confederations[confed];
+    bucket.teams.add(code);
+    bucket.matches += 1;
+    bucket.goalsFor += goalsFor;
+    bucket.goalsAgainst += goalsAgainst;
+    if (goalsFor > goalsAgainst) bucket.wins += 1;
+    else if (goalsFor === goalsAgainst) bucket.draws += 1;
+    else bucket.losses += 1;
+    if (goalsFor > 0 && goalsAgainst > 0) bucket.bttsMatches += 1;
+    if (goalsFor + goalsAgainst > 2.5) bucket.over25Matches += 1;
+    if (rankGapSigned > 0) {
+      bucket.underdogMatches += 1;
+      if (goalsFor > 0) bucket.underdogGoals += 1;
+      if (goalsFor >= goalsAgainst) bucket.underdogResults += 1;
+    }
+    if (!teamResults[code]) {
+      teamResults[code] = {
+        code,
+        confederation: confed,
+        matches: 0,
+        goalsFor: 0,
+        goalsAgainst: 0,
+        bttsMatches: 0,
+        over25Matches: 0
+      };
+    }
+    teamResults[code].matches += 1;
+    teamResults[code].goalsFor += goalsFor;
+    teamResults[code].goalsAgainst += goalsAgainst;
+    if (goalsFor > 0 && goalsAgainst > 0) teamResults[code].bttsMatches += 1;
+    if (goalsFor + goalsAgainst > 2.5) teamResults[code].over25Matches += 1;
+  };
+
+  for (const event of completed) {
+    const home = eventTeamCode(event, "home");
+    const away = eventTeamCode(event, "away");
+    const homeGoals = Number(event.homeScore);
+    const awayGoals = Number(event.awayScore);
+    const total = homeGoals + awayGoals;
+    const homeRank = rankingNumber(home, fifaRankings);
+    const awayRank = rankingNumber(away, fifaRankings);
+    const hasRanks = Boolean(homeRank && awayRank);
+    if (homeGoals > 0 && awayGoals > 0) stats.btts += 1;
+    if (total > 2.5) stats.over25 += 1;
+    if (homeGoals === awayGoals) stats.draws += 1;
+    if (hasRanks) {
+      stats.rankedMatches += 1;
+      const homeFavored = homeRank < awayRank;
+      const favoriteGoals = homeFavored ? homeGoals : awayGoals;
+      const underdogGoals = homeFavored ? awayGoals : homeGoals;
+      if (underdogGoals > 0) stats.underdogGoalMatches += 1;
+      if (underdogGoals === 0) stats.favoriteCleanSheets += 1;
+      if (favoriteGoals > underdogGoals) stats.favoriteWins += 1;
+    }
+    addTeamResult(home, homeGoals, awayGoals, away, hasRanks ? homeRank - awayRank : 0);
+    addTeamResult(away, awayGoals, homeGoals, home, hasRanks ? awayRank - homeRank : 0);
+  }
+
+  const sampleWeight = clamp(stats.matches / 24, 0, 1);
+  const bttsRate = stats.matches ? stats.btts / stats.matches : null;
+  const over25Rate = stats.matches ? stats.over25 / stats.matches : null;
+  const drawRate = stats.matches ? stats.draws / stats.matches : null;
+  const underdogGoalRate = stats.rankedMatches ? stats.underdogGoalMatches / stats.rankedMatches : null;
+  const favoriteCleanSheetRate = stats.rankedMatches ? stats.favoriteCleanSheets / stats.rankedMatches : null;
+  const favoriteWinRate = stats.rankedMatches ? stats.favoriteWins / stats.rankedMatches : null;
+  const signals = [];
+  const adjustments = {
+    bttsDelta: 0,
+    over25Delta: 0,
+    under25Delta: 0,
+    drawDelta: 0,
+    underdogWinDelta: 0,
+    underdogHandicapDelta: 0
+  };
+
+  if (stats.matches >= 6 && bttsRate > 0.58) {
+    adjustments.bttsDelta = clamp((bttsRate - 0.5) * 0.22 * sampleWeight, 0.01, 0.055);
+    signals.push({
+      id: "btts-hot",
+      label: "双方进球偏热",
+      strength: "medium",
+      text: `本届已完赛 ${stats.matches} 场里 BTTS ${stats.btts} 场（${formatPercent(bttsRate)}），弱队并非只挨打。`,
+      appliesTo: ["btts", "over25"]
+    });
+  }
+  if (stats.matches >= 6 && over25Rate > 0.54) {
+    adjustments.over25Delta = clamp((over25Rate - 0.5) * 0.16 * sampleWeight, 0.006, 0.04);
+    adjustments.under25Delta = -adjustments.over25Delta;
+    signals.push({
+      id: "goal-tempo-hot",
+      label: "进球环境偏开放",
+      strength: "medium",
+      text: `大 2.5 已出 ${stats.over25}/${stats.matches}（${formatPercent(over25Rate)}），小球信号需要降权。`,
+      appliesTo: ["total"]
+    });
+  }
+  if (stats.rankedMatches >= 6 && underdogGoalRate > 0.55) {
+    adjustments.underdogWinDelta = clamp((underdogGoalRate - 0.5) * 0.08 * sampleWeight, 0.004, 0.03);
+    adjustments.underdogHandicapDelta = clamp((underdogGoalRate - 0.5) * 0.12 * sampleWeight, 0.006, 0.04);
+    signals.push({
+      id: "underdog-scoring",
+      label: "弱队进球能力被低估",
+      strength: "medium",
+      text: `有排名样本里弱队进球 ${stats.underdogGoalMatches}/${stats.rankedMatches}（${formatPercent(underdogGoalRate)}），强队零封假设要打折。`,
+      appliesTo: ["btts", "handicap", "favorite-moneyline"]
+    });
+  }
+  if (stats.matches >= 6 && drawRate > 0.28) {
+    adjustments.drawDelta = clamp((drawRate - 0.25) * 0.08 * sampleWeight, 0.003, 0.025);
+    signals.push({
+      id: "draw-resistance",
+      label: "平局阻力偏高",
+      strength: "low",
+      text: `平局 ${stats.draws}/${stats.matches}（${formatPercent(drawRate)}），领先方优势不能过度外推。`,
+      appliesTo: ["draw", "handicap"]
+    });
+  }
+
+  const confederations = Object.values(stats.confederations).map((bucket) => {
+    const matches = bucket.matches || 0;
+    return {
+      code: bucket.code,
+      label: bucket.label,
+      teams: [...bucket.teams],
+      matches,
+      wins: bucket.wins,
+      draws: bucket.draws,
+      losses: bucket.losses,
+      pointsPerMatch: matches ? roundTo((bucket.wins * 3 + bucket.draws) / matches, 2) : null,
+      goalsForPerMatch: matches ? roundTo(bucket.goalsFor / matches, 2) : null,
+      goalsAgainstPerMatch: matches ? roundTo(bucket.goalsAgainst / matches, 2) : null,
+      bttsRate: matches ? bucket.bttsMatches / matches : null,
+      over25Rate: matches ? bucket.over25Matches / matches : null,
+      underdogGoalRate: bucket.underdogMatches ? bucket.underdogGoals / bucket.underdogMatches : null,
+      underdogResultRate: bucket.underdogMatches ? bucket.underdogResults / bucket.underdogMatches : null
+    };
+  }).sort((a, b) => (b.pointsPerMatch || 0) - (a.pointsPerMatch || 0));
+
+  for (const bucket of confederations) {
+    if (bucket.code === "CAF" && bucket.matches >= 4 && ((bucket.bttsRate || 0) >= 0.55 || (bucket.underdogGoalRate || 0) >= 0.5)) {
+      signals.push({
+        id: "caf-athletic-resistance",
+        label: "非洲球队抗预期",
+        strength: "medium",
+        text: `非洲球队本届 ${bucket.wins}-${bucket.draws}-${bucket.losses}，场均进 ${bucket.goalsForPerMatch} 球；数据支持“抗预期/不易被零封”，速度、身体和转换作为赛前重点复核项。`,
+        appliesTo: ["CAF", "btts", "handicap"]
+      });
+      break;
+    }
+  }
+
+  return {
+    ok: stats.matches > 0,
+    source: "ESPN FIFA World Cup scoreboard + 本地结果去重",
+    updatedAt: new Date().toISOString(),
+    sampleSize: stats.matches,
+    sampleWeight: roundTo(sampleWeight, 3),
+    rates: {
+      btts: bttsRate,
+      over25: over25Rate,
+      under25: over25Rate == null ? null : 1 - over25Rate,
+      draw: drawRate,
+      underdogGoal: underdogGoalRate,
+      favoriteCleanSheet: favoriteCleanSheetRate,
+      favoriteWin: favoriteWinRate
+    },
+    adjustments,
+    signals,
+    confederations,
+    completedMatches: completed.map((event) => ({
+      scheduleId: event.scheduleId,
+      kickoffUtc: event.kickoffUtc,
+      home: eventTeamCode(event, "home"),
+      away: eventTeamCode(event, "away"),
+      homeName: eventTeamName(event, "home"),
+      awayName: eventTeamName(event, "away"),
+      score: `${event.homeScore}-${event.awayScore}`,
+      btts: Number(event.homeScore) > 0 && Number(event.awayScore) > 0,
+      over25: Number(event.homeScore) + Number(event.awayScore) > 2.5
+    })),
+    summary: stats.matches
+      ? `本届已完赛 ${stats.matches} 场：BTTS ${stats.btts}/${stats.matches}，大 2.5 ${stats.over25}/${stats.matches}，平局 ${stats.draws}/${stats.matches}。`
+      : "本届已完赛样本不足，暂不启用趋势修正。"
+  };
+}
+
+function teamTrendProfile(code, tournamentTrend) {
+  const normalized = String(code || "").toUpperCase();
+  const confed = confederationForTeam(normalized);
+  const confedProfile = (tournamentTrend?.confederations || []).find((item) => item.code === confed);
+  return {
+    code: normalized,
+    confederation: confed,
+    confederationLabel: confederationLabel(confed),
+    confederationProfile: confedProfile || null
+  };
+}
+
+function probabilityShift(value, delta) {
+  return clamp((Number(value) || 0) + (Number(delta) || 0), 0.03, 0.97);
+}
+
+function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) {
+  if (!tournamentTrend?.ok || !match?.probabilities) {
+    match.tournamentTrend = {
+      applied: false,
+      sampleSize: tournamentTrend?.sampleSize || 0,
+      notes: ["本届样本不足，暂不做趋势修正。"]
+    };
+    return match;
+  }
+
+  const trend = tournamentTrend;
+  const homeRank = rankingNumber(match.home, fifaRankings);
+  const awayRank = rankingNumber(match.away, fifaRankings);
+  const homeConfed = confederationForTeam(match.home);
+  const awayConfed = confederationForTeam(match.away);
+  const sampleWeight = Number(trend.sampleWeight) || 0;
+  const deltas = {
+    btts: 0,
+    over25: 0,
+    under25: 0,
+    home: 0,
+    draw: 0,
+    away: 0
+  };
+  const notes = [];
+
+  if (trend.adjustments?.bttsDelta) {
+    deltas.btts += trend.adjustments.bttsDelta;
+    notes.push(`BTTS 赛会热度 +${formatPercent(trend.adjustments.bttsDelta)}。`);
+  }
+  if (trend.adjustments?.over25Delta) {
+    deltas.over25 += trend.adjustments.over25Delta;
+    deltas.under25 -= trend.adjustments.over25Delta;
+    notes.push(`本届进球节奏偏开放，小球概率下修 ${formatPercent(trend.adjustments.over25Delta)}。`);
+  }
+  if (trend.adjustments?.drawDelta) {
+    deltas.draw += trend.adjustments.drawDelta;
+    notes.push(`平局阻力趋势 +${formatPercent(trend.adjustments.drawDelta)}。`);
+  }
+
+  if (homeRank && awayRank && trend.adjustments?.underdogWinDelta) {
+    const homeUnderdog = homeRank > awayRank;
+    const underdogKey = homeUnderdog ? "home" : "away";
+    const favoriteKey = homeUnderdog ? "away" : "home";
+    deltas[underdogKey] += trend.adjustments.underdogWinDelta;
+    deltas[favoriteKey] -= trend.adjustments.underdogWinDelta * 0.65;
+    deltas.btts += Math.min(0.018, trend.adjustments.underdogWinDelta * 0.7);
+    notes.push(`弱队进球趋势让 ${homeUnderdog ? match.homeName : match.awayName} 胜/受让侧小幅上修。`);
+  }
+
+  for (const side of ["home", "away"]) {
+    const code = side === "home" ? match.home : match.away;
+    const confed = side === "home" ? homeConfed : awayConfed;
+    if (confed !== "CAF") continue;
+    const profile = (trend.confederations || []).find((item) => item.code === "CAF");
+    if (!profile || profile.matches < 4) continue;
+    const otherRank = side === "home" ? awayRank : homeRank;
+    const thisRank = side === "home" ? homeRank : awayRank;
+    const isUnderdog = thisRank && otherRank ? thisRank > otherRank : false;
+    const cafDelta = clamp(0.008 * sampleWeight + ((profile.underdogGoalRate || 0) - 0.45) * 0.025 * sampleWeight, 0.004, 0.02);
+    deltas.btts += cafDelta;
+    if (isUnderdog) {
+      deltas[side] += cafDelta * 0.8;
+      deltas[side === "home" ? "away" : "home"] -= cafDelta * 0.45;
+    }
+    notes.push(`${match[`${side}Name`]} 属于非洲样本组，本届非洲队进球/抗预期样本较强，速度、身体和转换作为重点复核项，零封假设降权。`);
+  }
+
+  const winTriplet = normalizeProbabilityTriplet({
+    home: match.probabilities.home + deltas.home,
+    draw: match.probabilities.draw + deltas.draw,
+    away: match.probabilities.away + deltas.away
+  });
+  const over25 = probabilityShift(match.probabilities.over25, deltas.over25);
+  const btts = probabilityShift(match.probabilities.btts, deltas.btts);
+  match.probabilities = recalculateScoreSummaries({
+    ...match.probabilities,
+    ...winTriplet,
+    over25,
+    under25: 1 - over25,
+    btts,
+    trendAdjusted: true
+  });
+  match.tournamentTrend = {
+    applied: notes.length > 0,
+    sampleSize: trend.sampleSize,
+    sampleWeight: trend.sampleWeight,
+    rates: trend.rates,
+    signals: (trend.signals || []).slice(0, 5),
+    home: teamTrendProfile(match.home, trend),
+    away: teamTrendProfile(match.away, trend),
+    deltas: Object.fromEntries(Object.entries(deltas).map(([key, value]) => [key, roundTo(value, 4)])),
+    notes: notes.length ? [...new Set(notes)].slice(0, 5) : ["本场没有明显赛会趋势修正。"],
+    updatedAt: trend.updatedAt
+  };
+  match.dynamicModel = match.dynamicModel || {};
+  match.dynamicModel.tournamentTrend = match.tournamentTrend;
+  return match;
+}
+
 function handicapProbability(scores, homeLine, side) {
   let win = 0;
   let push = 0;
@@ -655,6 +1099,26 @@ function handicapProbability(scores, homeLine, side) {
   }
 
   return { win, push, lose };
+}
+
+function handicapProbabilityFromProbabilities(probabilities, homeLine, side) {
+  if (typeof homeLine !== "number") return handicapProbability(probabilities.topScoresFull || [], homeLine, side);
+  if (homeLine === -0.5) {
+    return side === "home"
+      ? { win: probabilities.home, push: 0, lose: probabilities.draw + probabilities.away }
+      : { win: probabilities.draw + probabilities.away, push: 0, lose: probabilities.home };
+  }
+  if (homeLine === 0.5) {
+    return side === "home"
+      ? { win: probabilities.home + probabilities.draw, push: 0, lose: probabilities.away }
+      : { win: probabilities.away, push: 0, lose: probabilities.home + probabilities.draw };
+  }
+  if (homeLine === 0) {
+    return side === "home"
+      ? { win: probabilities.home, push: probabilities.draw, lose: probabilities.away }
+      : { win: probabilities.away, push: probabilities.draw, lose: probabilities.home };
+  }
+  return handicapProbability(probabilities.topScoresFull || [], homeLine, side);
 }
 
 function edge(modelProbability, marketPrice) {
@@ -864,8 +1328,8 @@ function buildRecommendations(match, probabilities) {
   ];
 
   for (const handicap of markets.handicaps || []) {
-    const home = handicapProbability(probabilities.topScoresFull, handicap.homeLine, "home");
-    const away = handicapProbability(probabilities.topScoresFull, handicap.homeLine, "away");
+    const home = handicapProbabilityFromProbabilities(probabilities, handicap.homeLine, "home");
+    const away = handicapProbabilityFromProbabilities(probabilities, handicap.homeLine, "away");
     rows.push({
       key: `${handicap.id}-home`,
       marketType: "handicap",
@@ -1148,6 +1612,9 @@ function buildAiPrediction(match) {
   if (context.aiAnalysis?.summary) {
     reasons.push(context.aiAnalysis.summary);
   }
+  if (match.tournamentTrend?.applied && match.tournamentTrend.notes?.length) {
+    reasons.push(`赛会趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
+  }
   if (eliteRows.length) {
     const eliteText = eliteRows.slice(0, 2).map((row) => `${row.name} 有 ${row.count} 个高手持仓，当前约 ${Math.round(row.totalCurrentValue).toLocaleString()} 美元`).join("；");
     reasons.push(`高手持仓信号：${eliteText}。`);
@@ -1206,10 +1673,25 @@ function recommendationMarketPriority(rec) {
   return 0;
 }
 
-function tradableRecommendationScore(rec) {
+function trendScoreBoost(match, rec) {
+  if (!match?.tournamentTrend?.applied || !rec) return 0;
+  const deltas = match.tournamentTrend.deltas || {};
+  let boost = 0;
+  if (rec.key === "bttsYes" && (deltas.btts || 0) > 0) boost += Math.min(0.018, (deltas.btts || 0) * 0.7);
+  if (rec.key === "over25" && (deltas.over25 || 0) > 0) boost += Math.min(0.012, (deltas.over25 || 0) * 0.6);
+  if (rec.key === "under25" && (deltas.under25 || 0) < 0) boost -= Math.min(0.018, Math.abs(deltas.under25 || 0) * 0.8);
+  if (rec.marketType === "handicap" && typeof rec.handicap?.homeLine === "number") {
+    const isAwayUnderdog = rec.key.endsWith("-away") && rec.handicap.awayLine > 0;
+    const isHomeUnderdog = rec.key.endsWith("-home") && rec.handicap.homeLine > 0;
+    if (isAwayUnderdog || isHomeUnderdog) boost += 0.008;
+  }
+  return boost;
+}
+
+function tradableRecommendationScore(rec, match = null) {
   const edgeValue = typeof rec.edge === "number" ? rec.edge : -9;
   const holderBoost = Math.min(0.025, ((rec.eliteSummary?.count || 0) * 0.008) + ((rec.holderSummary?.eliteCount || 0) * 0.004));
-  return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003;
+  return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec);
 }
 
 function isActionableRecommendation(rec) {
@@ -1235,13 +1717,13 @@ function isPrimaryTradeCandidate(match, rec) {
 function sortedPrimaryRecommendations(match) {
   return [...(match.recommendations || [])]
     .filter((rec) => isPrimaryTradeCandidate(match, rec))
-    .sort((a, b) => tradableRecommendationScore(b) - tradableRecommendationScore(a));
+    .sort((a, b) => tradableRecommendationScore(b, match) - tradableRecommendationScore(a, match));
 }
 
 function sortedActionableRecommendations(match) {
   return [...(match.recommendations || [])]
     .filter(isActionableRecommendation)
-    .sort((a, b) => tradableRecommendationScore(b) - tradableRecommendationScore(a));
+    .sort((a, b) => tradableRecommendationScore(b, match) - tradableRecommendationScore(a, match));
 }
 
 function topRiskNotes(match, primary) {
@@ -1252,6 +1734,9 @@ function topRiskNotes(match, primary) {
   if (primary?.decision?.reasons?.length) notes.push(`降级原因：${primary.decision.reasons.join("、")}。`);
   const contextRisks = Array.isArray(match.context?.riskFlags) ? match.context.riskFlags : [];
   notes.push(...contextRisks.slice(0, 2));
+  if (match.tournamentTrend?.applied) {
+    notes.push(`赛会趋势：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
+  }
   if (!notes.length) notes.push("按价格纪律执行；超过建议价不追。");
   return [...new Set(notes)].slice(0, 4);
 }
@@ -1334,7 +1819,7 @@ function opportunityCandidateRows(matches, scanDate, nowMs = Date.now()) {
         rec,
         hasLiveChart,
         matchScanDate,
-        score: tradableRecommendationScore(rec)
+        score: tradableRecommendationScore(rec, match)
           + (hasLiveChart ? 0.01 : 0)
           + (match.tradingGate?.allowStrongTrade ? 0.012 : 0)
           + (matchScanDate === scanDate ? 0.006 : 0)
@@ -2167,6 +2652,7 @@ function buildRuleTradePlan(match) {
     entryText,
     rationale: primary ? [
       `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，edge ${formatPercent(primary.edge)}。`,
+      match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
       primary.holderSummary?.count ? `该盘口公开持仓 ${primary.holderSummary.count} 人，Top holder ${primary.holderSummary.topHolder || "-"}。` : "",
       primary.eliteSummary?.count ? `足球 Top100 命中 ${primary.eliteSummary.count} 人，当前价值约 ${Math.round(primary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
     ].filter(Boolean) : ["当前没有非胜平负盘口达到价格纪律；胜平负长赔只作为激进观察，不做首选。"],
@@ -2702,7 +3188,7 @@ function h2hFromOverride(event, h2hOverrides, fifaRankings) {
   };
 }
 
-function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, nowMs = Date.now()) {
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
@@ -2789,6 +3275,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   baseMatch.humanMatchup = buildHumanMatchup(baseMatch, fifaRankings);
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
+  applyTournamentTrendToMatch(baseMatch, tournamentTrend, fifaRankings);
   baseMatch.manualMarkets = autoBaselineManualMarkets(baseMatch, baseMatch.probabilities);
   baseMatch.recommendations = [];
   baseMatch.completeness = buildCompleteness(baseMatch, polymarket);
@@ -2797,13 +3284,13 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
-    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, nowMs))
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, nowMs))
     .filter(Boolean);
   const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
@@ -2828,7 +3315,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   };
 }
 
-function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}) {
+function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}, tournamentTrend = null) {
   const homeTeam = attachStaticProfiles(teams[match.home], match.home, worldCupRecords, squadProfiles);
   const awayTeam = attachStaticProfiles(teams[match.away], match.away, worldCupRecords, squadProfiles);
   const matchContext = contextForMatch(context, match.id);
@@ -2847,6 +3334,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
     dynamicModel
   };
   enriched.humanMatchup = buildHumanMatchup(enriched, fifaRankings);
+  applyTournamentTrendToMatch(enriched, tournamentTrend, fifaRankings);
   const withInitialRecommendations = {
     ...enriched,
     recommendations: []
@@ -4247,28 +4735,9 @@ function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function fetchScheduleWindow(now = new Date()) {
-  const startedAt = Date.now();
-  const dates = [];
-  for (let offset = -MATCH_SCHEDULE_LOOKBACK_DAYS; offset <= MATCH_WINDOW_DAYS; offset += 1) {
-    dates.push(shanghaiDateKey(addDays(now, offset)));
-  }
-  const url = `${ESPN_WORLDCUP_SCOREBOARD}?dates=${dates[0]}-${dates[dates.length - 1]}`;
-  const result = await timedFetchJson(url);
-  if (!result.ok) {
-    return {
-      ok: false,
-      source: "ESPN FIFA World Cup scoreboard",
-      url,
-      lastUpdated: new Date().toISOString(),
-      latencyMs: result.latencyMs,
-      error: translateError(result.error),
-      matches: []
-    };
-  }
-
-  const events = Array.isArray(result.data?.events) ? result.data.events : [];
-  const matches = events.map((event) => {
+function normalizeScoreboardEvents(data) {
+  const events = Array.isArray(data?.events) ? data.events : [];
+  return events.map((event) => {
     const competition = event.competitions?.[0] || {};
     const competitors = Array.isArray(competition.competitors) ? competition.competitors : [];
     const home = competitors.find((item) => item.homeAway === "home") || competitors[0] || {};
@@ -4297,16 +4766,49 @@ async function fetchScheduleWindow(now = new Date()) {
       source: "ESPN FIFA World Cup scoreboard"
     };
   });
+}
 
+async function fetchScheduleRange(startKey, endKey, label = "ESPN FIFA World Cup scoreboard") {
+  const startedAt = Date.now();
+  const url = `${ESPN_WORLDCUP_SCOREBOARD}?dates=${startKey}-${endKey}`;
+  const result = await timedFetchJson(url);
+  if (!result.ok) {
+    return {
+      ok: false,
+      source: label,
+      url,
+      lastUpdated: new Date().toISOString(),
+      latencyMs: result.latencyMs,
+      error: translateError(result.error),
+      matches: []
+    };
+  }
   return {
     ok: true,
-    source: "ESPN FIFA World Cup scoreboard",
+    source: label,
     url,
     lastUpdated: new Date().toISOString(),
     latencyMs: Date.now() - startedAt,
-    windowDays: MATCH_WINDOW_DAYS,
-    matches
+    matches: normalizeScoreboardEvents(result.data)
   };
+}
+
+async function fetchScheduleWindow(now = new Date()) {
+  const dates = [];
+  for (let offset = -MATCH_SCHEDULE_LOOKBACK_DAYS; offset <= MATCH_WINDOW_DAYS; offset += 1) {
+    dates.push(shanghaiDateKey(addDays(now, offset)));
+  }
+  const schedule = await fetchScheduleRange(dates[0], dates[dates.length - 1], "ESPN FIFA World Cup scoreboard");
+  return {
+    ...schedule,
+    windowDays: MATCH_WINDOW_DAYS,
+  };
+}
+
+async function fetchTournamentTrendSchedule(now = new Date()) {
+  const start = process.env.TOURNAMENT_TREND_START_DATE || "20260611";
+  const end = shanghaiDateKey(addDays(now, MATCH_WINDOW_DAYS));
+  return fetchScheduleRange(start, end, "ESPN FIFA World Cup scoreboard · tournament trend range");
 }
 
 async function fetchPolymarketSearch(search) {
@@ -5408,14 +5910,17 @@ async function buildDashboard({
     },
     matches: {}
   });
-  const [schedule, initialFinalResults] = await Promise.all([
+  const [schedule, trendSchedule, initialFinalResults] = await Promise.all([
     fetchScheduleWindow(),
+    fetchTournamentTrendSchedule(),
     fetchFinalResults()
   ]);
   let finalResults = initialFinalResults;
+  const trendSourceSchedule = trendSchedule.ok ? trendSchedule : schedule;
+  const tournamentTrend = buildTournamentTrend(trendSourceSchedule, fifaRankings);
   const polymarket = await fetchPolymarket(schedule);
   const preliminaryWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings));
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend));
   if (!DISABLE_HISTORY_RECORDING && schedule.ok) {
     try {
       await syncFinalResultsFromSchedule(schedule, allModeledMatches, finalResults);
@@ -5424,7 +5929,7 @@ async function buildDashboard({
     }
   }
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend);
   attachMarketCharts(matches, polymarket);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
   if (!includeElite) {
@@ -5487,6 +5992,13 @@ async function buildDashboard({
         detail: `${visibility.modeledVisible} 场完整模型 · ${visibility.autoBaseline} 场自动基线 · ${visibility.hiddenModeled} 场已隐藏`
       },
       {
+        source: "本届赛会趋势",
+        ok: tournamentTrend.ok,
+        lastUpdated: tournamentTrend.updatedAt || "",
+        error: trendSchedule.ok ? undefined : trendSchedule.error,
+        detail: tournamentTrend.summary
+      },
+      {
         source: "足球高手账户",
         ok: eliteTraders.ok,
         lastUpdated: eliteTraders.updatedAt || "",
@@ -5523,6 +6035,7 @@ async function buildDashboard({
     },
     researchFramework,
     contextMeta: context.meta || {},
+    tournamentTrend,
     schedule,
     matches,
     eliteTraders,
