@@ -2837,6 +2837,8 @@ function attachMarketCharts(matches, polymarket) {
           conditionId: token.conditionId,
           tokenId: token.tokenId,
           marketQuestion: token.marketQuestion,
+          marketSlug: token.marketSlug,
+          eventSlug: token.eventSlug,
           label: token.label,
           currentPrice: token.currentPrice,
           history: token.history || []

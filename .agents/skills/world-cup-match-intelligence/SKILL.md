@@ -123,6 +123,7 @@ When maintaining public market data:
 
 - Fetch live curves for match result, handicap, and totals separately when markets exist.
 - Treat BTTS / Both Teams To Score as a first-class market alongside match result, handicap, and totals: generate Yes/No probabilities, match Polymarket BTTS tokens when available, show curves, archive snapshots, and settle reviews from final scores.
+- The primary trading dashboard should default to the current Polymarket focus market date, not the entire ESPN/FIFA schedule window. ESPN/FIFA schedule-only fixtures and other matched future markets can remain in backend context for research/radar, but should not crowd the main tradable match tabs.
 - Opportunity radar should scan the dashboard's full next-three-day match window and rank by match lifecycle first: in-progress and near-kickoff matches before future fixtures, then diversify surfaced candidates across BTTS, totals, handicap, and match result. Do not let high-edge longshot moneyline rows crowd out structured market opportunities with live curves.
 - Match Polymarket team names with exact team aliases or word-boundary tokens. Do not treat short team codes such as `SCO`, `MAR`, or `CAN` as arbitrary substrings, because they can appear inside unrelated words like `score`, `market`, or `canceled`.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.

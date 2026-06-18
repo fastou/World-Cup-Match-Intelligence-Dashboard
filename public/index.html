@@ -1980,7 +1980,7 @@
           appTitle: "世界杯 AI分析平台",
           loading: "加载中",
           refreshTitle: "刷新数据",
-          matchesTitle: "未来三天比赛与模型信号",
+          matchesTitle: "Polymarket 可交易比赛与模型信号",
           sourcesTitle: "数据源状态",
           marketsTitle: "世界杯市场池",
           eliteTitle: "足球表现 Top 100",
@@ -2004,7 +2004,7 @@
           appTitle: "World Cup Match Intelligence Dashboard",
           loading: "Loading",
           refreshTitle: "Refresh data",
-          matchesTitle: "Next Three Days: Matches and Model Signals",
+          matchesTitle: "Polymarket Tradable Matches and Model Signals",
           sourcesTitle: "Data Sources",
           marketsTitle: "World Cup Market Pool",
           eliteTitle: "Football Performance Top 100",
@@ -2705,6 +2705,33 @@
 
       const homeName = (match) => displayTeamName(match, "home");
       const awayName = (match) => displayTeamName(match, "away");
+
+      const livePolymarketRecommendations = (match) => (match.recommendations || []).filter((rec) =>
+        rec.chart?.source === "Polymarket" && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2
+      );
+
+      const polymarketEventDateKey = (match) => {
+        const slugText = livePolymarketRecommendations(match)
+          .map((rec) => `${rec.chart?.eventSlug || ""} ${rec.chart?.marketSlug || ""}`)
+          .join(" ");
+        const matchDate = slugText.match(/20\d{2}-\d{2}-\d{2}/);
+        if (matchDate) return matchDate[0];
+        const date = new Date(match.kickoffShanghai || match.kickoffLocal || "");
+        return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+      };
+
+      const focusPolymarketMatches = (matches) => {
+        const tradable = (matches || [])
+          .filter((match) => livePolymarketRecommendations(match).length)
+          .sort((a, b) => (new Date(a.kickoffShanghai || a.kickoffLocal || "").getTime() || 0) - (new Date(b.kickoffShanghai || b.kickoffLocal || "").getTime() || 0));
+        if (!tradable.length) return [];
+        const inProgress = tradable.find((match) => String(match.scheduleStatus || "").toLowerCase().includes("in_progress"));
+        const todayUtc = new Date().toISOString().slice(0, 10);
+        const marketDates = [...new Set(tradable.map(polymarketEventDateKey).filter(Boolean))].sort();
+        const nextMarketDate = marketDates.find((date) => date > todayUtc) || marketDates.find((date) => date >= todayUtc) || marketDates[0];
+        const targetDate = inProgress ? polymarketEventDateKey(inProgress) : nextMarketDate;
+        return tradable.filter((match) => polymarketEventDateKey(match) === targetDate);
+      };
 
       const fmtTime = (value) => {
         if (!value) return "-";
@@ -3912,23 +3939,28 @@
       }
 
       function renderMatchTabs(matches) {
-        if (!matches.length) {
-          return '<div class="empty">三天窗口内没有未结束比赛。</div>';
+        const tradableMatches = focusPolymarketMatches(matches);
+        if (!tradableMatches.length) {
+          return `<div class="empty">${escapeHtml(currentLang === "en"
+            ? "No Polymarket tradable match is available in the current window."
+            : "当前窗口内没有匹配到 Polymarket 实时盘口的比赛。")}</div>`;
         }
-        const tabs = matches.map((match, index) => `
+        const focusDate = polymarketEventDateKey(tradableMatches[0]);
+        const tabs = tradableMatches.map((match, index) => `
           <button class="match-tab ${index === 0 ? "active" : ""}" data-match-tab="${escapeHtml(match.id)}" type="button">
             <span class="match-tab-title">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</span>
-            <span class="match-tab-meta">${match.autoBaseline ? "自动基线 · " : `${escapeHtml(match.group)} 组 · `}${fmtTime(match.kickoffShanghai)}</span>
+            <span class="match-tab-meta">${escapeHtml(currentLang === "en" ? "Polymarket live" : "Polymarket 实时盘")} · ${fmtTime(match.kickoffShanghai)}</span>
           </button>
         `).join("");
 
-        const panels = matches.map((match, index) => `
+        const panels = tradableMatches.map((match, index) => `
           <div class="match-panel ${index === 0 ? "active" : ""}" data-match-panel="${escapeHtml(match.id)}">
             ${renderMatch(match)}
           </div>
         `).join("");
 
         return `
+          <div class="confidence-note">${escapeHtml(currentLang === "en" ? "Focus market date" : "当前交易焦点日")} ${escapeHtml(focusDate || "-")}</div>
           <div class="match-switcher" role="tablist" aria-label="比赛切换">
             ${tabs}
           </div>
