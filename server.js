@@ -4008,7 +4008,8 @@ function polymarketTeamSlugCandidates(code) {
   const overrides = {
     CPV: ["cvi", "cpv"],
     POR: ["prt", "por"],
-    COD: ["cdr", "cod", "drc", "cgo"]
+    COD: ["cdr", "cod", "drc", "cgo"],
+    KOR: ["kr", "kor"]
   };
   const normalized = String(code || "").trim().toUpperCase();
   const values = overrides[normalized] || [normalized.toLowerCase()];
