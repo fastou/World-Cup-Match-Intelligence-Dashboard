@@ -3099,16 +3099,21 @@
         const list = document.getElementById("opportunityList");
         const meta = document.getElementById("opportunityMeta");
         if (!list || !meta) return;
-        const traders = currentOpportunityElites.traders || [];
-        const activeTraders = traders.filter((trader) => Number(trader.activePositionCount || 0) > 0);
-        const historicalTraders = traders.filter((trader) => Number(trader.activePositionCount || 0) <= 0);
+        const eliteTraders = currentOpportunityElites.traders || [];
+        const watchlistTraders = currentOpportunityElites.watchlist || [];
+        const traders = [...eliteTraders, ...watchlistTraders];
+        const activeTraders = eliteTraders.filter((trader) => Number(trader.activePositionCount || 0) > 0);
+        const historicalTraders = eliteTraders.filter((trader) => Number(trader.activePositionCount || 0) <= 0);
+        const activeWatchlist = watchlistTraders.filter((trader) => Number(trader.activePositionCount || 0) > 0);
+        const inactiveWatchlist = watchlistTraders.filter((trader) => Number(trader.activePositionCount || 0) <= 0);
         const totals = currentOpportunityElites.totals || {};
         meta.textContent = opportunityElitesLoading
           ? (currentLang === "en" ? "Loading elite account monitor..." : "正在加载高手账号监控...")
           : [
               currentLang === "en" ? "Elite monitor" : "高手账号监控",
-              `${currentLang === "en" ? "Accounts" : "账号"} ${totals.traders || 0}`,
-              `${currentLang === "en" ? "Active" : "当前命中"} ${totals.activeTraders || 0}`,
+              `${currentLang === "en" ? "Elite" : "高手"} ${totals.traders || 0}`,
+              `${currentLang === "en" ? "Watchlist" : "观察"} ${totals.watchlist || 0}`,
+              `${currentLang === "en" ? "Active" : "当前持仓"} ${totals.activeTraders || 0}`,
               `${currentLang === "en" ? "Positions" : "持仓"} ${totals.activePositions || 0}`,
               currentOpportunityElites.updatedAt ? `${currentLang === "en" ? "Updated" : "更新"} ${fmtDateTime(currentOpportunityElites.updatedAt)}` : ""
             ].filter(Boolean).join(" · ");
@@ -3138,6 +3143,9 @@
           const historyStatus = trader.worldCupHistoryStatus || (wcSample ? "ok" : "empty");
           const historyError = trader.worldCupHistoryError || trader.closedPositionError || "";
           const checkedPositions = trader.closedPositionsChecked || 0;
+          const tier = trader.worldCupEliteTier || "watchlist";
+          const tierLabel = trader.worldCupEliteLabel || (tier === "elite" ? (currentLang === "en" ? "World Cup elite" : "世界杯高手") : (currentLang === "en" ? "Watchlist" : "观察账号"));
+          const tierReason = trader.worldCupEliteReason || "";
           const historyFreshness = trader.worldCupHistoryStale
             ? (currentLang === "en" ? "cached / stale" : "缓存/可能过期")
             : (trader.worldCupHistoryCacheHit ? (currentLang === "en" ? "cached" : "缓存") : "");
@@ -3172,10 +3180,12 @@
                 </div>
               </div>
               <div class="opportunity-meta">
+                <span class="opportunity-chip ${tier === "elite" ? "good" : ""}">${escapeHtml(tierLabel)}</span>
                 <span class="opportunity-chip ${positions.length ? "good" : ""}">${escapeHtml(currentLang === "en" ? "Active positions" : "当前持仓")} ${escapeHtml(positions.length)}</span>
                 <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Current value" : "当前价值")} ${fmtMoney(trader.activeCurrentValue || 0)}</span>
                 <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Monitor score" : "监控分")} ${escapeHtml(Number(trader.score || 0).toFixed(3))}</span>
               </div>
+              ${tierReason ? `<div class="elite-monitor-samples">${escapeHtml(tierReason)}</div>` : ""}
               ${positions.length ? `
                 <div class="elite-position-list">
                   ${positions.slice(0, 8).map((position) => `
@@ -3207,10 +3217,13 @@
             <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Not a guarantee" : "不代表必胜")}</span>
           </div>
           <div class="elite-monitor-board">
-            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Current-match positions" : "当前比赛日正在买的账号")} · ${escapeHtml(activeTraders.length)}</div>
+            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Qualified World Cup elite with current positions" : "达标世界杯高手（当前有持仓）")} · ${escapeHtml(activeTraders.length)}</div>
             ${activeTraders.length ? activeTraders.map((trader, index) => renderTraderCard(trader, index)).join("") : `<div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "No elite account currently matches today's markets." : "当前比赛日暂未命中高手持仓。")}</div>`}
-            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Historical elite accounts without current positions" : "历史高手账号（当前未买）")} · ${escapeHtml(historicalTraders.length)} · ${escapeHtml(currentLang === "en" ? "shown for background only" : "只作背景观察")}</div>
+            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Large current holders below elite threshold" : "未达标当前大户观察")} · ${escapeHtml(activeWatchlist.length)} · ${escapeHtml(currentLang === "en" ? "not counted as elite signal" : "不计入高手信号")}</div>
+            ${activeWatchlist.length ? activeWatchlist.map((trader, index) => renderTraderCard(trader, activeTraders.length + index)).join("") : `<div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "No below-threshold large holder in current matches." : "当前没有未达标大户观察。")}</div>`}
+            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Historical qualified elite without current positions" : "达标历史高手（当前未买）")} · ${escapeHtml(historicalTraders.length)} · ${escapeHtml(currentLang === "en" ? "shown for background only" : "只作背景观察")}</div>
             ${historicalTraders.slice(0, 30).map((trader, index) => renderTraderCard(trader, activeTraders.length + index, { compact: true })).join("")}
+            ${inactiveWatchlist.length ? `<div class="source-detail">${escapeHtml(currentLang === "en" ? "Other watchlist accounts" : "其他观察账号")} · ${escapeHtml(inactiveWatchlist.length)}</div>${inactiveWatchlist.slice(0, 10).map((trader, index) => renderTraderCard(trader, activeTraders.length + activeWatchlist.length + historicalTraders.length + index, { compact: true })).join("")}` : ""}
           </div>
         `;
         translateRenderedContent(list);
@@ -3629,37 +3642,42 @@
           return;
         }
         const traders = eliteTraders.traders || [];
-        if (!traders.length) {
+        const watchlist = eliteTraders.watchlist || [];
+        if (!traders.length && !watchlist.length) {
           root.innerHTML = '<div class="empty">暂未筛到世界杯账号样本。</div>';
           return;
         }
+        const renderEliteMiniCard = (trader, index, watch = false) => {
+          const sample = trader.worldCupSettledPositions || 0;
+          const status = trader.worldCupHistoryStatus || (sample ? "ok" : "empty");
+          const historyLine = sample
+            ? `世界杯胜率 ${fmtPct(trader.worldCupWinRateEstimate ?? trader.winRateEstimate)} · 样本 ${escapeHtml(sample)}`
+            : (status === "error"
+              ? `世界杯历史抓取失败 · 不按 0 计算`
+              : `世界杯已结算样本 0 · 看当前持仓`);
+          return `
+            <div class="elite-card">
+              <div class="elite-rank">${watch ? "观察" : `#${escapeHtml(trader.worldCupRank || index + 1)}`}</div>
+              <div>
+                <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}${renderProfileLink(trader)}</div>
+                <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
+              </div>
+              <div class="elite-metrics">
+                <div>${escapeHtml(trader.worldCupEliteLabel || (watch ? "未达标观察" : "世界杯高手"))}</div>
+                <div>世界杯PNL ${sample ? fmtMoney(trader.worldCupPnl || 0) : "-"}</div>
+                <div>${historyLine}</div>
+                <div>${escapeHtml(trader.worldCupEliteReason || "")}</div>
+              </div>
+            </div>
+          `;
+        };
         root.innerHTML = `
           <div class="source-detail">${escapeHtml(eliteTraders.rankingBasis || "")}</div>
+          ${traders.length ? `<div class="source-detail">达标世界杯高手 · ${escapeHtml(traders.length)}</div>` : '<div class="empty">当前没有达到胜率/PNL门槛的世界杯高手。</div>'}
           <div class="elite-board">
-            ${traders.slice(0, 10).map((trader) => {
-              const sample = trader.worldCupSettledPositions || 0;
-              const status = trader.worldCupHistoryStatus || (sample ? "ok" : "empty");
-              const historyLine = sample
-                ? `世界杯胜率 ${fmtPct(trader.worldCupWinRateEstimate ?? trader.winRateEstimate)} · 样本 ${escapeHtml(sample)}`
-                : (status === "error"
-                  ? `世界杯历史抓取失败 · 不按 0 计算`
-                  : `世界杯已结算样本 0 · 看当前持仓`);
-              return `
-                <div class="elite-card">
-                  <div class="elite-rank">#${escapeHtml(trader.worldCupRank || trader.soccerRank)}</div>
-                  <div>
-                    <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}${renderProfileLink(trader)}</div>
-                    <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
-                  </div>
-                  <div class="elite-metrics">
-                    <div>世界杯PNL ${sample ? fmtMoney(trader.worldCupPnl || 0) : "-"}</div>
-                    <div>${historyLine}</div>
-                    <div>足球辅助 ${escapeHtml(trader.soccerSettledPositions || 0)} 样本</div>
-                  </div>
-                </div>
-              `;
-            }).join("")}
+            ${traders.slice(0, 10).map((trader, index) => renderEliteMiniCard(trader, index)).join("")}
           </div>
+          ${watchlist.length ? `<div class="source-detail">未达标当前大户观察 · ${escapeHtml(watchlist.length)} · 不计入高手信号</div><div class="elite-board">${watchlist.slice(0, 10).map((trader, index) => renderEliteMiniCard(trader, index, true)).join("")}</div>` : ""}
         `;
       }
 
