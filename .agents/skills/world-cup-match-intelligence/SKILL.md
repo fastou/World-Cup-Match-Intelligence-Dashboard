@@ -136,6 +136,8 @@ When maintaining public market data:
 - Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`, and South Korea/Korea Republic using `kr` rather than `kor`.
 - Keep chart controls usable for each market type and each outcome.
 - Track elite football accounts from public data by transparent criteria such as soccer-market realized PnL, win rate, sample size, and recent activity.
+- Keep the opportunity radar's elite-account monitor as a first-class view: refresh account rankings daily, show active positions against current World Cup match markets, and separate historical account performance from current model recommendations.
+- If the sports leaderboard produces no auditable football samples, fall back to current World Cup market top holders as candidate accounts, then verify them through settled soccer positions before labeling them as elite.
 - Show account positions as expandable row details with account, side, amount, average or latest price, timestamp, market, and source status.
 - Fetch and display top holders for relevant Polymarket condition/token pairs when public holder data is available. Mark whether holders match the football Top 100 list.
 - Store holder snapshots separately for recommendation-mapped markets and general World Cup market-pool tokens so later analysis can compare holder behavior to outcomes.

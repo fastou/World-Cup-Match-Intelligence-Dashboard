@@ -44,13 +44,14 @@ const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
-const ELITE_LEADERBOARD_CACHE_TTL_MS = 15 * 60 * 1000;
+const ELITE_LEADERBOARD_CACHE_TTL_MS = Number(process.env.ELITE_LEADERBOARD_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 100);
 const ELITE_TRADER_CANDIDATE_LIMIT = Number(process.env.ELITE_TRADER_CANDIDATE_LIMIT || Math.max(260, ELITE_TRADER_LIMIT * 2));
 const ELITE_LEADERBOARD_PAGE_SIZE = 100;
 const ELITE_CLOSED_POSITION_LIMIT = 160;
 const ELITE_MARKET_POSITION_LIMIT = 100;
 const TOP_HOLDER_LIMIT = Number(process.env.TOP_HOLDER_LIMIT || 50);
+const ELITE_MARKET_HOLDER_CANDIDATE_LIMIT = Number(process.env.ELITE_MARKET_HOLDER_CANDIDATE_LIMIT || 180);
 const ELITE_ACTIVITY_LIMIT = 300;
 const USE_DEMO_POLYMARKET = process.env.DEMO_POLYMARKET === "1";
 const DISABLE_HISTORY_RECORDING = process.env.WORLDCUP_DISABLE_HISTORY === "1";
@@ -295,6 +296,8 @@ function teamDisplayName(code, fallback = "") {
 const SOCCER_POSITION_KEYWORDS = [
   "soccer",
   "world cup",
+  "world-cup",
+  "fifwc",
   "fifa",
   "uefa",
   "champions league",
@@ -354,7 +357,18 @@ const SOCCER_POSITION_KEYWORDS = [
   "saudi arabia",
   "uruguay",
   "iran",
-  "new zealand"
+  "new zealand",
+  "austria",
+  "jordan",
+  "iraq",
+  "norway",
+  "algeria",
+  "france",
+  "portugal",
+  "dr congo",
+  "congo",
+  "uzbekistan",
+  "colombia"
 ];
 
 const WORLDCUP_MARKET_SEARCHES = [
@@ -2425,6 +2439,120 @@ function scheduleOpportunityRefresh({ force = true } = {}) {
       opportunityRefreshPromise = null;
     });
   return opportunityRefreshPromise;
+}
+
+function eliteMonitorRankScore(trader) {
+  const sample = Number(trader.soccerSettledPositions || 0);
+  const winRate = Number(trader.winRateEstimate || 0);
+  const pnl = Number(trader.soccerPnl || 0);
+  const sampleWeight = Math.min(1, sample / 20);
+  const pnlWeight = Math.log10(Math.max(1, Math.abs(pnl))) / 10;
+  return winRate * 0.62 + sampleWeight * 0.24 + Math.max(0, pnlWeight) * 0.14;
+}
+
+function collectEliteActivePositions(matches = []) {
+  const byWallet = new Map();
+  for (const match of matches || []) {
+    for (const rec of match.recommendations || []) {
+      for (const signal of rec.eliteSignals || []) {
+        const key = walletKey(signal.proxyWallet);
+        if (!key) continue;
+        const list = byWallet.get(key) || [];
+        list.push({
+          matchId: match.id,
+          matchName: `${match.homeName} vs ${match.awayName}`,
+          kickoffShanghai: match.kickoffShanghai,
+          marketKey: rec.key,
+          marketType: rec.marketType,
+          marketTypeLabel: rec.marketTypeLabel,
+          marketName: rec.name,
+          outcome: signal.outcome || rec.name,
+          size: signal.size,
+          currentValue: signal.currentValue,
+          totalBought: signal.totalBought,
+          avgPrice: signal.avgPrice,
+          currPrice: signal.currPrice,
+          recentBuy: signal.recentBuy || null,
+          modelProbability: rec.modelProbability,
+          marketPrice: rec.marketPrice,
+          edge: rec.edge,
+          decisionLabel: rec.decision?.label || "",
+          source: rec.chart?.source || ""
+        });
+        byWallet.set(key, list);
+      }
+    }
+  }
+  return byWallet;
+}
+
+function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" } = {}) {
+  const activeByWallet = collectEliteActivePositions(matches);
+  const traders = (eliteTraders?.traders || [])
+    .map((trader) => {
+      const activePositions = activeByWallet.get(walletKey(trader.proxyWallet)) || [];
+      return {
+        soccerRank: trader.soccerRank,
+        userName: trader.userName,
+        proxyWallet: trader.proxyWallet,
+        verifiedBadge: trader.verifiedBadge,
+        winRateEstimate: trader.winRateEstimate,
+        soccerPnl: trader.soccerPnl,
+        soccerVolume: trader.soccerVolume,
+        soccerSettledPositions: trader.soccerSettledPositions,
+        soccerWins: trader.soccerWins,
+        soccerLosses: trader.soccerLosses,
+        soccerPushes: trader.soccerPushes,
+        overallPnl: trader.overallPnl,
+        sampleTitles: trader.sampleTitles || [],
+        activePositions,
+        activePositionCount: activePositions.length,
+        activeCurrentValue: activePositions.reduce((sum, item) => sum + Number(item.currentValue || 0), 0),
+        score: roundTo(eliteMonitorRankScore(trader), 4)
+      };
+    })
+    .sort((a, b) => {
+      const activeDiff = b.activePositionCount - a.activePositionCount;
+      if (activeDiff) return activeDiff;
+      const scoreDiff = b.score - a.score;
+      if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+      const winRateDiff = (b.winRateEstimate || 0) - (a.winRateEstimate || 0);
+      if (Math.abs(winRateDiff) > 0.0001) return winRateDiff;
+      return (b.soccerPnl || 0) - (a.soccerPnl || 0);
+    });
+  return {
+    ok: Boolean(eliteTraders?.ok),
+    source: eliteTraders?.source || "Polymarket Data API",
+    updatedAt: eliteTraders?.updatedAt || new Date().toISOString(),
+    cacheTtlSeconds: eliteTraders?.cacheTtlSeconds || Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
+    cacheHit: Boolean(eliteTraders?.cacheHit),
+    sourceMode: source,
+    rankingBasis: "世界杯/足球相关已结算样本：优先当前持仓命中，再按胜率、样本量、足球PNL综合排序；样本不足只作监控，不等于必胜。",
+    candidateCount: eliteTraders?.candidateCount || 0,
+    marketPositions: eliteTraders?.marketPositions || null,
+    totals: {
+      traders: traders.length,
+      activeTraders: traders.filter((trader) => trader.activePositionCount > 0).length,
+      activePositions: traders.reduce((sum, trader) => sum + trader.activePositionCount, 0),
+      activeCurrentValue: traders.reduce((sum, trader) => sum + trader.activeCurrentValue, 0)
+    },
+    traders: traders.slice(0, ELITE_TRADER_LIMIT),
+    error: eliteTraders?.error
+  };
+}
+
+async function buildEliteMonitor({ force = false } = {}) {
+  if (!force && dashboardCache?.eliteTraders?.traders?.length) {
+    return buildEliteMonitorPayload(dashboardCache.eliteTraders, dashboardCache.matches || [], { source: "dashboard-cache" });
+  }
+  const dashboard = await buildDashboard({
+    force,
+    recordHistory: false,
+    includeElite: true,
+    includeOpenAi: false,
+    light: false
+  });
+  return buildEliteMonitorPayload(dashboard.eliteTraders || {}, dashboard.matches || [], { source: "live-dashboard" });
 }
 
 function parseSnapshotPayload(raw, fallback = {}) {
@@ -5417,6 +5545,19 @@ function isSoccerPosition(position) {
   return SOCCER_POSITION_KEYWORDS.some((keyword) => text.includes(keyword));
 }
 
+function isWorldCupOrSoccerMarketText(text) {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return false;
+  if (NON_SOCCER_POSITION_KEYWORDS.some((keyword) => normalized.includes(keyword))) return false;
+  return normalized.includes("world cup")
+    || normalized.includes("world-cup")
+    || normalized.includes("fifwc")
+    || normalized.includes("fifa")
+    || normalized.includes("soccer")
+    || normalized.includes("football")
+    || SOCCER_POSITION_KEYWORDS.some((keyword) => normalized.includes(keyword));
+}
+
 function uniquePositions(positions) {
   const seen = new Set();
   const unique = [];
@@ -5633,7 +5774,7 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
 
     const payload = {
       source: "Polymarket Data API",
-      ok: true,
+      ok: ranked.length > 0,
       updatedAt: new Date().toISOString(),
       cacheTtlSeconds: Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
       candidateCount: candidates.length,
@@ -5641,8 +5782,11 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       limit: ELITE_TRADER_LIMIT,
       traders: ranked
     };
-    eliteLeaderboardCache = payload;
-    eliteLeaderboardCacheAt = now;
+    if (!ranked.length) payload.error = "SPORTS 榜单暂未筛到可审计的足球已结算样本";
+    if (payload.ok) {
+      eliteLeaderboardCache = payload;
+      eliteLeaderboardCacheAt = now;
+    }
     return payload;
   } catch (error) {
     return {
@@ -5654,6 +5798,113 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       traders: []
     };
   }
+}
+
+function marketHolderCandidateEntries(marketPositionResults, catalog = [], polymarket = {}) {
+  const marketMeta = new Map();
+  for (const item of catalog || []) {
+    marketMeta.set(item.conditionId, [
+      item.marketName,
+      item.marketType,
+      item.chartQuestion,
+      item.chartLabel
+    ].filter(Boolean).join(" "));
+  }
+  for (const market of polymarket?.markets || []) {
+    marketMeta.set(market.conditionId, [
+      market.question,
+      market.slug,
+      market.eventTitle,
+      market.eventSlug
+    ].filter(Boolean).join(" "));
+  }
+
+  const byWallet = new Map();
+  for (const result of marketPositionResults || []) {
+    const metaText = marketMeta.get(result.conditionId) || "";
+    if (!isWorldCupOrSoccerMarketText(metaText)) continue;
+    for (const positions of Object.values(result.positionsByToken || {})) {
+      for (const position of positions || []) {
+        const wallet = walletKey(position.proxyWallet || position.owner || position.address);
+        if (!wallet) continue;
+        const size = Number(position.size || position.shares || position.balance || 0);
+        const currentValue = Number(position.currentValue || 0);
+        if (size <= 0.000001 && currentValue <= 0.01) continue;
+        const current = byWallet.get(wallet) || {
+          proxyWallet: position.proxyWallet || position.owner || position.address,
+          userName: displayUserName(position),
+          pnl: 0,
+          vol: 0,
+          currentValue: 0,
+          source: "current-world-cup-holders",
+          holderSamples: 0
+        };
+        current.currentValue += currentValue;
+        current.vol += Number(position.totalBought || currentValue || size || 0);
+        current.holderSamples += 1;
+        byWallet.set(wallet, current);
+      }
+    }
+  }
+  return [...byWallet.values()]
+    .sort((a, b) => b.currentValue - a.currentValue)
+    .slice(0, ELITE_MARKET_HOLDER_CANDIDATE_LIMIT);
+}
+
+async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, catalog, polymarket, { force = false } = {}) {
+  const candidates = marketHolderCandidateEntries(marketPositionResults, catalog, polymarket);
+  if (!candidates.length) {
+    return {
+      source: "Polymarket Data API",
+      ok: false,
+      updatedAt: new Date().toISOString(),
+      error: "未从当前世界杯盘口持仓中找到可反查账号",
+      rankingBasis: "当前世界杯盘口公开持仓者 + 足球已结算样本过滤",
+      candidateCount: 0,
+      limit: ELITE_TRADER_LIMIT,
+      traders: []
+    };
+  }
+
+  const summaries = await mapLimit(candidates, 8, async (entry) => {
+    const closedPositions = await fetchClosedPositionsForTrader(entry.proxyWallet);
+    return {
+      ...summarizeSoccerPerformance(entry, closedPositions),
+      currentHolderValue: entry.currentValue,
+      holderSamples: entry.holderSamples
+    };
+  });
+  const ranked = summaries
+    .filter((trader) => trader.soccerSettledPositions > 0)
+    .sort((a, b) => {
+      const pnlDiff = b.soccerPnl - a.soccerPnl;
+      if (Math.abs(pnlDiff) > 1) return pnlDiff;
+      const winRateDiff = (b.winRateEstimate ?? 0) - (a.winRateEstimate ?? 0);
+      if (Math.abs(winRateDiff) > 0.0001) return winRateDiff;
+      return (b.currentHolderValue || 0) - (a.currentHolderValue || 0);
+    })
+    .slice(0, ELITE_TRADER_LIMIT)
+    .map((trader, index) => ({
+      ...trader,
+      soccerRank: index + 1
+    }));
+  const payload = {
+    source: "Polymarket Data API",
+    ok: ranked.length > 0,
+    updatedAt: new Date().toISOString(),
+    cacheTtlSeconds: Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
+    candidateCount: candidates.length,
+    rankingBasis: "当前世界杯盘口公开持仓者 + 足球已结算样本过滤；胜率=盈利足球样本数/抓取到的足球已结算样本数",
+    limit: ELITE_TRADER_LIMIT,
+    traders: ranked,
+    sourceFallback: "current-world-cup-holders"
+  };
+  if (!ranked.length) payload.error = "当前盘口持仓者里暂未筛到可审计的足球已结算样本";
+  if (payload.ok) {
+    eliteLeaderboardCache = payload;
+    eliteLeaderboardCacheAt = Date.now();
+  }
+  return payload;
 }
 
 function recommendationMarketCatalog(matches) {
@@ -5867,8 +6118,6 @@ function attachEmptyEliteSignals(matches, polymarket, reason = "轻量实时模�
 
 async function attachEliteSignals(matches, polymarket, { force = false, enabled = true } = {}) {
   if (!enabled) return attachEmptyEliteSignals(matches, polymarket, "轻量实时模式跳过 Top100 持仓深挖");
-  const leaderboard = await fetchEliteLeaderboard({ force });
-  const traderMap = new Map((leaderboard.traders || []).map((trader) => [walletKey(trader.proxyWallet), trader]));
   const catalog = recommendationMarketCatalog(matches);
   const marketPoolConditionIds = (polymarket?.markets || []).map((market) => market.conditionId).filter(Boolean);
   const conditionIds = [...new Set([...catalog.map((item) => item.conditionId), ...marketPoolConditionIds].filter(Boolean))];
@@ -5881,6 +6130,13 @@ async function attachEliteSignals(matches, polymarket, { force = false, enabled 
   }
 
   const positionsByCondition = new Map(marketPositionResults.map((item) => [item.conditionId, item]));
+  let leaderboard = await fetchEliteLeaderboard({ force });
+  if (!(leaderboard.traders || []).length && marketPositionResults.length) {
+    const holderLeaderboard = await buildEliteLeaderboardFromMarketHolders(marketPositionResults, catalog, polymarket, { force });
+    if ((holderLeaderboard.traders || []).length) leaderboard = holderLeaderboard;
+    else if (!leaderboard.ok) leaderboard = holderLeaderboard;
+  }
+  const traderMap = new Map((leaderboard.traders || []).map((trader) => [walletKey(trader.proxyWallet), trader]));
   const signalMap = new Map();
   const holderMap = new Map();
   for (const item of catalog) {
@@ -6521,6 +6777,12 @@ const server = http.createServer(async (req, res) => {
       const payload = await buildOpportunityReview({
         limit: Number.isFinite(limitParam) ? limitParam : OPPORTUNITY_REVIEW_LIMIT
       });
+      jsonResponse(res, 200, payload);
+      return;
+    }
+    if (pathname === "/api/opportunities/elites") {
+      const force = url.searchParams.get("force") === "1";
+      const payload = await buildEliteMonitor({ force });
       jsonResponse(res, 200, payload);
       return;
     }

@@ -187,7 +187,7 @@
       }
 
       .opportunity-dialog {
-        width: min(560px, 100%);
+        width: min(760px, 100%);
         max-height: calc(100vh - 110px);
         overflow: auto;
         border: 1px solid var(--line);
@@ -1471,6 +1471,46 @@
         white-space: nowrap;
       }
 
+      .elite-monitor-board {
+        display: grid;
+        gap: 10px;
+      }
+
+      .elite-monitor-card {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .elite-monitor-head {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+      }
+
+      .elite-monitor-title {
+        min-width: 0;
+      }
+
+      .elite-monitor-samples {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .elite-position-list {
+        margin-top: 10px;
+        border-top: 1px solid #e6ebe7;
+      }
+
+      .elite-position-row {
+        padding: 8px 0;
+        border-bottom: 1px solid #e6ebe7;
+      }
+
       .elite-signal-list {
         display: grid;
         gap: 10px;
@@ -2015,6 +2055,7 @@
         <div class="opportunity-tabs" role="tablist" aria-label="Opportunity radar views">
           <button class="opportunity-tab active" type="button" id="opportunityCurrentTab" data-opportunity-tab="current" role="tab" aria-selected="true">当前机会</button>
           <button class="opportunity-tab" type="button" id="opportunityReviewTab" data-opportunity-tab="review" role="tab" aria-selected="false">预测复盘</button>
+          <button class="opportunity-tab" type="button" id="opportunityEliteTab" data-opportunity-tab="elite" role="tab" aria-selected="false">高手账号</button>
         </div>
         <div class="opportunity-body" id="opportunityList">
           <div class="opportunity-empty">等待服务器扫描。</div>
@@ -2039,7 +2080,9 @@
           opportunityEmpty: "当前没有达到纪律要求的机会。等待下一轮扫描。",
           opportunityCurrentTab: "当前机会",
           opportunityReviewTab: "预测复盘",
+          opportunityEliteTab: "高手账号",
           opportunityReviewEmpty: "还没有可复盘的完赛预测。赛果入库后会显示。",
+          opportunityEliteEmpty: "暂未筛到有足球已结算样本的高手账号。",
           methodItems: [
             ["概率差", "模型概率与公开价格差异超过阈值时标记"],
             ["置信度", "阵容、伤停、天气和新闻越完整，信号越可靠"],
@@ -2063,7 +2106,9 @@
           opportunityEmpty: "No disciplined opportunity is active right now. Waiting for the next scan.",
           opportunityCurrentTab: "Current",
           opportunityReviewTab: "Review",
+          opportunityEliteTab: "Elite Accounts",
           opportunityReviewEmpty: "No settled forecast is available yet. Reviews appear after results are recorded.",
+          opportunityEliteEmpty: "No elite football accounts with settled samples are available yet.",
           methodItems: [
             ["Probability Gap", "Flag outcomes when model probability differs from public prices."],
             ["Confidence", "Lineups, injuries, weather, and news improve signal reliability."],
@@ -2343,7 +2388,9 @@
       let currentOpportunities = { meta: {}, items: [] };
       let currentOpportunityTab = "current";
       let currentOpportunityReview = { meta: {}, totals: {}, items: [] };
+      let currentOpportunityElites = { meta: {}, totals: {}, traders: [] };
       let opportunityReviewLoading = false;
+      let opportunityElitesLoading = false;
       const opportunityChecks = new Map();
 
       function translateText(text) {
@@ -2373,6 +2420,7 @@
         document.getElementById("opportunityTitle").textContent = labels.opportunityTitle;
         document.getElementById("opportunityCurrentTab").textContent = labels.opportunityCurrentTab;
         document.getElementById("opportunityReviewTab").textContent = labels.opportunityReviewTab;
+        document.getElementById("opportunityEliteTab").textContent = labels.opportunityEliteTab;
         document.getElementById("methodList").innerHTML = labels.methodItems.map(([title, body]) => `<li><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></li>`).join("");
         document.getElementById("methodNote").textContent = labels.methodNote;
         const refresh = document.getElementById("refresh");
@@ -3011,6 +3059,92 @@
         translateRenderedContent(list);
       }
 
+      function renderOpportunityElites() {
+        const labels = APP_LABELS[currentLang];
+        const list = document.getElementById("opportunityList");
+        const meta = document.getElementById("opportunityMeta");
+        if (!list || !meta) return;
+        const traders = currentOpportunityElites.traders || [];
+        const totals = currentOpportunityElites.totals || {};
+        meta.textContent = opportunityElitesLoading
+          ? (currentLang === "en" ? "Loading elite account monitor..." : "正在加载高手账号监控...")
+          : [
+              currentLang === "en" ? "Elite monitor" : "高手账号监控",
+              `${currentLang === "en" ? "Accounts" : "账号"} ${totals.traders || 0}`,
+              `${currentLang === "en" ? "Active" : "当前命中"} ${totals.activeTraders || 0}`,
+              `${currentLang === "en" ? "Positions" : "持仓"} ${totals.activePositions || 0}`,
+              currentOpportunityElites.updatedAt ? `${currentLang === "en" ? "Updated" : "更新"} ${fmtDateTime(currentOpportunityElites.updatedAt)}` : ""
+            ].filter(Boolean).join(" · ");
+        if (opportunityElitesLoading && !traders.length) {
+          list.innerHTML = `<div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "Fetching Polymarket football account samples and current positions..." : "正在拉取 Polymarket 足球账号样本和当前持仓...")}</div>`;
+          return;
+        }
+        if (!currentOpportunityElites.ok && !traders.length) {
+          list.innerHTML = `<div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "Elite account monitor is unavailable." : "高手账号监控暂时不可用。")}<div class="confidence-note">${escapeHtml(currentOpportunityElites.error || currentOpportunityElites.meta?.error || "Polymarket account data unavailable")}</div></div>`;
+          translateRenderedContent(list);
+          return;
+        }
+        if (!traders.length) {
+          list.innerHTML = `<div class="opportunity-empty">${escapeHtml(labels.opportunityEliteEmpty)}<div class="confidence-note">${escapeHtml(currentOpportunityElites.rankingBasis || "")}</div></div>`;
+          translateRenderedContent(list);
+          return;
+        }
+        list.innerHTML = `
+          <div class="source-detail">${escapeHtml(currentOpportunityElites.rankingBasis || "")}</div>
+          <div class="opportunity-meta">
+            <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Daily account refresh" : "账号每日更新")}</span>
+            <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Current positions monitored live" : "当前盘口持仓实时监控")}</span>
+            <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Not a guarantee" : "不代表必胜")}</span>
+          </div>
+          <div class="elite-monitor-board">
+            ${traders.slice(0, 100).map((trader, index) => {
+              const positions = trader.activePositions || [];
+              return `
+                <article class="elite-monitor-card">
+                  <div class="elite-monitor-head">
+                    <div class="elite-rank">#${escapeHtml(trader.soccerRank || index + 1)}</div>
+                    <div class="elite-monitor-title">
+                      <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName || "-")}</div>
+                      <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}${trader.verifiedBadge ? ` · ${escapeHtml(currentLang === "en" ? "verified" : "已认证")}` : ""}</div>
+                    </div>
+                    <div class="elite-metrics">
+                      <div>${escapeHtml(currentLang === "en" ? "Win rate" : "胜率")} ${fmtPct(trader.winRateEstimate)}</div>
+                      <div>${escapeHtml(currentLang === "en" ? "Sample" : "样本")} ${escapeHtml(trader.soccerSettledPositions || 0)} · W/L/P ${escapeHtml(trader.soccerWins || 0)}/${escapeHtml(trader.soccerLosses || 0)}/${escapeHtml(trader.soccerPushes || 0)}</div>
+                      <div>${escapeHtml(currentLang === "en" ? "Football PnL" : "足球PNL")} ${fmtMoney(trader.soccerPnl)}</div>
+                    </div>
+                  </div>
+                  <div class="opportunity-meta">
+                    <span class="opportunity-chip ${positions.length ? "good" : ""}">${escapeHtml(currentLang === "en" ? "Active positions" : "当前持仓")} ${escapeHtml(positions.length)}</span>
+                    <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Current value" : "当前价值")} ${fmtMoney(trader.activeCurrentValue || 0)}</span>
+                    <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Monitor score" : "监控分")} ${escapeHtml(Number(trader.score || 0).toFixed(3))}</span>
+                  </div>
+                  ${positions.length ? `
+                    <div class="elite-position-list">
+                      ${positions.slice(0, 8).map((position) => `
+                        <div class="elite-position-row">
+                          <div class="elite-inline-head">
+                            <span>${escapeHtml(position.matchName || "-")} · ${escapeHtml(position.marketTypeLabel || position.marketType || "-")}</span>
+                            <span>${fmtMoney(position.currentValue || 0)}</span>
+                          </div>
+                          <div class="elite-inline-meta">
+                            ${escapeHtml(currentLang === "en" ? "Side" : "方向")} ${escapeHtml(position.outcome || position.marketName || "-")} · ${escapeHtml(currentLang === "en" ? "Shares" : "份额")} ${fmtShares(position.size)} · ${escapeHtml(currentLang === "en" ? "Avg" : "均价")} ${fmtPrice(position.avgPrice)} · ${escapeHtml(currentLang === "en" ? "Current" : "当前价")} ${fmtPrice(position.currPrice ?? position.marketPrice)}
+                          </div>
+                          <div class="elite-inline-meta">
+                            ${escapeHtml(fmtTime(position.kickoffShanghai))} · Edge ${fmtEdge(position.edge)} · ${escapeHtml(position.decisionLabel || "")} · ${escapeHtml(position.source || "")}${(position.recentBuy?.isoTime || position.recentBuy?.time) ? ` · ${escapeHtml(currentLang === "en" ? "Recent buy" : "最近买入")} ${escapeHtml(fmtDateTime(position.recentBuy.isoTime || position.recentBuy.time))} @ ${fmtPrice(position.recentBuy.price)}` : ""}
+                          </div>
+                        </div>
+                      `).join("")}
+                    </div>
+                  ` : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No active position matched the current matchday markets yet." : "暂未命中当前比赛日盘口持仓。")}</div>`}
+                  ${trader.sampleTitles?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled football samples" : "已结算足球样本")}：${trader.sampleTitles.slice(0, 3).map(escapeHtml).join("；")}</div>` : ""}
+                </article>
+              `;
+            }).join("")}
+          </div>
+        `;
+        translateRenderedContent(list);
+      }
+
       function renderOpportunities(payload = currentOpportunities) {
         currentOpportunities = payload || { meta: {}, items: [] };
         const labels = APP_LABELS[currentLang];
@@ -3031,6 +3165,10 @@
         count.textContent = String(items.length);
         if (currentOpportunityTab === "review") {
           renderOpportunityReview();
+          return;
+        }
+        if (currentOpportunityTab === "elite") {
+          renderOpportunityElites();
           return;
         }
         const scanWindow = currentOpportunities.meta?.scanWindowDays
@@ -3142,9 +3280,36 @@
         }
       }
 
+      async function loadOpportunityElites(force = false) {
+        if (window.location.protocol === "file:") return;
+        if (opportunityElitesLoading) return;
+        if (!force && currentOpportunityElites.traders?.length) return;
+        opportunityElitesLoading = true;
+        renderOpportunities(currentOpportunities);
+        try {
+          const params = new URLSearchParams();
+          if (force) params.set("force", "1");
+          const query = params.toString();
+          const response = await fetch(`${basePath()}api/opportunities/elites${query ? `?${query}` : ""}`, { cache: "no-store" });
+          const data = await response.json();
+          currentOpportunityElites = data;
+        } catch (error) {
+          currentOpportunityElites = {
+            ok: false,
+            error: error.message,
+            totals: {},
+            traders: []
+          };
+        } finally {
+          opportunityElitesLoading = false;
+          renderOpportunities(currentOpportunities);
+        }
+      }
+
       function setOpportunityTab(tab) {
-        currentOpportunityTab = tab === "review" ? "review" : "current";
+        currentOpportunityTab = ["review", "elite"].includes(tab) ? tab : "current";
         if (currentOpportunityTab === "review") loadOpportunityReview(false);
+        if (currentOpportunityTab === "elite") loadOpportunityElites(false);
         renderOpportunities(currentOpportunities);
       }
 
@@ -4192,6 +4357,7 @@
         loadDashboard(true);
         loadOpportunities(true);
         loadOpportunityReview(true);
+        loadOpportunityElites(true);
       });
       document.getElementById("opportunityButton").addEventListener("click", () => {
         const modal = document.getElementById("opportunityModal");
