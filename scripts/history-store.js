@@ -375,6 +375,7 @@ CREATE TABLE IF NOT EXISTS match_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_match_snapshots_match_time ON match_snapshots(match_id, captured_at);
+CREATE INDEX IF NOT EXISTS idx_market_snapshots_snapshot ON market_snapshots(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_market_snapshots_match_key ON market_snapshots(match_id, recommendation_key);
 CREATE INDEX IF NOT EXISTS idx_price_points_match_key ON price_points(match_id, recommendation_key, point_time);
 CREATE INDEX IF NOT EXISTS idx_elite_positions_match_key ON elite_position_snapshots(match_id, recommendation_key);

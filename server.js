@@ -30,6 +30,7 @@ const OPPORTUNITY_AI_TIMEOUT_MS = Number(process.env.OPPORTUNITY_AI_TIMEOUT_MS |
 const OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS = Number(process.env.OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS || 18000);
 const OPPORTUNITY_MAX_ITEMS = Number(process.env.OPPORTUNITY_MAX_ITEMS || 8);
 const OPPORTUNITY_REVIEW_LIMIT = Number(process.env.OPPORTUNITY_REVIEW_LIMIT || 40);
+const OPPORTUNITY_REVIEW_SCHEMA_CHECK = process.env.OPPORTUNITY_REVIEW_SCHEMA_CHECK === "1";
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
@@ -641,7 +642,7 @@ function shouldKeepScheduledMatch(kickoffIso, schedule = null, nowMs = Date.now(
 }
 
 function hasRecordedFinal(matchId, finalResults) {
-  return Boolean(finalResults && finalResults.has(matchId));
+  return Boolean(finalResults && matchIdAliases(matchId).some((alias) => finalResults.has(alias)));
 }
 
 function poisson(lambda, goals) {
@@ -1175,11 +1176,125 @@ function actionFor(edgeValue, marketPrice) {
   if (edgeValue == null || typeof marketPrice !== "number") {
     return { action: "WAIT", label: "无实时价格", stake: "none" };
   }
-  if (edgeValue >= 0.06) return { action: "BUY", label: "强正向信号", stake: "small-medium" };
-  if (edgeValue >= 0.035) return { action: "BUY_SMALL", label: "正向信号", stake: "small" };
-  if (edgeValue >= 0.015) return { action: "WATCH", label: "观察价格", stake: "none" };
+  if (edgeValue >= 0.085) return { action: "BUY", label: "强正向信号", stake: "small-medium" };
+  if (edgeValue >= 0.06) return { action: "BUY_SMALL", label: "正向信号", stake: "small" };
+  if (edgeValue >= 0.035) return { action: "WATCH", label: "观察价格", stake: "none" };
   if (edgeValue <= -0.035) return { action: "AVOID_OR_SELL", label: "回避", stake: "none" };
   return { action: "NO_TRADE", label: "无明确信号", stake: "none" };
+}
+
+function scoreProbability(match, score) {
+  const item = (match?.probabilities?.topScoresFull || []).find((row) => row.score === score);
+  return typeof item?.probability === "number" ? item.probability : 0;
+}
+
+function exactCleanSheetRisk(match, side) {
+  const scores = match?.probabilities?.topScoresFull || [];
+  return scores.reduce((sum, row) => {
+    const homeGoals = Number(row.homeGoals);
+    const awayGoals = Number(row.awayGoals);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return sum;
+    if (side === "home" && awayGoals === 0 && homeGoals > awayGoals) return sum + (row.probability || 0);
+    if (side === "away" && homeGoals === 0 && awayGoals > homeGoals) return sum + (row.probability || 0);
+    return sum;
+  }, 0);
+}
+
+function marketReviewAdjustments(match, rec) {
+  const reasons = [];
+  let edgePenalty = 0;
+  let scorePenalty = 0;
+  const favoriteKey = match?.probabilities?.home >= match?.probabilities?.away ? "home" : "away";
+  const favoriteSide = favoriteKey;
+  const favoriteCleanSheet = exactCleanSheetRisk(match, favoriteSide);
+  const under25 = match?.probabilities?.under25 || 0;
+  const btts = match?.probabilities?.btts || 0;
+
+  if (rec.marketType === "btts" && rec.key === "bttsYes") {
+    const oneNilRisk = scoreProbability(match, "1-0") + scoreProbability(match, "0-1");
+    const nilNilRisk = scoreProbability(match, "0-0");
+    if (under25 >= 0.58 && btts <= 0.61) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.06;
+      reasons.push("BTTS 与小球结构冲突：小于2.5偏高，实际更像1-0/1-1/0-0分布。");
+    }
+    if (favoriteCleanSheet >= 0.18 || oneNilRisk + nilNilRisk >= 0.28) {
+      edgePenalty += 0.025;
+      scorePenalty += 0.045;
+      reasons.push("强队零封/1-0风险偏高，BTTS 不作为主推荐。");
+    }
+  }
+
+  if (rec.marketType === "handicap" && rec.handicap) {
+    const isAwayPlus = rec.key.endsWith("-away") && rec.handicap.awayLine > 0;
+    const isHomePlus = rec.key.endsWith("-home") && rec.handicap.homeLine > 0;
+    if ((isAwayPlus || isHomePlus) && Math.abs((isAwayPlus ? rec.handicap.awayLine : rec.handicap.homeLine) - 0.5) < 0.001) {
+      const plusSide = isAwayPlus ? "away" : "home";
+      const oppositeOneNil = plusSide === "away" ? scoreProbability(match, "1-0") : scoreProbability(match, "0-1");
+      if (oppositeOneNil >= 0.11 || favoriteCleanSheet >= 0.18) {
+        edgePenalty += 0.03;
+        scorePenalty += 0.055;
+        reasons.push("受让0.5存在强队一球小胜风险，低 edge 不再主推。");
+      }
+    }
+  }
+
+  if (rec.marketType === "moneyline" && rec.key !== favoriteKey && rec.key !== "draw") {
+    if (rec.edge < 0.09) {
+      edgePenalty += 0.025;
+      scorePenalty += 0.045;
+      reasons.push("冷门胜平负 edge 不足，优先降级为观察。");
+    }
+  }
+
+  if (rec.marketType === "total" && rec.key === "under25") {
+    const lowScoreMass = ["0-0", "1-0", "0-1", "1-1", "2-0", "0-2"].reduce((sum, score) => sum + scoreProbability(match, score), 0);
+    if (lowScoreMass >= 0.58 && under25 >= 0.58) {
+      scorePenalty -= 0.015;
+      reasons.push("低比分集中度支持小球，但仍需防红牌/早球打穿。");
+    }
+  }
+
+  if (rec.edge > 0 && rec.edge < 0.06) {
+    scorePenalty += 0.025;
+    reasons.push("edge 低于6%，只允许观察，不进主买。");
+  }
+
+  return {
+    edgePenalty,
+    scorePenalty,
+    reasons: [...new Set(reasons)].slice(0, 4),
+    conflict: reasons.length > 0
+  };
+}
+
+function applyReviewDiscipline(rec, match) {
+  const adjustment = marketReviewAdjustments(match, rec);
+  const disciplinedEdge = typeof rec.edge === "number" ? rec.edge - adjustment.edgePenalty : rec.edge;
+  rec.reviewDiscipline = {
+    edgePenalty: roundTo(adjustment.edgePenalty, 4),
+    scorePenalty: roundTo(adjustment.scorePenalty, 4),
+    reasons: adjustment.reasons
+  };
+  if (typeof disciplinedEdge === "number" && Number.isFinite(disciplinedEdge)) {
+    rec.disciplinedEdge = disciplinedEdge;
+  }
+  if (!adjustment.reasons.length || !rec.decision || ["AVOID_OR_SELL", "WAIT"].includes(rec.decision.action)) {
+    return rec;
+  }
+  if (rec.decision.action === "BUY" || rec.decision.action === "BUY_SMALL" || rec.decision.action === "WATCH") {
+    if (disciplinedEdge < 0.06 || rec.decision.action === "WATCH") {
+      rec.decision = {
+        action: disciplinedEdge >= 0.035 ? "WATCH" : "NO_TRADE",
+        label: disciplinedEdge >= 0.035 ? "复盘降级观察" : "复盘降级不买",
+        stake: "none",
+        gated: true,
+        reasons: [...(rec.decision.reasons || []), ...adjustment.reasons].slice(0, 6)
+      };
+      rec.maxBuyPrice = fairBuyPrice(rec.modelProbability, adjustment.edgePenalty > 0 ? 0.06 : 0.04);
+    }
+  }
+  return rec;
 }
 
 function gatedAction(baseDecision, row, match) {
@@ -1371,6 +1486,7 @@ function buildRecommendations(match, probabilities) {
         decision: gatedAction(baseDecision, row, match)
       };
     })
+    .map((row) => applyReviewDiscipline(row, match))
     .sort((a, b) => (b.edge ?? -9) - (a.edge ?? -9));
 }
 
@@ -1689,20 +1805,29 @@ function trendScoreBoost(match, rec) {
 }
 
 function tradableRecommendationScore(rec, match = null) {
-  const edgeValue = typeof rec.edge === "number" ? rec.edge : -9;
+  const edgeValue = typeof rec.disciplinedEdge === "number"
+    ? rec.disciplinedEdge
+    : typeof rec.edge === "number"
+      ? rec.edge
+      : -9;
   const holderBoost = Math.min(0.025, ((rec.eliteSummary?.count || 0) * 0.008) + ((rec.holderSummary?.eliteCount || 0) * 0.004));
-  return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec);
+  const disciplinePenalty = rec.reviewDiscipline?.scorePenalty || 0;
+  return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec) - disciplinePenalty;
 }
 
 function isActionableRecommendation(rec) {
   if (typeof rec.marketPrice !== "number" || typeof rec.modelProbability !== "number") return false;
   if (rec.decision?.action === "AVOID_OR_SELL") return false;
-  if (rec.edge == null || rec.edge <= 0) return false;
+  if (rec.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|低 edge 不再主推|BTTS 与小球结构冲突/.test(String(reason)))) return false;
+  const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
+  if (edgeValue == null || edgeValue <= 0) return false;
   return true;
 }
 
 function isPrimaryTradeCandidate(match, rec) {
   if (!isActionableRecommendation(rec)) return false;
+  const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
+  if (edgeValue < 0.06) return false;
   if (rec.marketType !== "moneyline") return true;
   if (rec.key === "draw") return false;
   const topWinKey = match.probabilities?.home >= match.probabilities?.away ? "home" : "away";
@@ -1710,7 +1835,7 @@ function isPrimaryTradeCandidate(match, rec) {
     match.tradingGate?.allowStrongTrade
     && rec.key === topWinKey
     && rec.modelProbability >= 0.48
-    && rec.edge >= 0.035
+    && edgeValue >= 0.06
   );
 }
 
@@ -1810,9 +1935,11 @@ function opportunityCandidateRows(matches, scanDate, nowMs = Date.now()) {
       const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
       const hasPrice = typeof rec.marketPrice === "number";
       const decisionAction = rec.decision?.action || "";
+      const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
       if (!hasPrice || typeof rec.edge !== "number") continue;
       if (!["BUY", "BUY_SMALL", "WATCH"].includes(decisionAction)) continue;
-      if (rec.edge < 0.025) continue;
+      if (edgeValue < 0.06) continue;
+      if (!isPrimaryTradeCandidate(match, rec)) continue;
       if (!hasLiveChart && !match.tradingGate?.allowPriceAdvice) continue;
       rows.push({
         match,
@@ -1910,6 +2037,8 @@ function buildRuleOpportunity(row, index) {
   const source = recommendationSourceText(rec);
   const reasons = [
     `模型概率 ${formatPercent(rec.modelProbability)}，当前价格 ${formatCents(rec.marketPrice)}，edge ${formatPercent(rec.edge)}。`,
+    typeof rec.disciplinedEdge === "number" && rec.disciplinedEdge !== rec.edge ? `复盘纪律后 edge ${formatPercent(rec.disciplinedEdge)}。` : "",
+    ...(rec.reviewDiscipline?.reasons || []),
     `建议价不高于 ${formatCents(rec.maxBuyPrice)}；超过上限不追。`,
     hasLiveChart ? "已匹配 Polymarket 实时历史曲线。" : "实时曲线不足，先观察价格。",
     rec.eliteSummary?.count ? `足球 Top100 公开持仓命中 ${rec.eliteSummary.count} 人。` : "",
@@ -1985,33 +2114,39 @@ function currentOpportunityVerdict(rec, match) {
     };
   }
   const priceGap = rec.maxBuyPrice - rec.marketPrice;
-  if (rec.marketPrice <= rec.maxBuyPrice && rec.edge >= 0.035) {
+  const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
+  if (rec.marketPrice <= rec.maxBuyPrice && edgeValue >= 0.06 && !rec.reviewDiscipline?.reasons?.length) {
     return {
       action: match.tradingGate?.allowStrongTrade ? "watch" : "watch",
       label: match.tradingGate?.allowStrongTrade ? "可按纪律观察" : "小仓观察",
       canConsider: true,
-      message: `当前价 ${formatCents(rec.marketPrice)}，低于建议上限 ${formatCents(rec.maxBuyPrice)}，edge ${formatPercent(rec.edge)}。`,
+      message: `当前价 ${formatCents(rec.marketPrice)}，低于建议上限 ${formatCents(rec.maxBuyPrice)}，纪律后 edge ${formatPercent(edgeValue)}。`,
       reasons: [
         `价格空间 ${formatPercent(priceGap)}。`,
         ...(match.tradingGate?.allowStrongTrade ? ["数据闸门允许较高置信判断。"] : ["动态数据仍有限，只按小仓/观察处理。"])
       ]
     };
   }
-  if (rec.edge >= 0.015) {
+  if (edgeValue >= 0.035) {
     return {
       action: "watch",
       label: "等回落",
       canConsider: false,
       message: `当前价 ${formatCents(rec.marketPrice)} 已高于建议上限 ${formatCents(rec.maxBuyPrice)}，不要追价。`,
-      reasons: [`需要至少回落 ${formatPercent(Math.abs(priceGap))} 才重新考虑。`]
+      reasons: [
+        `需要至少回落 ${formatPercent(Math.abs(priceGap))} 才重新考虑。`,
+        ...(rec.reviewDiscipline?.reasons || [])
+      ].slice(0, 4)
     };
   }
   return {
-    action: rec.edge < -0.015 ? "avoid" : "wait",
-    label: rec.edge < -0.015 ? "回避" : "等待",
+    action: edgeValue < -0.015 ? "avoid" : "wait",
+    label: edgeValue < -0.015 ? "回避" : "等待",
     canConsider: false,
-    message: `当前价 ${formatCents(rec.marketPrice)}，edge ${formatPercent(rec.edge)}，没有达到进入纪律。`,
-    reasons: rec.edge < -0.015 ? ["模型价差转负，先回避。"] : ["价差不够，等待更好价格。"]
+    message: `当前价 ${formatCents(rec.marketPrice)}，纪律后 edge ${formatPercent(edgeValue)}，没有达到进入纪律。`,
+    reasons: edgeValue < -0.015
+      ? ["模型价差转负，先回避。", ...(rec.reviewDiscipline?.reasons || [])].slice(0, 4)
+      : ["价差不够，等待更好价格。", ...(rec.reviewDiscipline?.reasons || [])].slice(0, 4)
   };
 }
 
@@ -2133,6 +2268,9 @@ async function enhanceOpportunitiesWithAi(opportunities, matches) {
     rules: [
       "action 只能是 watch/wait/avoid；不要写强买入、重仓、梭哈、稳赚。",
       "如果数据闸门限制或曲线不足，必须写观察/等待。",
+      "如果 reviewDiscipline.reasons 不为空，必须说明降级原因，不能把它写成主买。",
+      "BTTS 与小球冲突时，不要同时推荐；低比分集中时优先小球或等待。",
+      "受让0.5遇到强队1-0风险时，只能观察或等待更好价格。",
       "entryText 必须给价格纪律：不高于建议价，超过等待。",
       "理由只引用输入里的数字和事实，不要编造首发、伤停或外部消息。",
       "每条 summary 保持一行短结论。"
@@ -2148,6 +2286,7 @@ async function enhanceOpportunitiesWithAi(opportunities, matches) {
         modelProbability: item.modelProbability,
         marketPrice: item.marketPrice,
         edge: item.edge,
+        disciplinedEdge: match.recommendations?.find((rec) => rec.key === item.marketKey)?.disciplinedEdge,
         maxBuyPrice: item.maxBuyPrice,
         source: item.source,
         confidence: item.confidence,
@@ -2155,6 +2294,7 @@ async function enhanceOpportunitiesWithAi(opportunities, matches) {
         aiPrediction: match.aiPrediction,
         topScores: (match.probabilities?.topScores || []).slice(0, 4),
         contextRisks: match.context?.riskFlags || [],
+        reviewDiscipline: match.recommendations?.find((rec) => rec.key === item.marketKey)?.reviewDiscipline,
         reasons: item.reasons,
         risks: item.risks
       };
@@ -2386,6 +2526,8 @@ function reviewReasonSummary(matchPayload, recPayload, settled) {
   }
   if (recPayload?.decision?.reasons?.length) {
     reasons.push(`当时限制：${recPayload.decision.reasons.slice(0, 3).join("、")}。`);
+  } else if (recPayload?.decisionLabel) {
+    reasons.push(`当时决策：${recPayload.decisionLabel}。`);
   }
   if (settled.status === "miss") {
     reasons.push(recPayload?.marketType === "btts"
@@ -2401,20 +2543,109 @@ function reviewReasonSummary(matchPayload, recPayload, settled) {
   return [...new Set(reasons.filter(Boolean))].slice(0, 5);
 }
 
+function compactReviewRecommendationPayload(payload = {}) {
+  return {
+    key: payload.key,
+    marketType: payload.marketType,
+    marketTypeLabel: payload.marketTypeLabel,
+    name: payload.name,
+    side: payload.side,
+    handicap: payload.handicap || null,
+    totalLine: payload.totalLine ?? null,
+    odds: payload.odds || null,
+    decision: payload.decision
+      ? {
+          action: payload.decision.action,
+          label: payload.decision.label,
+          stake: payload.decision.stake,
+          gated: payload.decision.gated,
+          reasons: (payload.decision.reasons || []).slice(0, 5)
+        }
+      : null,
+    chart: payload.chart
+      ? {
+          source: payload.chart.source,
+          marketId: payload.chart.marketId,
+          conditionId: payload.chart.conditionId,
+          tokenId: payload.chart.tokenId,
+          marketQuestion: payload.chart.marketQuestion,
+          label: payload.chart.label,
+          currentPrice: payload.chart.currentPrice,
+          historyPoints: Array.isArray(payload.chart.history) ? payload.chart.history.length : 0
+        }
+      : null,
+    eliteSummary: payload.eliteSummary || null,
+    holderSummary: payload.holderSummary || null
+  };
+}
+
+function sqlString(value) {
+  return `'${String(value ?? "").replace(/'/g, "''")}'`;
+}
+
+function resultReviewIdentity(result = {}) {
+  const payload = parseSnapshotPayload(result.payload_json, {});
+  return String(payload.scheduleId || canonicalMatchId(result.match_id) || result.match_id || "");
+}
+
 async function buildOpportunityReview({ limit = OPPORTUNITY_REVIEW_LIMIT } = {}) {
-  await ensureHistorySchema();
+  const reviewStartedAt = Date.now();
+  const reviewLog = (stage) => {
+    if (process.env.OPPORTUNITY_REVIEW_DEBUG === "1") {
+      console.log(`Opportunity review ${stage} +${Date.now() - reviewStartedAt}ms`);
+    }
+  };
+  reviewLog("start");
+  if (OPPORTUNITY_REVIEW_SCHEMA_CHECK) {
+    try {
+      await ensureHistorySchema();
+    } catch (error) {
+      console.error(`History schema check skipped for review: ${error.message}`);
+    }
+  }
   const safeLimit = Math.max(1, Math.min(120, Number(limit) || OPPORTUNITY_REVIEW_LIMIT));
+  const sqlLimit = safeLimit * 3;
   const resultsOutput = await runSql(`
-SELECT match_id, home_goals, away_goals, result_key, result_label, finished_at, updated_at, source
+SELECT match_id, home_goals, away_goals, result_key, result_label, finished_at, updated_at, source, payload_json
 FROM match_results
 WHERE status = 'final'
 ORDER BY COALESCE(finished_at, updated_at) DESC
-LIMIT ?;
-`, [safeLimit], "all");
-  const results = JSON.parse(resultsOutput.trim().split("\n").filter(Boolean).pop() || "[]");
-  const rows = [];
+LIMIT ${sqlLimit};
+`, [], "all");
+  const rawResults = JSON.parse(resultsOutput.trim().split("\n").filter(Boolean).pop() || "[]");
+  reviewLog(`results ${rawResults.length}`);
+  const results = [];
+  const seenResultIds = new Set();
+  for (const result of rawResults) {
+    const canonical = resultReviewIdentity(result);
+    if (!canonical || seenResultIds.has(canonical)) continue;
+    seenResultIds.add(canonical);
+    results.push(result);
+    if (results.length >= safeLimit) break;
+  }
+  if (!results.length) {
+    return {
+      meta: {
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        source: "dashboard history backtest",
+        limit: safeLimit,
+        disclaimer: "复盘只比较历史预测与最终赛果，用于模型校准；不代表真实交易记录。"
+      },
+      totals: { matches: 0, hit: 0, miss: 0, push: 0, pending: 0 },
+      items: []
+    };
+  }
+  const resultByIdentity = new Map();
   for (const result of results) {
-    const ids = [result.match_id, `schedule-${result.match_id}`].filter(Boolean);
+    const identity = resultReviewIdentity(result);
+    resultByIdentity.set(identity, result);
+  }
+  const snapshotByResult = new Map();
+  for (const result of results) {
+    const identity = resultReviewIdentity(result);
+    const aliases = matchIdAliases(result.match_id);
+    const cutoffAt = result.finished_at || result.updated_at || new Date().toISOString();
     const snapshotOutput = await runSql(`
 SELECT
   ms.snapshot_id,
@@ -2430,43 +2661,95 @@ SELECT
   ms.ai_trade_summary,
   ms.completeness_mode,
   ms.completeness_score,
-  ms.payload_json AS match_payload_json,
+  NULL AS match_payload_json,
   m.home_name,
   m.away_name,
   m.kickoff_shanghai
 FROM match_snapshots ms
 LEFT JOIN matches m ON m.match_id = ms.match_id
-WHERE ms.match_id IN (?, ?)
+WHERE ms.match_id IN (?, ?, ?)
   AND ms.captured_at <= ?
 ORDER BY ms.captured_at DESC
 LIMIT 1;
-`, [ids[0] || "", ids[1] || "", result.finished_at || result.updated_at || new Date().toISOString()], "one");
+`, [aliases[0] || "", aliases[1] || "", aliases[2] || "", cutoffAt], "one");
     const line = snapshotOutput.trim().split("\n").filter(Boolean).pop();
     const snapshot = line ? JSON.parse(line) : null;
+    if (snapshot) {
+      snapshot.result_identity = identity;
+      snapshotByResult.set(identity, snapshot);
+    }
+  }
+  const snapshots = [...snapshotByResult.values()];
+  reviewLog(`snapshots ${snapshots.length}`);
+  if (!snapshots.length) {
+    return {
+      meta: {
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        source: "dashboard history backtest",
+        limit: safeLimit,
+        disclaimer: "复盘只比较历史预测与最终赛果，用于模型校准；不代表真实交易记录。"
+      },
+      totals: { matches: 0, hit: 0, miss: 0, push: 0, pending: 0 },
+      items: []
+    };
+  }
+  const targetRows = snapshots.map((snapshot) => `(${sqlString(snapshot.snapshot_id)}, ${sqlString(snapshot.prediction_key || "")}, ${sqlString(snapshot.ai_trade_primary || "")})`);
+  const marketsOutput = await runSql(`
+WITH target(snapshot_id, prediction_key, primary_name) AS (
+  VALUES ${targetRows.join(",")}
+),
+ranked_markets AS (
+  SELECT
+    mk.recommendation_key,
+    mk.market_type,
+    mk.market_name,
+    mk.model_probability,
+    mk.push_probability,
+    mk.market_price,
+    mk.market_source,
+    mk.edge,
+    mk.max_buy_price,
+    mk.decision_label,
+    mk.decision_action,
+    mk.elite_count,
+    mk.elite_current_value,
+    NULL AS rec_payload_json,
+    mk.snapshot_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY mk.snapshot_id
+      ORDER BY
+        CASE
+          WHEN mk.recommendation_key = target.prediction_key THEN 0
+          WHEN mk.market_name = target.primary_name THEN 1
+          WHEN mk.edge >= 0.025 THEN 2
+          ELSE 3
+        END,
+        mk.edge DESC
+    ) AS rn
+  FROM market_snapshots mk
+  JOIN target ON target.snapshot_id = mk.snapshot_id
+  WHERE mk.recommendation_key = target.prediction_key
+     OR mk.market_name = target.primary_name
+     OR mk.edge >= 0.025
+)
+SELECT *
+FROM ranked_markets
+WHERE rn <= 8
+ORDER BY snapshot_id, edge DESC;
+`, [], "all");
+  reviewLog("markets");
+  const marketsBySnapshot = new Map();
+  for (const market of JSON.parse(marketsOutput.trim().split("\n").filter(Boolean).pop() || "[]")) {
+    const list = marketsBySnapshot.get(market.snapshot_id) || [];
+    list.push(market);
+    marketsBySnapshot.set(market.snapshot_id, list);
+  }
+  const rows = [];
+  for (const result of results) {
+    const snapshot = snapshotByResult.get(resultReviewIdentity(result));
     if (!snapshot) continue;
-    const marketsOutput = await runSql(`
-SELECT
-  recommendation_key,
-  market_type,
-  market_name,
-  model_probability,
-  push_probability,
-  market_price,
-  market_source,
-  edge,
-  max_buy_price,
-  decision_label,
-  decision_action,
-  elite_count,
-  elite_current_value,
-  payload_json AS rec_payload_json
-FROM market_snapshots
-WHERE snapshot_id = ?
-  AND (recommendation_key = ? OR market_name = ? OR edge >= 0.025)
-ORDER BY edge DESC
-LIMIT 8;
-`, [snapshot.snapshot_id, snapshot.prediction_key || "", snapshot.ai_trade_primary || ""], "all");
-    const markets = JSON.parse(marketsOutput.trim().split("\n").filter(Boolean).pop() || "[]");
+    const markets = marketsBySnapshot.get(snapshot.snapshot_id) || [];
     for (const market of markets.length ? markets : [{}]) {
       rows.push({
         ...snapshot,
@@ -2517,6 +2800,7 @@ LIMIT 8;
     const matchRecord = byMatch.get(row.match_id);
     const matchPayload = parseSnapshotPayload(row.match_payload_json, {});
     const recPayload = parseSnapshotPayload(row.rec_payload_json, {});
+    if (!recPayload.decisionLabel && row.decision_label) recPayload.decisionLabel = row.decision_label;
     const rec = {
       key: row.recommendation_key,
       marketType: row.market_type,
@@ -2531,7 +2815,7 @@ LIMIT 8;
       decisionAction: row.decision_action,
       eliteCount: numberOrNull(row.elite_count),
       eliteCurrentValue: numberOrNull(row.elite_current_value),
-      payload: recPayload
+      payload: compactReviewRecommendationPayload(recPayload)
     };
     const settled = settleRecommendationFromResult(rec, matchRecord.result);
     matchRecord.items.push({
@@ -2651,11 +2935,12 @@ function buildRuleTradePlan(match) {
     summary: headline,
     entryText,
     rationale: primary ? [
-      `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，edge ${formatPercent(primary.edge)}。`,
+      `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，edge ${formatPercent(primary.edge)}${typeof primary.disciplinedEdge === "number" && primary.disciplinedEdge !== primary.edge ? `，复盘纪律后 ${formatPercent(primary.disciplinedEdge)}` : ""}。`,
+      ...(primary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
       primary.holderSummary?.count ? `该盘口公开持仓 ${primary.holderSummary.count} 人，Top holder ${primary.holderSummary.topHolder || "-"}。` : "",
       primary.eliteSummary?.count ? `足球 Top100 命中 ${primary.eliteSummary.count} 人，当前价值约 ${Math.round(primary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
-    ].filter(Boolean) : ["当前没有非胜平负盘口达到价格纪律；胜平负长赔只作为激进观察，不做首选。"],
+    ].filter(Boolean).slice(0, 5) : ["当前没有非胜平负盘口达到价格纪律；胜平负长赔只作为激进观察，不做首选。"],
     riskNotes: topRiskNotes(match, primary),
     disclaimer: "研究辅助，不自动下单；首发、伤停、盘口跳动后需要重新评估。"
   };
@@ -2750,6 +3035,9 @@ async function fetchAiTradePlans(matches) {
     rules: [
       "action 只能是 buy/watch/avoid/wait。",
       "首发未确认或强交易不允许时，不要写重仓、强买入、梭哈等表达。",
+      "复盘纪律原因不为空时，必须降级为 watch/wait，不要写首选买入。",
+      "BTTS 与小于2.5同时看好时，只能二选一；若低比分集中，应优先小球而不是 BTTS。",
+      "弱队 +0.5 如果存在强队1-0风险，只能观察，不能作为首选。",
       "胜平负长赔冷门和平局不能作为首选；除非该方向是模型最高概率、概率至少48%、且强交易闸门打开，否则只能写激进小注/观察。首选优先让球或大小球。",
       "如果没有实时价格或曲线，写等待/观察，不给硬价格。",
       "summary 要像给人看的短结论，例如：首选小于2.5球，49¢附近可观察，小仓，不追高。",
@@ -2776,8 +3064,10 @@ async function fetchAiTradePlans(matches) {
           modelProbability: rec.modelProbability,
           marketPrice: rec.marketPrice,
           edge: rec.edge,
+          disciplinedEdge: rec.disciplinedEdge,
           maxBuyPrice: rec.maxBuyPrice,
-          decision: rec.decisionLabel
+          decision: rec.decisionLabel,
+          reviewDiscipline: rec.reviewDiscipline
         })),
       avoid: match.aiTradePlan?.avoid || [],
       context: {
@@ -2993,13 +3283,10 @@ async function syncFinalResultsFromSchedule(schedule, modeledMatches = [], exist
     const homeGoals = Number(event.homeScore);
     const awayGoals = Number(event.awayScore);
     const { resultKey, resultLabel } = finalResultFromScores(homeGoals, awayGoals, event.home?.name || "主队", event.away?.name || "客队");
-    const ids = [
-      modeledMatchIdForScheduleEvent(event, modeledMatches),
-      event.scheduleId,
-      event.scheduleId ? `schedule-${event.scheduleId}` : ""
-    ].filter(Boolean);
-    for (const matchId of [...new Set(ids)]) {
-      if (existingResults.has(matchId)) continue;
+    const modeledId = modeledMatchIdForScheduleEvent(event, modeledMatches);
+    const matchId = modeledId || (event.scheduleId ? `schedule-${event.scheduleId}` : "");
+    if (matchId) {
+      if (matchIdAliases(matchId).some((alias) => existingResults.has(alias))) continue;
       const finishedAt = new Date().toISOString();
       await recordMatchResult({
         matchId,
@@ -3029,6 +3316,16 @@ async function syncFinalResultsFromSchedule(schedule, modeledMatches = [], exist
     }
   }
   return { written };
+}
+
+function canonicalMatchId(matchId) {
+  return String(matchId || "").replace(/^schedule-/, "");
+}
+
+function matchIdAliases(matchId) {
+  const raw = String(matchId || "");
+  const canonical = canonicalMatchId(raw);
+  return [...new Set([raw, canonical, canonical ? `schedule-${canonical}` : ""].filter(Boolean))];
 }
 
 function matchScheduleKey(homeName, awayName) {
@@ -3387,6 +3684,7 @@ function attachMarketCharts(matches, polymarket) {
     match.tradingGate = buildTradingGate(match.completeness);
     for (const recommendation of match.recommendations) {
       recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
+      applyReviewDiscipline(recommendation, match);
     }
   }
 }
@@ -5921,14 +6219,14 @@ async function buildDashboard({
   const polymarket = await fetchPolymarket(schedule);
   const preliminaryWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
   const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend));
-  if (!DISABLE_HISTORY_RECORDING && schedule.ok) {
+  if (!DISABLE_HISTORY_RECORDING && trendSourceSchedule.ok) {
     try {
-      await syncFinalResultsFromSchedule(schedule, allModeledMatches, finalResults);
+      await syncFinalResultsFromSchedule(trendSourceSchedule, allModeledMatches, finalResults);
     } catch (error) {
       console.error(`Failed to sync final results from schedule: ${error.message}`);
     }
   }
-  const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
+  const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, trendSourceSchedule.matches || schedule.matches || [], finalResults);
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend);
   attachMarketCharts(matches, polymarket);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
