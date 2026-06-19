@@ -45,7 +45,7 @@ const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
 const ELITE_LEADERBOARD_CACHE_TTL_MS = Number(process.env.ELITE_LEADERBOARD_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
-const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 100);
+const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 10);
 const ELITE_TRADER_CANDIDATE_LIMIT = Number(process.env.ELITE_TRADER_CANDIDATE_LIMIT || Math.max(260, ELITE_TRADER_LIMIT * 2));
 const ELITE_LEADERBOARD_PAGE_SIZE = 100;
 const ELITE_CLOSED_POSITION_LIMIT = 160;
@@ -2055,7 +2055,7 @@ function buildRuleOpportunity(row, index) {
     ...(rec.reviewDiscipline?.reasons || []),
     `建议价不高于 ${formatCents(rec.maxBuyPrice)}；超过上限不追。`,
     hasLiveChart ? "已匹配 Polymarket 实时历史曲线。" : "实时曲线不足，先观察价格。",
-    rec.eliteSummary?.count ? `足球 Top100 公开持仓命中 ${rec.eliteSummary.count} 人。` : "",
+    rec.eliteSummary?.count ? `世界杯 Top10 公开持仓命中 ${rec.eliteSummary.count} 人。` : "",
     rec.holderSummary?.count ? `公开持仓 ${rec.holderSummary.count} 人，Top holder ${rec.holderSummary.topHolder || "-"}。` : ""
   ].filter(Boolean);
   return {
@@ -2442,9 +2442,9 @@ function scheduleOpportunityRefresh({ force = true } = {}) {
 }
 
 function eliteMonitorRankScore(trader) {
-  const sample = Number(trader.soccerSettledPositions || 0);
-  const winRate = Number(trader.winRateEstimate || 0);
-  const pnl = Number(trader.soccerPnl || 0);
+  const sample = Number(trader.worldCupSettledPositions || trader.soccerSettledPositions || 0);
+  const winRate = Number(trader.worldCupWinRateEstimate ?? trader.winRateEstimate ?? 0);
+  const pnl = Number(trader.worldCupPnl || trader.soccerPnl || 0);
   const sampleWeight = Math.min(1, sample / 20);
   const pnlWeight = Math.log10(Math.max(1, Math.abs(pnl))) / 10;
   return winRate * 0.62 + sampleWeight * 0.24 + Math.max(0, pnlWeight) * 0.14;
@@ -2494,10 +2494,18 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
       const activePositions = activeByWallet.get(walletKey(trader.proxyWallet)) || [];
       return {
         soccerRank: trader.soccerRank,
+        worldCupRank: trader.worldCupRank || trader.soccerRank,
         userName: trader.userName,
         proxyWallet: trader.proxyWallet,
         profileUrl: trader.profileUrl || polymarketProfileUrl(trader.proxyWallet || trader.userName),
         verifiedBadge: trader.verifiedBadge,
+        worldCupWinRateEstimate: trader.worldCupWinRateEstimate ?? trader.winRateEstimate,
+        worldCupPnl: trader.worldCupPnl ?? 0,
+        worldCupVolume: trader.worldCupVolume ?? 0,
+        worldCupSettledPositions: trader.worldCupSettledPositions ?? 0,
+        worldCupWins: trader.worldCupWins ?? 0,
+        worldCupLosses: trader.worldCupLosses ?? 0,
+        worldCupPushes: trader.worldCupPushes ?? 0,
         winRateEstimate: trader.winRateEstimate,
         soccerPnl: trader.soccerPnl,
         soccerVolume: trader.soccerVolume,
@@ -2506,6 +2514,7 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
         soccerLosses: trader.soccerLosses,
         soccerPushes: trader.soccerPushes,
         overallPnl: trader.overallPnl,
+        worldCupSampleTitles: trader.worldCupSampleTitles || trader.sampleTitles || [],
         sampleTitles: trader.sampleTitles || [],
         activePositions,
         activePositionCount: activePositions.length,
@@ -2514,13 +2523,17 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
       };
     })
     .sort((a, b) => {
+      const valueDiff = (b.activeCurrentValue || 0) - (a.activeCurrentValue || 0);
+      if (Math.abs(valueDiff) > 1) return valueDiff;
       const activeDiff = b.activePositionCount - a.activePositionCount;
       if (activeDiff) return activeDiff;
       const scoreDiff = b.score - a.score;
       if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
-      const winRateDiff = (b.winRateEstimate || 0) - (a.winRateEstimate || 0);
+      const worldCupSampleDiff = (b.worldCupSettledPositions || 0) - (a.worldCupSettledPositions || 0);
+      if (worldCupSampleDiff) return worldCupSampleDiff;
+      const winRateDiff = (b.worldCupWinRateEstimate ?? b.winRateEstimate ?? 0) - (a.worldCupWinRateEstimate ?? a.winRateEstimate ?? 0);
       if (Math.abs(winRateDiff) > 0.0001) return winRateDiff;
-      return (b.soccerPnl || 0) - (a.soccerPnl || 0);
+      return (b.worldCupPnl || b.soccerPnl || 0) - (a.worldCupPnl || a.soccerPnl || 0);
     });
   return {
     ok: Boolean(eliteTraders?.ok),
@@ -2529,7 +2542,7 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
     cacheTtlSeconds: eliteTraders?.cacheTtlSeconds || Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
     cacheHit: Boolean(eliteTraders?.cacheHit),
     sourceMode: source,
-    rankingBasis: "世界杯/足球相关已结算样本：优先当前持仓命中，再按胜率、样本量、足球PNL综合排序；样本不足只作监控，不等于必胜。",
+    rankingBasis: "世界杯盘口优先：先按当前世界杯盘口持仓金额排序，再看世界杯已结算样本PNL、样本量和胜率；足球历史只作辅助，不等于世界杯必胜。",
     candidateCount: eliteTraders?.candidateCount || 0,
     marketPositions: eliteTraders?.marketPositions || null,
     totals: {
@@ -3069,7 +3082,7 @@ function buildRuleTradePlan(match) {
       ...(primary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
       primary.holderSummary?.count ? `该盘口公开持仓 ${primary.holderSummary.count} 人，Top holder ${primary.holderSummary.topHolder || "-"}。` : "",
-      primary.eliteSummary?.count ? `足球 Top100 命中 ${primary.eliteSummary.count} 人，当前价值约 ${Math.round(primary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
+      primary.eliteSummary?.count ? `世界杯 Top10 命中 ${primary.eliteSummary.count} 人，当前价值约 ${Math.round(primary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
     ].filter(Boolean).slice(0, 5) : ["当前没有非胜平负盘口达到价格纪律；胜平负长赔只作为激进观察，不做首选。"],
     riskNotes: topRiskNotes(match, primary),
     disclaimer: "研究辅助，不自动下单；首发、伤停、盘口跳动后需要重新评估。"
@@ -5552,6 +5565,23 @@ function isSoccerPosition(position) {
   return SOCCER_POSITION_KEYWORDS.some((keyword) => text.includes(keyword));
 }
 
+function isWorldCupPosition(position) {
+  const text = [
+    position.title,
+    position.slug,
+    position.eventSlug,
+    position.icon,
+    position.outcome,
+    position.oppositeOutcome
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return false;
+  if (NON_SOCCER_POSITION_KEYWORDS.some((keyword) => text.includes(keyword))) return false;
+  return text.includes("fifwc")
+    || text.includes("world cup")
+    || text.includes("world-cup")
+    || text.includes("fifa world cup");
+}
+
 function isWorldCupOrSoccerMarketText(text) {
   const normalized = String(text || "").toLowerCase();
   if (!normalized) return false;
@@ -5611,13 +5641,21 @@ async function mapLimit(items, limit, mapper) {
 }
 
 function summarizeSoccerPerformance(entry, closedPositions) {
-  const soccerPositions = uniquePositions(closedPositions).filter(isSoccerPosition);
+  const uniqueClosedPositions = uniquePositions(closedPositions);
+  const soccerPositions = uniqueClosedPositions.filter(isSoccerPosition);
+  const worldCupPositions = uniqueClosedPositions.filter(isWorldCupPosition);
   const wins = soccerPositions.filter((position) => Number(position.realizedPnl || 0) > 0).length;
   const losses = soccerPositions.filter((position) => Number(position.realizedPnl || 0) < 0).length;
   const pushes = soccerPositions.length - wins - losses;
   const soccerPnl = soccerPositions.reduce((sum, position) => sum + Number(position.realizedPnl || 0), 0);
   const soccerVolume = soccerPositions.reduce((sum, position) => sum + Number(position.totalBought || 0), 0);
   const winRate = soccerPositions.length ? wins / soccerPositions.length : null;
+  const worldCupWins = worldCupPositions.filter((position) => Number(position.realizedPnl || 0) > 0).length;
+  const worldCupLosses = worldCupPositions.filter((position) => Number(position.realizedPnl || 0) < 0).length;
+  const worldCupPushes = worldCupPositions.length - worldCupWins - worldCupLosses;
+  const worldCupPnl = worldCupPositions.reduce((sum, position) => sum + Number(position.realizedPnl || 0), 0);
+  const worldCupVolume = worldCupPositions.reduce((sum, position) => sum + Number(position.totalBought || 0), 0);
+  const worldCupWinRate = worldCupPositions.length ? worldCupWins / worldCupPositions.length : null;
 
   return {
     rank: Number(entry.rank || 0) || null,
@@ -5629,6 +5667,13 @@ function summarizeSoccerPerformance(entry, closedPositions) {
     profileImage: entry.profileImage || "",
     overallPnl: Number(entry.pnl || 0),
     overallVolume: Number(entry.vol || entry.volume || 0),
+    worldCupPnl,
+    worldCupVolume,
+    worldCupSettledPositions: worldCupPositions.length,
+    worldCupWins,
+    worldCupLosses,
+    worldCupPushes,
+    worldCupWinRateEstimate: worldCupWinRate,
     soccerPnl,
     soccerVolume,
     soccerSettledPositions: soccerPositions.length,
@@ -5636,6 +5681,7 @@ function summarizeSoccerPerformance(entry, closedPositions) {
     soccerLosses: losses,
     soccerPushes: pushes,
     winRateEstimate: winRate,
+    worldCupSampleTitles: worldCupPositions.slice(0, 3).map((position) => position.title).filter(Boolean),
     sampleTitles: soccerPositions.slice(0, 3).map((position) => position.title).filter(Boolean)
   };
 }
@@ -5768,16 +5814,19 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       return summarizeSoccerPerformance(entry, closedPositions);
     });
     const ranked = summaries
-      .filter((trader) => trader.soccerSettledPositions > 0)
+      .filter((trader) => trader.worldCupSettledPositions > 0)
       .sort((a, b) => {
-        const pnlDiff = b.soccerPnl - a.soccerPnl;
+        const pnlDiff = b.worldCupPnl - a.worldCupPnl;
         if (Math.abs(pnlDiff) > 1) return pnlDiff;
-        return (b.winRateEstimate ?? 0) - (a.winRateEstimate ?? 0);
+        const sampleDiff = b.worldCupSettledPositions - a.worldCupSettledPositions;
+        if (sampleDiff) return sampleDiff;
+        return (b.worldCupWinRateEstimate ?? 0) - (a.worldCupWinRateEstimate ?? 0);
       })
       .slice(0, ELITE_TRADER_LIMIT)
       .map((trader, index) => ({
         ...trader,
-        soccerRank: index + 1
+        soccerRank: index + 1,
+        worldCupRank: index + 1
       }));
 
     const payload = {
@@ -5786,11 +5835,11 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       updatedAt: new Date().toISOString(),
       cacheTtlSeconds: Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
       candidateCount: candidates.length,
-      rankingBasis: "SPORTS 表现候选账号 + 足球已结算样本过滤；胜率=盈利足球样本数/抓取到的足球已结算样本数",
+      rankingBasis: "SPORTS 表现候选账号 + 世界杯已结算样本过滤；胜率=盈利世界杯样本数/抓取到的世界杯已结算样本数",
       limit: ELITE_TRADER_LIMIT,
       traders: ranked
     };
-    if (!ranked.length) payload.error = "SPORTS 榜单暂未筛到可审计的足球已结算样本";
+    if (!ranked.length) payload.error = "SPORTS 榜单暂未筛到可审计的世界杯已结算样本";
     if (payload.ok) {
       eliteLeaderboardCache = payload;
       eliteLeaderboardCacheAt = now;
@@ -5802,7 +5851,7 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       ok: false,
       updatedAt: new Date().toISOString(),
       error: translateError(error.message),
-      rankingBasis: "SPORTS 表现候选账号 + 足球已结算样本过滤",
+      rankingBasis: "SPORTS 表现候选账号 + 世界杯已结算样本过滤",
       traders: []
     };
   }
@@ -5867,7 +5916,7 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
       ok: false,
       updatedAt: new Date().toISOString(),
       error: "未从当前世界杯盘口持仓中找到可反查账号",
-      rankingBasis: "当前世界杯盘口公开持仓者 + 足球已结算样本过滤",
+      rankingBasis: "当前世界杯盘口公开持仓者 + 世界杯已结算样本/当前持仓过滤",
       candidateCount: 0,
       limit: ELITE_TRADER_LIMIT,
       traders: []
@@ -5883,18 +5932,23 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
     };
   });
   const ranked = summaries
-    .filter((trader) => trader.soccerSettledPositions > 0)
+    .filter((trader) => trader.worldCupSettledPositions > 0 || Number(trader.currentHolderValue || 0) > 0)
     .sort((a, b) => {
-      const pnlDiff = b.soccerPnl - a.soccerPnl;
+      const holderDiff = (b.currentHolderValue || 0) - (a.currentHolderValue || 0);
+      if (Math.abs(holderDiff) > 1) return holderDiff;
+      const pnlDiff = b.worldCupPnl - a.worldCupPnl;
       if (Math.abs(pnlDiff) > 1) return pnlDiff;
-      const winRateDiff = (b.winRateEstimate ?? 0) - (a.winRateEstimate ?? 0);
+      const sampleDiff = b.worldCupSettledPositions - a.worldCupSettledPositions;
+      if (sampleDiff) return sampleDiff;
+      const winRateDiff = (b.worldCupWinRateEstimate ?? 0) - (a.worldCupWinRateEstimate ?? 0);
       if (Math.abs(winRateDiff) > 0.0001) return winRateDiff;
-      return (b.currentHolderValue || 0) - (a.currentHolderValue || 0);
+      return (b.soccerPnl || 0) - (a.soccerPnl || 0);
     })
     .slice(0, ELITE_TRADER_LIMIT)
     .map((trader, index) => ({
       ...trader,
-      soccerRank: index + 1
+      soccerRank: index + 1,
+      worldCupRank: index + 1
     }));
   const payload = {
     source: "Polymarket Data API",
@@ -5902,17 +5956,65 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
     updatedAt: new Date().toISOString(),
     cacheTtlSeconds: Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
     candidateCount: candidates.length,
-    rankingBasis: "当前世界杯盘口公开持仓者 + 足球已结算样本过滤；胜率=盈利足球样本数/抓取到的足球已结算样本数",
+    rankingBasis: "当前世界杯盘口公开持仓者 + 世界杯已结算样本过滤；优先当前持仓金额，再看世界杯PNL、样本量和胜率；足球历史只作辅助。",
     limit: ELITE_TRADER_LIMIT,
     traders: ranked,
     sourceFallback: "current-world-cup-holders"
   };
-  if (!ranked.length) payload.error = "当前盘口持仓者里暂未筛到可审计的足球已结算样本";
+  if (!ranked.length) payload.error = "当前盘口持仓者里暂未筛到可审计的世界杯账号";
   if (payload.ok) {
     eliteLeaderboardCache = payload;
     eliteLeaderboardCacheAt = Date.now();
   }
   return payload;
+}
+
+function rankWorldCupTraders(traders, limit = ELITE_TRADER_LIMIT) {
+  return (traders || [])
+    .filter((trader) => trader.worldCupSettledPositions > 0 || Number(trader.currentHolderValue || 0) > 0)
+    .sort((a, b) => {
+      const holderDiff = (b.currentHolderValue || 0) - (a.currentHolderValue || 0);
+      if (Math.abs(holderDiff) > 1) return holderDiff;
+      const pnlDiff = (b.worldCupPnl || 0) - (a.worldCupPnl || 0);
+      if (Math.abs(pnlDiff) > 1) return pnlDiff;
+      const sampleDiff = (b.worldCupSettledPositions || 0) - (a.worldCupSettledPositions || 0);
+      if (sampleDiff) return sampleDiff;
+      const winRateDiff = (b.worldCupWinRateEstimate ?? 0) - (a.worldCupWinRateEstimate ?? 0);
+      if (Math.abs(winRateDiff) > 0.0001) return winRateDiff;
+      return (b.soccerPnl || 0) - (a.soccerPnl || 0);
+    })
+    .slice(0, limit)
+    .map((trader, index) => ({
+      ...trader,
+      soccerRank: index + 1,
+      worldCupRank: index + 1
+    }));
+}
+
+function mergeWorldCupLeaderboards(primary = {}, holders = {}) {
+  const byWallet = new Map();
+  for (const trader of [...(primary.traders || []), ...(holders.traders || [])]) {
+    const key = walletKey(trader.proxyWallet);
+    if (!key) continue;
+    const current = byWallet.get(key) || {};
+    byWallet.set(key, {
+      ...current,
+      ...trader,
+      currentHolderValue: Math.max(Number(current.currentHolderValue || 0), Number(trader.currentHolderValue || 0)),
+      holderSamples: Math.max(Number(current.holderSamples || 0), Number(trader.holderSamples || 0))
+    });
+  }
+  const ranked = rankWorldCupTraders([...byWallet.values()]);
+  return {
+    ...primary,
+    ok: ranked.length > 0,
+    updatedAt: new Date().toISOString(),
+    candidateCount: Math.max(Number(primary.candidateCount || 0), Number(holders.candidateCount || 0)),
+    rankingBasis: "世界杯盘口 Top10：优先当前世界杯盘口持仓金额，再看世界杯已结算样本PNL、样本量和胜率；足球历史只作辅助。",
+    sourceFallback: holders.sourceFallback || primary.sourceFallback,
+    traders: ranked,
+    error: ranked.length ? undefined : (holders.error || primary.error)
+  };
 }
 
 function recommendationMarketCatalog(matches) {
@@ -5968,10 +6070,14 @@ function normalizeEliteMarketPosition(position, trader) {
   if (size <= 0.000001 && currentValue <= 0.01) return null;
   return {
     traderRank: trader.soccerRank,
+    worldCupRank: trader.worldCupRank || trader.soccerRank,
     userName: trader.userName,
     proxyWallet: trader.proxyWallet,
     profileUrl: trader.profileUrl || polymarketProfileUrl(trader.proxyWallet || trader.userName),
     verifiedBadge: trader.verifiedBadge,
+    worldCupWinRateEstimate: trader.worldCupWinRateEstimate,
+    worldCupPnl: trader.worldCupPnl,
+    worldCupSettledPositions: trader.worldCupSettledPositions,
     winRateEstimate: trader.winRateEstimate,
     soccerPnl: trader.soccerPnl,
     soccerSettledPositions: trader.soccerSettledPositions,
@@ -6019,6 +6125,10 @@ function normalizeTopHolderPosition(position, trader = null) {
     currPrice: numericOrNull(position.currPrice),
     isElite: Boolean(trader),
     traderRank: trader?.soccerRank || null,
+    worldCupRank: trader?.worldCupRank || trader?.soccerRank || null,
+    worldCupWinRateEstimate: trader?.worldCupWinRateEstimate ?? null,
+    worldCupPnl: trader?.worldCupPnl ?? null,
+    worldCupSettledPositions: trader?.worldCupSettledPositions ?? null,
     winRateEstimate: trader?.winRateEstimate ?? null,
     soccerPnl: trader?.soccerPnl ?? null,
     soccerSettledPositions: trader?.soccerSettledPositions ?? null
@@ -6056,14 +6166,14 @@ async function enrichSignalsWithActivity(signals) {
   }));
 }
 
-function emptyEliteLeaderboard(reason = "轻量实时模式跳过 Top100 持仓深挖") {
+function emptyEliteLeaderboard(reason = "轻量实时模式跳过世界杯 Top10 持仓深挖") {
   return {
     source: "Polymarket Data API",
     ok: false,
     updatedAt: new Date().toISOString(),
     skipped: true,
     error: reason,
-    rankingBasis: "SPORTS 表现候选账号 + 足球已结算样本过滤",
+    rankingBasis: "SPORTS 表现候选账号 + 世界杯已结算样本过滤",
     traders: [],
     marketPositions: {
       ok: false,
@@ -6077,7 +6187,7 @@ function emptyEliteLeaderboard(reason = "轻量实时模式跳过 Top100 持仓�
   };
 }
 
-function attachEmptyEliteSignals(matches, polymarket, reason = "轻量实时模式跳过 Top100 持仓深挖") {
+function attachEmptyEliteSignals(matches, polymarket, reason = "轻量实时模式跳过世界杯 Top10 持仓深挖") {
   for (const match of matches || []) {
     for (const recommendation of match.recommendations || []) {
       recommendation.eliteSignals = [];
@@ -6127,7 +6237,7 @@ function attachEmptyEliteSignals(matches, polymarket, reason = "轻量实时模�
 }
 
 async function attachEliteSignals(matches, polymarket, { force = false, enabled = true } = {}) {
-  if (!enabled) return attachEmptyEliteSignals(matches, polymarket, "轻量实时模式跳过 Top100 持仓深挖");
+  if (!enabled) return attachEmptyEliteSignals(matches, polymarket, "轻量实时模式跳过世界杯 Top10 持仓深挖");
   const catalog = recommendationMarketCatalog(matches);
   const marketPoolConditionIds = (polymarket?.markets || []).map((market) => market.conditionId).filter(Boolean);
   const conditionIds = [...new Set([...catalog.map((item) => item.conditionId), ...marketPoolConditionIds].filter(Boolean))];
@@ -6141,10 +6251,15 @@ async function attachEliteSignals(matches, polymarket, { force = false, enabled 
 
   const positionsByCondition = new Map(marketPositionResults.map((item) => [item.conditionId, item]));
   let leaderboard = await fetchEliteLeaderboard({ force });
-  if (!(leaderboard.traders || []).length && marketPositionResults.length) {
+  if (marketPositionResults.length) {
     const holderLeaderboard = await buildEliteLeaderboardFromMarketHolders(marketPositionResults, catalog, polymarket, { force });
-    if ((holderLeaderboard.traders || []).length) leaderboard = holderLeaderboard;
-    else if (!leaderboard.ok) leaderboard = holderLeaderboard;
+    if ((holderLeaderboard.traders || []).length || (leaderboard.traders || []).length) {
+      leaderboard = mergeWorldCupLeaderboards(leaderboard, holderLeaderboard);
+      eliteLeaderboardCache = leaderboard;
+      eliteLeaderboardCacheAt = Date.now();
+    } else if (!leaderboard.ok) {
+      leaderboard = holderLeaderboard;
+    }
   }
   const traderMap = new Map((leaderboard.traders || []).map((trader) => [walletKey(trader.proxyWallet), trader]));
   const signalMap = new Map();
@@ -6563,7 +6678,7 @@ async function buildDashboard({
         detail: tournamentTrend.summary
       },
       {
-        source: "足球高手账户",
+        source: "世界杯账号监控",
         ok: eliteTraders.ok,
         lastUpdated: eliteTraders.updatedAt || "",
         error: eliteTraders.error || eliteTraders.marketPositions?.error,

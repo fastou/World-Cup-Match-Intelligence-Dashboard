@@ -2038,7 +2038,7 @@
           </section>
 
           <section class="side-panel">
-            <h2 id="eliteTitle">足球表现 Top 100</h2>
+            <h2 id="eliteTitle">世界杯账号 Top 10</h2>
             <div id="eliteTraders"></div>
           </section>
 
@@ -2089,7 +2089,7 @@
           matchesTitle: "当前比赛日 Polymarket 盘口与模型信号",
           sourcesTitle: "数据源状态",
           marketsTitle: "世界杯市场池",
-          eliteTitle: "足球表现 Top 100",
+          eliteTitle: "世界杯账号 Top 10",
           methodTitle: "研究方法",
           opportunityLabel: "机会雷达",
           opportunityTitle: "AI 机会雷达",
@@ -2099,7 +2099,7 @@
           opportunityReviewTab: "预测复盘",
           opportunityEliteTab: "高手账号",
           opportunityReviewEmpty: "还没有可复盘的完赛预测。赛果入库后会显示。",
-          opportunityEliteEmpty: "暂未筛到有足球已结算样本的高手账号。",
+          opportunityEliteEmpty: "暂未筛到世界杯账号样本。",
           methodItems: [
             ["概率差", "模型概率与公开价格差异超过阈值时标记"],
             ["置信度", "阵容、伤停、天气和新闻越完整，信号越可靠"],
@@ -2115,7 +2115,7 @@
           matchesTitle: "Current Matchday Polymarket Markets and Model Signals",
           sourcesTitle: "Data Sources",
           marketsTitle: "World Cup Market Pool",
-          eliteTitle: "Football Performance Top 100",
+          eliteTitle: "World Cup Accounts Top 10",
           methodTitle: "Research Method",
           opportunityLabel: "Radar",
           opportunityTitle: "AI Opportunity Radar",
@@ -2125,7 +2125,7 @@
           opportunityReviewTab: "Review",
           opportunityEliteTab: "Elite Accounts",
           opportunityReviewEmpty: "No settled forecast is available yet. Reviews appear after results are recorded.",
-          opportunityEliteEmpty: "No elite football accounts with settled samples are available yet.",
+          opportunityEliteEmpty: "No World Cup account sample is available yet.",
           methodItems: [
             ["Probability Gap", "Flag outcomes when model probability differs from public prices."],
             ["Confidence", "Lineups, injuries, weather, and news improve signal reliability."],
@@ -2150,7 +2150,7 @@
         "待确认": "Pending",
         "数据源状态": "Data Sources",
         "世界杯市场池": "World Cup Market Pool",
-        "足球表现 Top 100": "Football Performance Top 100",
+        "足球表现 Top 100": "World Cup Accounts Top 10",
         "研究方法": "Research Method",
         "机会雷达": "Radar",
         "AI 机会雷达": "AI Opportunity Radar",
@@ -2238,7 +2238,7 @@
         "顶级持仓者": "Top holders",
         "持仓账号": "Holder accounts",
         "份额": "Shares",
-        "命中Top100": "Top 100 match",
+        "命中Top100": "Top 10 match",
         "当前价值 / 累计参与": "Current value / total participation",
         "数据口径": "Method",
         "账号": "Account",
@@ -2308,11 +2308,11 @@
         "让球盘": "Handicap",
         "伤病": "Injuries",
         "首发信心": "Lineup confidence",
-        "暂未从 SPORTS 榜单里筛到足球已结算样本。": "No settled football sample found in the SPORTS leaderboard yet.",
+        "暂未从 SPORTS 榜单里筛到足球已结算样本。": "No settled World Cup sample found in the SPORTS leaderboard yet.",
         "没有匹配到世界杯活跃市场。": "No active World Cup markets matched.",
         "这个市场没有可画曲线的 token。": "No token curve is available for this market.",
-        "当前这些盘口里暂未发现足球高手 Top 100 的公开持仓。": "No highlighted Top 100 football accounts found for these markets yet.",
-        "当前这个盘口暂未发现足球高手 Top 100 的公开持仓。": "No highlighted Top 100 football accounts found for this market yet.",
+        "当前这些盘口里暂未发现足球高手 Top 100 的公开持仓。": "No highlighted World Cup Top 10 accounts found for these markets yet.",
+        "当前这个盘口暂未发现足球高手 Top 100 的公开持仓。": "No highlighted World Cup Top 10 accounts found for this market yet.",
         "研究框架未加载。": "Research framework is not loaded.",
         "未同步": "Not synced",
         "待确认": "Pending",
@@ -2375,10 +2375,10 @@
         [/等待阵容和赛前 preview/g, "Waiting for lineup and preview updates"],
         [/等待服务器配置 OPENAI_API_KEY 后定时综合。/g, "Waiting for server-side AI synthesis configuration."],
         [/暂无可确认动态调整，维持基线模型。/g, "No confirmed dynamic adjustment; keeping the baseline model."],
-        [/仅显示足球表现 Top 100 在当前 Polymarket conditionId\/token 上的公开账户记录；胜率为已结算足球样本估算。/g, "Shows public account records from Top 100 football performers on the current conditionId/token; win rate is estimated from settled football samples."],
+        [/仅显示足球表现 Top 100 在当前 Polymarket conditionId\/token 上的公开账户记录；胜率为已结算足球样本估算。/g, "Shows public account records from World Cup Top 10 accounts on the current conditionId/token; win rate is estimated from settled World Cup samples."],
         [/Polymarket 实时源不可用：/g, "Polymarket live source unavailable: "],
         [/本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。/g, "The current network cannot reach the Polymarket API directly; real curves appear when deployed on a reachable server."],
-        [/足球高手账户不可用：/g, "Football account source unavailable: "],
+        [/足球高手账户不可用：/g, "World Cup account source unavailable: "],
         [/自动基线/g, "auto baseline"],
         [/赛程自动基线/g, "schedule auto baseline"],
         [/等待服务器同步/g, "waiting for server sync"],
@@ -3128,18 +3128,31 @@
         }
         const renderTraderCard = (trader, index, { compact = false } = {}) => {
           const positions = trader.activePositions || [];
+          const wcWinRate = trader.worldCupWinRateEstimate ?? trader.winRateEstimate;
+          const wcSample = trader.worldCupSettledPositions || 0;
+          const wcWins = trader.worldCupWins || 0;
+          const wcLosses = trader.worldCupLosses || 0;
+          const wcPushes = trader.worldCupPushes || 0;
+          const wcPnl = trader.worldCupPnl || 0;
+          const rank = trader.worldCupRank || trader.soccerRank || index + 1;
           return `
             <article class="elite-monitor-card ${compact ? "compact" : ""}">
               <div class="elite-monitor-head">
-                <div class="elite-rank">#${escapeHtml(trader.soccerRank || index + 1)}</div>
+                <div class="elite-rank">#${escapeHtml(rank)}</div>
                 <div class="elite-monitor-title">
                   <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName || "-")}${renderProfileLink(trader)}</div>
                   <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}${trader.verifiedBadge ? ` · ${escapeHtml(currentLang === "en" ? "verified" : "已认证")}` : ""}</div>
                 </div>
                 <div class="elite-metrics">
-                  <div>${escapeHtml(currentLang === "en" ? "Win rate" : "胜率")} ${fmtPct(trader.winRateEstimate)}</div>
-                  <div>${escapeHtml(currentLang === "en" ? "Sample" : "样本")} ${escapeHtml(trader.soccerSettledPositions || 0)} · W/L/P ${escapeHtml(trader.soccerWins || 0)}/${escapeHtml(trader.soccerLosses || 0)}/${escapeHtml(trader.soccerPushes || 0)}</div>
-                  <div>${escapeHtml(currentLang === "en" ? "Football PnL" : "足球PNL")} ${fmtMoney(trader.soccerPnl)}</div>
+                  ${wcSample ? `
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup win rate" : "世界杯胜率")} ${fmtPct(wcWinRate)}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup sample" : "世界杯样本")} ${escapeHtml(wcSample)} · W/L/P ${escapeHtml(wcWins)}/${escapeHtml(wcLosses)}/${escapeHtml(wcPushes)}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup PnL" : "世界杯PNL")} ${fmtMoney(wcPnl)}</div>
+                  ` : `
+                    <div>${escapeHtml(currentLang === "en" ? "Current World Cup holder" : "当前世界杯持仓候选")}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "Settled sample pending" : "世界杯历史样本待沉淀")}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "Use position, not win rate" : "看当前持仓，不看胜率")}</div>
+                  `}
                 </div>
               </div>
               <div class="opportunity-meta">
@@ -3165,7 +3178,8 @@
                   `).join("")}
                 </div>
               ` : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No current-match position; historical account only." : "当前比赛日未命中持仓，只作历史高手观察。")}</div>`}
-              ${trader.sampleTitles?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled football samples" : "已结算足球样本")}：${trader.sampleTitles.slice(0, 3).map(escapeHtml).join("；")}</div>` : ""}
+              ${wcSample ? ((trader.worldCupSampleTitles || trader.sampleTitles)?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled World Cup samples" : "已结算世界杯样本")}：${(trader.worldCupSampleTitles || trader.sampleTitles).slice(0, 3).map(escapeHtml).join("；")}</div>` : "") : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No settled World Cup sample yet; included because this account currently holds World Cup markets." : "暂无已结算世界杯样本；因当前持有世界杯盘口纳入监控。")}</div>`}
+              ${trader.soccerSettledPositions ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Football background" : "足球历史辅助")}：${escapeHtml(trader.soccerSettledPositions)} ${escapeHtml(currentLang === "en" ? "samples" : "样本")} · ${fmtPct(trader.winRateEstimate)} · ${fmtMoney(trader.soccerPnl)}</div>` : ""}
             </article>
           `;
         };
@@ -3577,7 +3591,7 @@
               <canvas class="sparkline" width="120" height="34" data-series="${encodeURIComponent(JSON.stringify(token.history || []))}" aria-label="${escapeHtml(token.label)} 价格曲线"></canvas>
             </div>
             ${(token.topHolders || []).length ? `
-              <div class="source-detail">顶级持仓者：${(token.topHolders || []).slice(0, 5).map((holder) => `#${holder.holderRank} ${escapeHtml(holder.userName)} ${fmtShares(holder.size)}${holder.isElite ? " · Top100" : ""}`).join("；")}</div>
+              <div class="source-detail">顶级持仓者：${(token.topHolders || []).slice(0, 5).map((holder) => `#${holder.holderRank} ${escapeHtml(holder.userName)} ${fmtShares(holder.size)}${holder.isElite ? " · 世界杯Top10" : ""}`).join("；")}</div>
             ` : ""}
           `).join("");
           return `
@@ -3595,27 +3609,28 @@
         const root = document.getElementById("eliteTraders");
         if (!root) return;
         if (!eliteTraders || !eliteTraders.ok) {
-          root.innerHTML = `<div class="error">足球高手账户不可用：${escapeHtml(eliteTraders?.error || "等待服务器同步")}。</div>`;
+          root.innerHTML = `<div class="error">世界杯账号不可用：${escapeHtml(eliteTraders?.error || "等待服务器同步")}。</div>`;
           return;
         }
         const traders = eliteTraders.traders || [];
         if (!traders.length) {
-          root.innerHTML = '<div class="empty">暂未从 SPORTS 榜单里筛到足球已结算样本。</div>';
+          root.innerHTML = '<div class="empty">暂未筛到世界杯账号样本。</div>';
           return;
         }
         root.innerHTML = `
           <div class="source-detail">${escapeHtml(eliteTraders.rankingBasis || "")}</div>
           <div class="elite-board">
-            ${traders.slice(0, 100).map((trader) => `
+            ${traders.slice(0, 10).map((trader) => `
               <div class="elite-card">
-                <div class="elite-rank">#${escapeHtml(trader.soccerRank)}</div>
+                <div class="elite-rank">#${escapeHtml(trader.worldCupRank || trader.soccerRank)}</div>
                 <div>
                   <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}${renderProfileLink(trader)}</div>
                   <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
                 </div>
                 <div class="elite-metrics">
-                  <div>足球PNL ${fmtMoney(trader.soccerPnl)}</div>
-                  <div>胜率 ${fmtPct(trader.winRateEstimate)} · 样本 ${escapeHtml(trader.soccerSettledPositions)}</div>
+                  <div>世界杯PNL ${fmtMoney(trader.worldCupPnl || 0)}</div>
+                  <div>世界杯胜率 ${fmtPct(trader.worldCupWinRateEstimate ?? trader.winRateEstimate)} · 样本 ${escapeHtml(trader.worldCupSettledPositions || 0)}</div>
+                  <div>足球辅助 ${escapeHtml(trader.soccerSettledPositions || 0)} 样本</div>
                 </div>
               </div>
             `).join("")}
@@ -4009,7 +4024,7 @@
             <div class="elite-stat"><span>当前价值 / 累计参与</span><strong>${fmtMoney(summary.totalCurrentValue || 0)} / ${fmtMoney(summary.totalBought || 0)}</strong></div>
           </div>
           <ul class="info-list">
-            <li><strong>数据口径</strong><span>顶级持仓者来自当前 token 的公开 holder 列表；高手标记表示该账号同时命中足球表现 Top 100。</span></li>
+            <li><strong>数据口径</strong><span>顶级持仓者来自当前 token 的公开 holder 列表；高手标记表示该账号同时命中世界杯账号 Top 10。</span></li>
             <li><strong>来源</strong><span>${escapeHtml(sourceText)} · ${updated}</span></li>
           </ul>
           <div class="elite-signal-list">
@@ -4027,7 +4042,7 @@
                       <th class="numeric">均价</th>
                       <th class="numeric">当前价值</th>
                       <th class="numeric">累计参与</th>
-                      <th>命中Top100</th>
+                      <th>命中世界杯Top10</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4038,7 +4053,7 @@
                         <td class="numeric">${fmtPrice(holder.avgPrice)}</td>
                         <td class="numeric">${fmtMoney(holder.currentValue)}</td>
                         <td class="numeric">${fmtMoney(holder.totalBought)}</td>
-                        <td>${holder.isElite ? `#${escapeHtml(holder.traderRank)} · 胜率 ${fmtPct(holder.winRateEstimate)} · PNL ${fmtMoney(holder.soccerPnl)}` : "否"}</td>
+                        <td>${holder.isElite ? `#${escapeHtml(holder.worldCupRank || holder.traderRank)} · 世界杯胜率 ${fmtPct(holder.worldCupWinRateEstimate ?? holder.winRateEstimate)} · 世界杯PNL ${fmtMoney(holder.worldCupPnl || 0)} · 样本 ${escapeHtml(holder.worldCupSettledPositions || 0)}` : "否"}</td>
                       </tr>
                     `).join("")}
                   </tbody>
@@ -4076,11 +4091,11 @@
                     钱包 ${escapeHtml(shortWallet(holder.proxyWallet))} · 方向 ${escapeHtml(holder.outcome || rec.name)} · 均价 ${fmtPrice(holder.avgPrice)} · 当前 ${fmtMoney(holder.currentValue)} · 累计参与 ${fmtMoney(holder.totalBought)}
                   </div>
                   <div class="elite-inline-meta">
-                    ${holder.isElite ? `命中足球 Top100 #${escapeHtml(holder.traderRank)} · 胜率 ${fmtPct(holder.winRateEstimate)} · 足球PNL ${fmtMoney(holder.soccerPnl)} · 样本 ${escapeHtml(holder.soccerSettledPositions)}` : "未命中足球 Top100"}
+                    ${holder.isElite ? `命中世界杯 Top10 #${escapeHtml(holder.worldCupRank || holder.traderRank)} · 世界杯胜率 ${fmtPct(holder.worldCupWinRateEstimate ?? holder.winRateEstimate)} · 世界杯PNL ${fmtMoney(holder.worldCupPnl || 0)} · 样本 ${escapeHtml(holder.worldCupSettledPositions || 0)}` : "未命中世界杯 Top10"}
                   </div>
                 </div>
               `).join("")}
-              ${signals.length ? `<div class="source-detail">足球 Top100 命中账号：${signals.slice(0, 12).map((signal) => `#${escapeHtml(signal.traderRank)} ${escapeHtml(signal.userName)}${renderProfileLink(signal)}`).join("，")}</div>` : ""}
+              ${signals.length ? `<div class="source-detail">世界杯 Top10 命中账号：${signals.slice(0, 12).map((signal) => `#${escapeHtml(signal.worldCupRank || signal.traderRank)} ${escapeHtml(signal.userName)}${renderProfileLink(signal)}`).join("，")}</div>` : ""}
             </div>
           </div>
         `;
