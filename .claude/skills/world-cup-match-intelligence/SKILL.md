@@ -135,9 +135,13 @@ When maintaining public market data:
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
 - Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`, and South Korea/Korea Republic using `kr` rather than `kor`.
 - Keep chart controls usable for each market type and each outcome.
-- Track elite football accounts from public data by transparent criteria such as soccer-market realized PnL, win rate, sample size, and recent activity.
+- Track elite World Cup accounts from public data by transparent criteria such as World Cup market realized PnL, win rate, sample size, and recent activity. General football/soccer history may be shown only as background context, not as the primary ranking for World Cup account monitoring.
+- Keep the opportunity radar's elite-account monitor as a first-class view: refresh the World Cup Top 10 daily, show active positions against current World Cup match markets, and separate historical account performance from current model recommendations.
+- If the sports leaderboard produces no auditable World Cup samples, fall back to current World Cup market top holders as candidate accounts, then verify any settled World Cup positions before labeling them as World Cup Top 10. Current World Cup holders may still be monitored even when their settled World Cup sample is thin, but mark that distinction clearly.
+- When public leaderboard fields do not expose World Cup win rate or PnL, fetch each candidate wallet's public closed-position history directly and compute settled World Cup sample count, W/L/P, realized PnL, and sample titles locally. Never display zero win rate, zero PnL, or zero sample as a conclusion when the account-history fetch failed; surface `fetch failed / partial / empty` status separately.
+- Keep account-history requests rate-limited and cached. Prioritize current World Cup market holders before broad sports leaderboards, reuse the last successful wallet calculation during temporary 429/1015 limits, and label cached or stale account history visibly.
 - Show account positions as expandable row details with account, side, amount, average or latest price, timestamp, market, and source status.
-- Fetch and display top holders for relevant Polymarket condition/token pairs when public holder data is available. Mark whether holders match the football Top 100 list.
+- Fetch and display top holders for relevant Polymarket condition/token pairs when public holder data is available. Mark whether holders match the World Cup Top 10 list.
 - Store holder snapshots separately for recommendation-mapped markets and general World Cup market-pool tokens so later analysis can compare holder behavior to outcomes.
 - If account or position data is unavailable, show unavailable status instead of fallback-looking fake rows.
 

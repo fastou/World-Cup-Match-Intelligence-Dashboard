@@ -15,6 +15,7 @@ const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
 const OPPORTUNITY_CACHE_PATH = path.join(ROOT, "data", "worldcup-opportunity-cache.json");
+const ELITE_ACCOUNT_CACHE_PATH = path.join(ROOT, "data", "worldcup-elite-account-cache.json");
 const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
@@ -48,10 +49,16 @@ const ELITE_LEADERBOARD_CACHE_TTL_MS = Number(process.env.ELITE_LEADERBOARD_CACH
 const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 10);
 const ELITE_TRADER_CANDIDATE_LIMIT = Number(process.env.ELITE_TRADER_CANDIDATE_LIMIT || Math.max(260, ELITE_TRADER_LIMIT * 2));
 const ELITE_LEADERBOARD_PAGE_SIZE = 100;
-const ELITE_CLOSED_POSITION_LIMIT = 160;
+const ELITE_CLOSED_POSITION_LIMIT = Number(process.env.ELITE_CLOSED_POSITION_LIMIT || 80);
+const ELITE_CLOSED_POSITION_PAGE_SIZE = Number(process.env.ELITE_CLOSED_POSITION_PAGE_SIZE || 40);
+const ELITE_CLOSED_POSITION_PAGES = Number(process.env.ELITE_CLOSED_POSITION_PAGES || 2);
+const ELITE_CLOSED_POSITION_TIMEOUT_MS = Number(process.env.ELITE_CLOSED_POSITION_TIMEOUT_MS || 18000);
+const ELITE_CLOSED_POSITION_DEEP_TIMEOUT_MS = Number(process.env.ELITE_CLOSED_POSITION_DEEP_TIMEOUT_MS || 30000);
 const ELITE_MARKET_POSITION_LIMIT = 100;
 const TOP_HOLDER_LIMIT = Number(process.env.TOP_HOLDER_LIMIT || 50);
 const ELITE_MARKET_HOLDER_CANDIDATE_LIMIT = Number(process.env.ELITE_MARKET_HOLDER_CANDIDATE_LIMIT || 180);
+const ELITE_ACCOUNT_HISTORY_CANDIDATE_LIMIT = Number(process.env.ELITE_ACCOUNT_HISTORY_CANDIDATE_LIMIT || 12);
+const ELITE_ACCOUNT_HISTORY_CACHE_TTL_MS = Number(process.env.ELITE_ACCOUNT_HISTORY_CACHE_TTL_MS || 12 * 60 * 60 * 1000);
 const ELITE_ACTIVITY_LIMIT = 300;
 const USE_DEMO_POLYMARKET = process.env.DEMO_POLYMARKET === "1";
 const DISABLE_HISTORY_RECORDING = process.env.WORLDCUP_DISABLE_HISTORY === "1";
@@ -123,6 +130,7 @@ let opportunityCache = null;
 let opportunityRefreshPromise = null;
 let eliteLeaderboardCache = null;
 let eliteLeaderboardCacheAt = 0;
+let eliteAccountHistoryCache = null;
 let envFileCache = null;
 let codexOpenAiConfigCache = null;
 
@@ -2506,6 +2514,17 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
         worldCupWins: trader.worldCupWins ?? 0,
         worldCupLosses: trader.worldCupLosses ?? 0,
         worldCupPushes: trader.worldCupPushes ?? 0,
+        worldCupHistoryStatus: trader.worldCupHistoryStatus || "empty",
+        worldCupHistoryError: trader.worldCupHistoryError || "",
+        worldCupHistoryFetchedAt: trader.worldCupHistoryFetchedAt || trader.closedPositionsFetchedAt || "",
+        worldCupHistoryCacheHit: Boolean(trader.worldCupHistoryCacheHit),
+        worldCupHistoryStale: Boolean(trader.worldCupHistoryStale),
+        closedPositionStatus: trader.closedPositionStatus || "",
+        closedPositionError: trader.closedPositionError || "",
+        closedPositionPartial: Boolean(trader.closedPositionPartial),
+        closedPositionCacheHit: Boolean(trader.closedPositionCacheHit),
+        closedPositionStale: Boolean(trader.closedPositionStale),
+        closedPositionsChecked: trader.closedPositionsChecked ?? 0,
         winRateEstimate: trader.winRateEstimate,
         soccerPnl: trader.soccerPnl,
         soccerVolume: trader.soccerVolume,
@@ -2544,6 +2563,7 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
     sourceMode: source,
     rankingBasis: "世界杯盘口优先：先按当前世界杯盘口持仓金额排序，再看世界杯已结算样本PNL、样本量和胜率；足球历史只作辅助，不等于世界杯必胜。",
     candidateCount: eliteTraders?.candidateCount || 0,
+    checkedCandidateCount: eliteTraders?.checkedCandidateCount || eliteTraders?.candidateCount || 0,
     marketPositions: eliteTraders?.marketPositions || null,
     totals: {
       traders: traders.length,
@@ -4817,6 +4837,25 @@ async function timedFetchJson(url, options = {}) {
   }
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function timedFetchJsonWithRetry(url, options = {}, attempts = 2) {
+  let lastResult = null;
+  const totalAttempts = Math.max(1, attempts);
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    const result = await timedFetchJson(url, options);
+    if (result.ok) return { ...result, attempts: attempt };
+    lastResult = result;
+    if (attempt < totalAttempts) await wait(250 * attempt);
+  }
+  return {
+    ...(lastResult || { ok: false, error: "unknown fetch failure" }),
+    attempts: totalAttempts
+  };
+}
+
 async function timedFetchText(url, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -5640,7 +5679,7 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
-function summarizeSoccerPerformance(entry, closedPositions) {
+function summarizeSoccerPerformance(entry, closedPositions, fetchReport = null) {
   const uniqueClosedPositions = uniquePositions(closedPositions);
   const soccerPositions = uniqueClosedPositions.filter(isSoccerPosition);
   const worldCupPositions = uniqueClosedPositions.filter(isWorldCupPosition);
@@ -5656,6 +5695,10 @@ function summarizeSoccerPerformance(entry, closedPositions) {
   const worldCupPnl = worldCupPositions.reduce((sum, position) => sum + Number(position.realizedPnl || 0), 0);
   const worldCupVolume = worldCupPositions.reduce((sum, position) => sum + Number(position.totalBought || 0), 0);
   const worldCupWinRate = worldCupPositions.length ? worldCupWins / worldCupPositions.length : null;
+  const fetchOk = !fetchReport || fetchReport.ok;
+  const worldCupHistoryStatus = fetchOk
+    ? (worldCupPositions.length ? "ok" : "empty")
+    : "error";
 
   return {
     rank: Number(entry.rank || 0) || null,
@@ -5667,6 +5710,18 @@ function summarizeSoccerPerformance(entry, closedPositions) {
     profileImage: entry.profileImage || "",
     overallPnl: Number(entry.pnl || 0),
     overallVolume: Number(entry.vol || entry.volume || 0),
+    closedPositionStatus: fetchOk ? "ok" : "error",
+    closedPositionError: fetchReport?.error || "",
+    closedPositionPartial: Boolean(fetchReport?.partial),
+    closedPositionCacheHit: Boolean(fetchReport?.cacheHit),
+    closedPositionStale: Boolean(fetchReport?.stale),
+    closedPositionsChecked: uniqueClosedPositions.length,
+    closedPositionsFetchedAt: fetchReport?.fetchedAt || new Date().toISOString(),
+    worldCupHistoryStatus,
+    worldCupHistoryError: fetchOk ? "" : (fetchReport?.error || "账户历史仓位抓取失败"),
+    worldCupHistoryFetchedAt: fetchReport?.fetchedAt || new Date().toISOString(),
+    worldCupHistoryCacheHit: Boolean(fetchReport?.cacheHit),
+    worldCupHistoryStale: Boolean(fetchReport?.stale),
     worldCupPnl,
     worldCupVolume,
     worldCupSettledPositions: worldCupPositions.length,
@@ -5716,24 +5771,162 @@ async function fetchLeaderboardPages(source, maxRows) {
   return rows;
 }
 
-async function fetchClosedPositionsForTrader(wallet) {
-  const common = {
-    user: wallet,
-    limit: String(Math.max(20, Math.floor(ELITE_CLOSED_POSITION_LIMIT / 2)))
-  };
-  const urls = [
-    `${POLYMARKET_DATA_API_BASE}/closed-positions?${new URLSearchParams({
-      ...common,
+function closedPositionUrls(wallet, { deep = false } = {}) {
+  const limit = deep
+    ? Math.max(20, ELITE_CLOSED_POSITION_PAGE_SIZE)
+    : Math.max(20, Math.floor(ELITE_CLOSED_POSITION_LIMIT / 2));
+  const pages = deep ? Math.max(1, ELITE_CLOSED_POSITION_PAGES) : 1;
+  const urls = [];
+  for (let page = 0; page < pages; page += 1) {
+    urls.push(`${POLYMARKET_DATA_API_BASE}/closed-positions?${new URLSearchParams({
+      user: wallet,
+      limit: String(limit),
+      offset: String(page * limit),
+      sortBy: "TIMESTAMP"
+    }).toString()}`);
+  }
+  if (!deep) {
+    urls.push(`${POLYMARKET_DATA_API_BASE}/closed-positions?${new URLSearchParams({
+      user: wallet,
+      limit: String(limit),
+      offset: "0",
       sortBy: "REALIZEDPNL",
       sortDirection: "DESC"
-    }).toString()}`,
-    `${POLYMARKET_DATA_API_BASE}/closed-positions?${new URLSearchParams({
-      ...common,
-      sortBy: "TIMESTAMP"
-    }).toString()}`
-  ];
-  const results = await Promise.all(urls.map((url) => timedFetchJson(url)));
-  return uniquePositions(results.flatMap((result) => result.ok && Array.isArray(result.data) ? result.data : []));
+    }).toString()}`);
+  }
+  return [...new Set(urls)];
+}
+
+function briefAccountFetchError(error) {
+  const text = translateError(error || "unknown fetch failure");
+  if (text.includes("HTTP 429") || text.includes("Error 1015")) {
+    return "Polymarket data-api 限流 429/1015";
+  }
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+
+async function loadEliteAccountHistoryCache() {
+  if (eliteAccountHistoryCache) return eliteAccountHistoryCache;
+  eliteAccountHistoryCache = await readOptionalJson(ELITE_ACCOUNT_CACHE_PATH, { accounts: {} });
+  if (!eliteAccountHistoryCache || typeof eliteAccountHistoryCache !== "object") eliteAccountHistoryCache = { accounts: {} };
+  if (!eliteAccountHistoryCache.accounts || typeof eliteAccountHistoryCache.accounts !== "object") eliteAccountHistoryCache.accounts = {};
+  return eliteAccountHistoryCache;
+}
+
+async function persistEliteAccountHistoryCache() {
+  if (!eliteAccountHistoryCache) return;
+  await writeJsonAtomic(ELITE_ACCOUNT_CACHE_PATH, {
+    ...eliteAccountHistoryCache,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function accountHistoryCacheEntry(wallet) {
+  if (!eliteAccountHistoryCache?.accounts) return null;
+  const entry = eliteAccountHistoryCache.accounts[walletKey(wallet)];
+  const fetchedAtMs = Date.parse(entry?.fetchedAt || "") || 0;
+  if (!entry || !fetchedAtMs) return null;
+  return entry;
+}
+
+function cachedClosedPositionReport(wallet) {
+  const entry = accountHistoryCacheEntry(wallet);
+  if (!entry) return null;
+  const fetchedAtMs = Date.parse(entry.fetchedAt || "") || 0;
+  const ageMs = Date.now() - fetchedAtMs;
+  if (ageMs > ELITE_ACCOUNT_HISTORY_CACHE_TTL_MS) return null;
+  return {
+    ok: true,
+    partial: Boolean(entry.partial),
+    cacheHit: true,
+    fetchedAt: entry.fetchedAt,
+    positions: uniquePositions(entry.positions || []),
+    checkedUrls: entry.checkedUrls || 0,
+    successfulUrls: entry.successfulUrls || 0,
+    failedUrls: entry.failedUrls || 0,
+    error: ""
+  };
+}
+
+function staleClosedPositionReport(wallet, error) {
+  const entry = accountHistoryCacheEntry(wallet);
+  if (!entry) return null;
+  return {
+    ok: true,
+    partial: true,
+    cacheHit: true,
+    stale: true,
+    fetchedAt: entry.fetchedAt,
+    positions: uniquePositions(entry.positions || []),
+    checkedUrls: entry.checkedUrls || 0,
+    successfulUrls: entry.successfulUrls || 0,
+    failedUrls: entry.failedUrls || 0,
+    error
+  };
+}
+
+async function fetchClosedPositionReportForTrader(wallet, { deep = false, useCache = true } = {}) {
+  const fetchedAt = new Date().toISOString();
+  const normalizedWallet = walletKey(wallet);
+  if (!normalizedWallet) {
+    return {
+      ok: false,
+      partial: false,
+      fetchedAt,
+      positions: [],
+      error: "missing wallet"
+    };
+  }
+  if (useCache) {
+    await loadEliteAccountHistoryCache();
+    const cached = cachedClosedPositionReport(normalizedWallet);
+    if (cached) return cached;
+  }
+  const urls = closedPositionUrls(normalizedWallet, { deep });
+  const timeoutMs = deep ? ELITE_CLOSED_POSITION_DEEP_TIMEOUT_MS : ELITE_CLOSED_POSITION_TIMEOUT_MS;
+  const results = await mapLimit(urls, 1, (url) => timedFetchJsonWithRetry(url, { timeoutMs }, deep ? 2 : 1));
+  const successful = results.filter((result) => result.ok && Array.isArray(result.data));
+  const failed = results.filter((result) => !result.ok);
+  const positions = uniquePositions(successful.flatMap((result) => result.data || []));
+  const error = failed.length
+    ? failed
+      .slice(0, 3)
+      .map((result) => briefAccountFetchError(result.error || "unknown fetch failure"))
+      .join("; ")
+    : "";
+  if (successful.length) {
+    await loadEliteAccountHistoryCache();
+    eliteAccountHistoryCache.accounts[normalizedWallet] = {
+      fetchedAt,
+      partial: successful.length > 0 && failed.length > 0,
+      positions,
+      checkedUrls: urls.length,
+      successfulUrls: successful.length,
+      failedUrls: failed.length
+    };
+    persistEliteAccountHistoryCache().catch((cacheError) => {
+      console.error(`Failed to persist elite account history cache: ${cacheError.message}`);
+    });
+  }
+  if (!successful.length) {
+    const stale = useCache ? staleClosedPositionReport(normalizedWallet, error) : null;
+    if (stale) return stale;
+  }
+  return {
+    ok: successful.length > 0,
+    partial: successful.length > 0 && failed.length > 0,
+    fetchedAt,
+    positions,
+    checkedUrls: urls.length,
+    successfulUrls: successful.length,
+    failedUrls: failed.length,
+    error
+  };
+}
+
+async function fetchClosedPositionsForTrader(wallet, options = {}) {
+  const report = await fetchClosedPositionReportForTrader(wallet, options);
+  return report.positions;
 }
 
 async function fetchTraderActivity(wallet) {
@@ -5793,25 +5986,17 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       },
       {
         category: "sports",
-        timePeriod: "MONTH",
-        orderBy: "pnl"
-      },
-      {
-        category: "sports",
-        timePeriod: "ALL",
-        orderBy: "vol"
-      },
-      {
-        category: "sports",
         timePeriod: "WEEK",
         orderBy: "pnl"
       }
     ];
-    const pages = await Promise.all(discoverySources.map((source) => fetchLeaderboardPages(source, Math.ceil(ELITE_TRADER_CANDIDATE_LIMIT / 2))));
-    const candidates = uniqueLeaderboardEntries(pages.flat()).slice(0, ELITE_TRADER_CANDIDATE_LIMIT);
-    const summaries = await mapLimit(candidates, 10, async (entry) => {
-      const closedPositions = await fetchClosedPositionsForTrader(entry.proxyWallet);
-      return summarizeSoccerPerformance(entry, closedPositions);
+    const fallbackCandidateLimit = Math.min(ELITE_TRADER_CANDIDATE_LIMIT, 40);
+    const pages = await Promise.all(discoverySources.map((source) => fetchLeaderboardPages(source, Math.ceil(fallbackCandidateLimit / discoverySources.length))));
+    const candidates = uniqueLeaderboardEntries(pages.flat()).slice(0, fallbackCandidateLimit);
+    const historyCandidates = candidates.slice(0, Math.min(ELITE_ACCOUNT_HISTORY_CANDIDATE_LIMIT, candidates.length));
+    const summaries = await mapLimit(historyCandidates, 1, async (entry) => {
+      const closedReport = await fetchClosedPositionReportForTrader(entry.proxyWallet, { useCache: !force });
+      return summarizeSoccerPerformance(entry, closedReport.positions, closedReport);
     });
     const ranked = summaries
       .filter((trader) => trader.worldCupSettledPositions > 0)
@@ -5835,6 +6020,7 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
       updatedAt: new Date().toISOString(),
       cacheTtlSeconds: Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
       candidateCount: candidates.length,
+      checkedCandidateCount: historyCandidates.length,
       rankingBasis: "SPORTS 表现候选账号 + 世界杯已结算样本过滤；胜率=盈利世界杯样本数/抓取到的世界杯已结算样本数",
       limit: ELITE_TRADER_LIMIT,
       traders: ranked
@@ -5909,6 +6095,13 @@ function marketHolderCandidateEntries(marketPositionResults, catalog = [], polym
 }
 
 async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, catalog, polymarket, { force = false } = {}) {
+  const now = Date.now();
+  if (!force && eliteLeaderboardCache && eliteLeaderboardCache.sourceFallback === "current-world-cup-holders" && now - eliteLeaderboardCacheAt < ELITE_LEADERBOARD_CACHE_TTL_MS) {
+    return {
+      ...eliteLeaderboardCache,
+      cacheHit: true
+    };
+  }
   const candidates = marketHolderCandidateEntries(marketPositionResults, catalog, polymarket);
   if (!candidates.length) {
     return {
@@ -5923,10 +6116,11 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
     };
   }
 
-  const summaries = await mapLimit(candidates, 8, async (entry) => {
-    const closedPositions = await fetchClosedPositionsForTrader(entry.proxyWallet);
+  const historyCandidates = candidates.slice(0, ELITE_ACCOUNT_HISTORY_CANDIDATE_LIMIT);
+  const summaries = await mapLimit(historyCandidates, 1, async (entry) => {
+    const closedReport = await fetchClosedPositionReportForTrader(entry.proxyWallet, { deep: true, useCache: !force });
     return {
-      ...summarizeSoccerPerformance(entry, closedPositions),
+      ...summarizeSoccerPerformance(entry, closedReport.positions, closedReport),
       currentHolderValue: entry.currentValue,
       holderSamples: entry.holderSamples
     };
@@ -5956,6 +6150,7 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
     updatedAt: new Date().toISOString(),
     cacheTtlSeconds: Math.round(ELITE_LEADERBOARD_CACHE_TTL_MS / 1000),
     candidateCount: candidates.length,
+    checkedCandidateCount: historyCandidates.length,
     rankingBasis: "当前世界杯盘口公开持仓者 + 世界杯已结算样本过滤；优先当前持仓金额，再看世界杯PNL、样本量和胜率；足球历史只作辅助。",
     limit: ELITE_TRADER_LIMIT,
     traders: ranked,
@@ -6078,6 +6273,12 @@ function normalizeEliteMarketPosition(position, trader) {
     worldCupWinRateEstimate: trader.worldCupWinRateEstimate,
     worldCupPnl: trader.worldCupPnl,
     worldCupSettledPositions: trader.worldCupSettledPositions,
+    worldCupHistoryStatus: trader.worldCupHistoryStatus,
+    worldCupHistoryError: trader.worldCupHistoryError,
+    worldCupHistoryFetchedAt: trader.worldCupHistoryFetchedAt,
+    worldCupHistoryCacheHit: trader.worldCupHistoryCacheHit,
+    worldCupHistoryStale: trader.worldCupHistoryStale,
+    closedPositionsChecked: trader.closedPositionsChecked,
     winRateEstimate: trader.winRateEstimate,
     soccerPnl: trader.soccerPnl,
     soccerSettledPositions: trader.soccerSettledPositions,
@@ -6129,6 +6330,12 @@ function normalizeTopHolderPosition(position, trader = null) {
     worldCupWinRateEstimate: trader?.worldCupWinRateEstimate ?? null,
     worldCupPnl: trader?.worldCupPnl ?? null,
     worldCupSettledPositions: trader?.worldCupSettledPositions ?? null,
+    worldCupHistoryStatus: trader?.worldCupHistoryStatus || "",
+    worldCupHistoryError: trader?.worldCupHistoryError || "",
+    worldCupHistoryFetchedAt: trader?.worldCupHistoryFetchedAt || "",
+    worldCupHistoryCacheHit: Boolean(trader?.worldCupHistoryCacheHit),
+    worldCupHistoryStale: Boolean(trader?.worldCupHistoryStale),
+    closedPositionsChecked: trader?.closedPositionsChecked ?? null,
     winRateEstimate: trader?.winRateEstimate ?? null,
     soccerPnl: trader?.soccerPnl ?? null,
     soccerSettledPositions: trader?.soccerSettledPositions ?? null
@@ -6250,16 +6457,17 @@ async function attachEliteSignals(matches, polymarket, { force = false, enabled 
   }
 
   const positionsByCondition = new Map(marketPositionResults.map((item) => [item.conditionId, item]));
-  let leaderboard = await fetchEliteLeaderboard({ force });
+  let leaderboard = emptyEliteLeaderboard("等待当前世界杯盘口持仓账号同步");
   if (marketPositionResults.length) {
     const holderLeaderboard = await buildEliteLeaderboardFromMarketHolders(marketPositionResults, catalog, polymarket, { force });
-    if ((holderLeaderboard.traders || []).length || (leaderboard.traders || []).length) {
-      leaderboard = mergeWorldCupLeaderboards(leaderboard, holderLeaderboard);
+    if ((holderLeaderboard.traders || []).length) {
+      leaderboard = holderLeaderboard;
       eliteLeaderboardCache = leaderboard;
       eliteLeaderboardCacheAt = Date.now();
-    } else if (!leaderboard.ok) {
-      leaderboard = holderLeaderboard;
     }
+  }
+  if (!(leaderboard.traders || []).length) {
+    leaderboard = await fetchEliteLeaderboard({ force });
   }
   const traderMap = new Map((leaderboard.traders || []).map((trader) => [walletKey(trader.proxyWallet), trader]));
   const signalMap = new Map();

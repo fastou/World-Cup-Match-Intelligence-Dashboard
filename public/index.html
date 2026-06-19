@@ -3135,6 +3135,30 @@
           const wcPushes = trader.worldCupPushes || 0;
           const wcPnl = trader.worldCupPnl || 0;
           const rank = trader.worldCupRank || trader.soccerRank || index + 1;
+          const historyStatus = trader.worldCupHistoryStatus || (wcSample ? "ok" : "empty");
+          const historyError = trader.worldCupHistoryError || trader.closedPositionError || "";
+          const checkedPositions = trader.closedPositionsChecked || 0;
+          const historyFreshness = trader.worldCupHistoryStale
+            ? (currentLang === "en" ? "cached / stale" : "缓存/可能过期")
+            : (trader.worldCupHistoryCacheHit ? (currentLang === "en" ? "cached" : "缓存") : "");
+          const historyMetricHtml = wcSample ? `
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup win rate" : "世界杯胜率")} ${fmtPct(wcWinRate)}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup sample" : "世界杯样本")} ${escapeHtml(wcSample)} · W/L/P ${escapeHtml(wcWins)}/${escapeHtml(wcLosses)}/${escapeHtml(wcPushes)}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup PnL" : "世界杯PNL")} ${fmtMoney(wcPnl)}</div>
+                  ` : (historyStatus === "error" ? `
+                    <div>${escapeHtml(currentLang === "en" ? "World Cup history fetch failed" : "世界杯历史抓取失败")}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "Win rate not calculated" : "暂不计算胜率")}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "Use current positions only" : "只看当前持仓")}</div>
+                  ` : `
+                    <div>${escapeHtml(currentLang === "en" ? "Current World Cup holder" : "当前世界杯持仓候选")}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "Settled World Cup sample 0" : "已结算世界杯样本 0")}</div>
+                    <div>${escapeHtml(currentLang === "en" ? "Use position, not win rate" : "看当前持仓，不看胜率")}</div>
+                  `);
+          const historySampleHtml = wcSample
+            ? ((trader.worldCupSampleTitles || trader.sampleTitles)?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled World Cup samples" : "已结算世界杯样本")}：${(trader.worldCupSampleTitles || trader.sampleTitles).slice(0, 3).map(escapeHtml).join("；")}${historyFreshness ? ` · ${escapeHtml(historyFreshness)}` : ""}</div>` : (historyFreshness ? `<div class="elite-monitor-samples">${escapeHtml(historyFreshness)}</div>` : ""))
+            : (historyStatus === "error"
+              ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Account history fetch failed; this is not a zero-win result." : "账户历史抓取失败；这不是 0 胜率或 0 收益。")}${historyError ? ` ${escapeHtml(historyError)}` : ""}</div>`
+              : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Account history checked" : "已查询账户历史")} ${escapeHtml(checkedPositions)} ${escapeHtml(currentLang === "en" ? "closed positions; no settled World Cup sample yet. Included because this account currently holds World Cup markets." : "条已结算仓位；暂无已结算世界杯样本。因当前持有世界杯盘口纳入监控。")}${historyFreshness ? ` · ${escapeHtml(historyFreshness)}` : ""}</div>`);
           return `
             <article class="elite-monitor-card ${compact ? "compact" : ""}">
               <div class="elite-monitor-head">
@@ -3144,15 +3168,7 @@
                   <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}${trader.verifiedBadge ? ` · ${escapeHtml(currentLang === "en" ? "verified" : "已认证")}` : ""}</div>
                 </div>
                 <div class="elite-metrics">
-                  ${wcSample ? `
-                    <div>${escapeHtml(currentLang === "en" ? "World Cup win rate" : "世界杯胜率")} ${fmtPct(wcWinRate)}</div>
-                    <div>${escapeHtml(currentLang === "en" ? "World Cup sample" : "世界杯样本")} ${escapeHtml(wcSample)} · W/L/P ${escapeHtml(wcWins)}/${escapeHtml(wcLosses)}/${escapeHtml(wcPushes)}</div>
-                    <div>${escapeHtml(currentLang === "en" ? "World Cup PnL" : "世界杯PNL")} ${fmtMoney(wcPnl)}</div>
-                  ` : `
-                    <div>${escapeHtml(currentLang === "en" ? "Current World Cup holder" : "当前世界杯持仓候选")}</div>
-                    <div>${escapeHtml(currentLang === "en" ? "Settled sample pending" : "世界杯历史样本待沉淀")}</div>
-                    <div>${escapeHtml(currentLang === "en" ? "Use position, not win rate" : "看当前持仓，不看胜率")}</div>
-                  `}
+                  ${historyMetricHtml}
                 </div>
               </div>
               <div class="opportunity-meta">
@@ -3178,7 +3194,7 @@
                   `).join("")}
                 </div>
               ` : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No current-match position; historical account only." : "当前比赛日未命中持仓，只作历史高手观察。")}</div>`}
-              ${wcSample ? ((trader.worldCupSampleTitles || trader.sampleTitles)?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled World Cup samples" : "已结算世界杯样本")}：${(trader.worldCupSampleTitles || trader.sampleTitles).slice(0, 3).map(escapeHtml).join("；")}</div>` : "") : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No settled World Cup sample yet; included because this account currently holds World Cup markets." : "暂无已结算世界杯样本；因当前持有世界杯盘口纳入监控。")}</div>`}
+              ${historySampleHtml}
               ${trader.soccerSettledPositions ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Football background" : "足球历史辅助")}：${escapeHtml(trader.soccerSettledPositions)} ${escapeHtml(currentLang === "en" ? "samples" : "样本")} · ${fmtPct(trader.winRateEstimate)} · ${fmtMoney(trader.soccerPnl)}</div>` : ""}
             </article>
           `;
@@ -3620,20 +3636,29 @@
         root.innerHTML = `
           <div class="source-detail">${escapeHtml(eliteTraders.rankingBasis || "")}</div>
           <div class="elite-board">
-            ${traders.slice(0, 10).map((trader) => `
-              <div class="elite-card">
-                <div class="elite-rank">#${escapeHtml(trader.worldCupRank || trader.soccerRank)}</div>
-                <div>
-                  <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}${renderProfileLink(trader)}</div>
-                  <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
+            ${traders.slice(0, 10).map((trader) => {
+              const sample = trader.worldCupSettledPositions || 0;
+              const status = trader.worldCupHistoryStatus || (sample ? "ok" : "empty");
+              const historyLine = sample
+                ? `世界杯胜率 ${fmtPct(trader.worldCupWinRateEstimate ?? trader.winRateEstimate)} · 样本 ${escapeHtml(sample)}`
+                : (status === "error"
+                  ? `世界杯历史抓取失败 · 不按 0 计算`
+                  : `世界杯已结算样本 0 · 看当前持仓`);
+              return `
+                <div class="elite-card">
+                  <div class="elite-rank">#${escapeHtml(trader.worldCupRank || trader.soccerRank)}</div>
+                  <div>
+                    <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}${renderProfileLink(trader)}</div>
+                    <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
+                  </div>
+                  <div class="elite-metrics">
+                    <div>世界杯PNL ${sample ? fmtMoney(trader.worldCupPnl || 0) : "-"}</div>
+                    <div>${historyLine}</div>
+                    <div>足球辅助 ${escapeHtml(trader.soccerSettledPositions || 0)} 样本</div>
+                  </div>
                 </div>
-                <div class="elite-metrics">
-                  <div>世界杯PNL ${fmtMoney(trader.worldCupPnl || 0)}</div>
-                  <div>世界杯胜率 ${fmtPct(trader.worldCupWinRateEstimate ?? trader.winRateEstimate)} · 样本 ${escapeHtml(trader.worldCupSettledPositions || 0)}</div>
-                  <div>足球辅助 ${escapeHtml(trader.soccerSettledPositions || 0)} 样本</div>
-                </div>
-              </div>
-            `).join("")}
+              `;
+            }).join("")}
           </div>
         `;
       }

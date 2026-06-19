@@ -12,6 +12,8 @@ app/
 # Runtime snapshots and generated state
 data/worldcup-context.json
 data/worldcup-live-cache.json
+data/worldcup-opportunity-cache.json
+data/worldcup-elite-account-cache.json
 data/worldcup-history.sqlite
 data/worldcup-history.sqlite-shm
 data/worldcup-history.sqlite-wal
