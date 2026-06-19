@@ -2991,6 +2991,14 @@
         `;
       }
 
+      function positionOutcomeText(position = {}) {
+        const market = position.marketName || "";
+        const outcome = position.outcome || "";
+        if (!market && !outcome) return "-";
+        if (!outcome || outcome === market) return market || outcome;
+        return `${market} · ${outcome}`;
+      }
+
       function renderOpportunityReview() {
         const labels = APP_LABELS[currentLang];
         const list = document.getElementById("opportunityList");
@@ -3123,11 +3131,11 @@
                       ${positions.slice(0, 8).map((position) => `
                         <div class="elite-position-row">
                           <div class="elite-inline-head">
-                            <span>${escapeHtml(position.matchName || "-")} · ${escapeHtml(position.marketTypeLabel || position.marketType || "-")}</span>
+                            <span>${escapeHtml(position.matchName || "-")} · ${escapeHtml(position.marketTypeLabel || position.marketType || "-")} · ${escapeHtml(positionOutcomeText(position))}</span>
                             <span>${fmtMoney(position.currentValue || 0)}</span>
                           </div>
                           <div class="elite-inline-meta">
-                            ${escapeHtml(currentLang === "en" ? "Side" : "方向")} ${escapeHtml(position.outcome || position.marketName || "-")} · ${escapeHtml(currentLang === "en" ? "Shares" : "份额")} ${fmtShares(position.size)} · ${escapeHtml(currentLang === "en" ? "Avg" : "均价")} ${fmtPrice(position.avgPrice)} · ${escapeHtml(currentLang === "en" ? "Current" : "当前价")} ${fmtPrice(position.currPrice ?? position.marketPrice)}
+                            ${escapeHtml(currentLang === "en" ? "Bought" : "买入")} ${escapeHtml(positionOutcomeText(position))} · ${escapeHtml(currentLang === "en" ? "Shares" : "份额")} ${fmtShares(position.size)} · ${escapeHtml(currentLang === "en" ? "Avg" : "均价")} ${fmtPrice(position.avgPrice)} · ${escapeHtml(currentLang === "en" ? "Current" : "当前价")} ${fmtPrice(position.currPrice ?? position.marketPrice)}
                           </div>
                           <div class="elite-inline-meta">
                             ${escapeHtml(fmtTime(position.kickoffShanghai))} · Edge ${fmtEdge(position.edge)} · ${escapeHtml(position.decisionLabel || "")} · ${escapeHtml(position.source || "")}${(position.recentBuy?.isoTime || position.recentBuy?.time) ? ` · ${escapeHtml(currentLang === "en" ? "Recent buy" : "最近买入")} ${escapeHtml(fmtDateTime(position.recentBuy.isoTime || position.recentBuy.time))} @ ${fmtPrice(position.recentBuy.price)}` : ""}
