@@ -3100,6 +3100,8 @@
         const meta = document.getElementById("opportunityMeta");
         if (!list || !meta) return;
         const traders = currentOpportunityElites.traders || [];
+        const activeTraders = traders.filter((trader) => Number(trader.activePositionCount || 0) > 0);
+        const historicalTraders = traders.filter((trader) => Number(trader.activePositionCount || 0) <= 0);
         const totals = currentOpportunityElites.totals || {};
         meta.textContent = opportunityElitesLoading
           ? (currentLang === "en" ? "Loading elite account monitor..." : "正在加载高手账号监控...")
@@ -3124,6 +3126,49 @@
           translateRenderedContent(list);
           return;
         }
+        const renderTraderCard = (trader, index, { compact = false } = {}) => {
+          const positions = trader.activePositions || [];
+          return `
+            <article class="elite-monitor-card ${compact ? "compact" : ""}">
+              <div class="elite-monitor-head">
+                <div class="elite-rank">#${escapeHtml(trader.soccerRank || index + 1)}</div>
+                <div class="elite-monitor-title">
+                  <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName || "-")}${renderProfileLink(trader)}</div>
+                  <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}${trader.verifiedBadge ? ` · ${escapeHtml(currentLang === "en" ? "verified" : "已认证")}` : ""}</div>
+                </div>
+                <div class="elite-metrics">
+                  <div>${escapeHtml(currentLang === "en" ? "Win rate" : "胜率")} ${fmtPct(trader.winRateEstimate)}</div>
+                  <div>${escapeHtml(currentLang === "en" ? "Sample" : "样本")} ${escapeHtml(trader.soccerSettledPositions || 0)} · W/L/P ${escapeHtml(trader.soccerWins || 0)}/${escapeHtml(trader.soccerLosses || 0)}/${escapeHtml(trader.soccerPushes || 0)}</div>
+                  <div>${escapeHtml(currentLang === "en" ? "Football PnL" : "足球PNL")} ${fmtMoney(trader.soccerPnl)}</div>
+                </div>
+              </div>
+              <div class="opportunity-meta">
+                <span class="opportunity-chip ${positions.length ? "good" : ""}">${escapeHtml(currentLang === "en" ? "Active positions" : "当前持仓")} ${escapeHtml(positions.length)}</span>
+                <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Current value" : "当前价值")} ${fmtMoney(trader.activeCurrentValue || 0)}</span>
+                <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Monitor score" : "监控分")} ${escapeHtml(Number(trader.score || 0).toFixed(3))}</span>
+              </div>
+              ${positions.length ? `
+                <div class="elite-position-list">
+                  ${positions.slice(0, 8).map((position) => `
+                    <div class="elite-position-row">
+                      <div class="elite-inline-head">
+                        <span>${escapeHtml(position.matchName || "-")} · ${escapeHtml(position.marketTypeLabel || position.marketType || "-")} · ${escapeHtml(positionOutcomeText(position))}</span>
+                        <span>${fmtMoney(position.currentValue || 0)}</span>
+                      </div>
+                      <div class="elite-inline-meta">
+                        ${escapeHtml(currentLang === "en" ? "Bought" : "买入")} ${escapeHtml(positionOutcomeText(position))} · ${escapeHtml(currentLang === "en" ? "Shares" : "份额")} ${fmtShares(position.size)} · ${escapeHtml(currentLang === "en" ? "Avg" : "均价")} ${fmtPrice(position.avgPrice)} · ${escapeHtml(currentLang === "en" ? "Current" : "当前价")} ${fmtPrice(position.currPrice ?? position.marketPrice)}
+                      </div>
+                      <div class="elite-inline-meta">
+                        ${escapeHtml(fmtTime(position.kickoffShanghai))} · Edge ${fmtEdge(position.edge)} · ${escapeHtml(position.decisionLabel || "")} · ${escapeHtml(position.source || "")}${(position.recentBuy?.isoTime || position.recentBuy?.time) ? ` · ${escapeHtml(currentLang === "en" ? "Recent buy" : "最近买入")} ${escapeHtml(fmtDateTime(position.recentBuy.isoTime || position.recentBuy.time))} @ ${fmtPrice(position.recentBuy.price)}` : ""}
+                      </div>
+                    </div>
+                  `).join("")}
+                </div>
+              ` : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No current-match position; historical account only." : "当前比赛日未命中持仓，只作历史高手观察。")}</div>`}
+              ${trader.sampleTitles?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled football samples" : "已结算足球样本")}：${trader.sampleTitles.slice(0, 3).map(escapeHtml).join("；")}</div>` : ""}
+            </article>
+          `;
+        };
         list.innerHTML = `
           <div class="source-detail">${escapeHtml(currentOpportunityElites.rankingBasis || "")}</div>
           <div class="opportunity-meta">
@@ -3132,49 +3177,10 @@
             <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Not a guarantee" : "不代表必胜")}</span>
           </div>
           <div class="elite-monitor-board">
-            ${traders.slice(0, 100).map((trader, index) => {
-              const positions = trader.activePositions || [];
-              return `
-                <article class="elite-monitor-card">
-                  <div class="elite-monitor-head">
-                    <div class="elite-rank">#${escapeHtml(trader.soccerRank || index + 1)}</div>
-                    <div class="elite-monitor-title">
-                      <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName || "-")}${renderProfileLink(trader)}</div>
-                      <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}${trader.verifiedBadge ? ` · ${escapeHtml(currentLang === "en" ? "verified" : "已认证")}` : ""}</div>
-                    </div>
-                    <div class="elite-metrics">
-                      <div>${escapeHtml(currentLang === "en" ? "Win rate" : "胜率")} ${fmtPct(trader.winRateEstimate)}</div>
-                      <div>${escapeHtml(currentLang === "en" ? "Sample" : "样本")} ${escapeHtml(trader.soccerSettledPositions || 0)} · W/L/P ${escapeHtml(trader.soccerWins || 0)}/${escapeHtml(trader.soccerLosses || 0)}/${escapeHtml(trader.soccerPushes || 0)}</div>
-                      <div>${escapeHtml(currentLang === "en" ? "Football PnL" : "足球PNL")} ${fmtMoney(trader.soccerPnl)}</div>
-                    </div>
-                  </div>
-                  <div class="opportunity-meta">
-                    <span class="opportunity-chip ${positions.length ? "good" : ""}">${escapeHtml(currentLang === "en" ? "Active positions" : "当前持仓")} ${escapeHtml(positions.length)}</span>
-                    <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Current value" : "当前价值")} ${fmtMoney(trader.activeCurrentValue || 0)}</span>
-                    <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Monitor score" : "监控分")} ${escapeHtml(Number(trader.score || 0).toFixed(3))}</span>
-                  </div>
-                  ${positions.length ? `
-                    <div class="elite-position-list">
-                      ${positions.slice(0, 8).map((position) => `
-                        <div class="elite-position-row">
-                          <div class="elite-inline-head">
-                            <span>${escapeHtml(position.matchName || "-")} · ${escapeHtml(position.marketTypeLabel || position.marketType || "-")} · ${escapeHtml(positionOutcomeText(position))}</span>
-                            <span>${fmtMoney(position.currentValue || 0)}</span>
-                          </div>
-                          <div class="elite-inline-meta">
-                            ${escapeHtml(currentLang === "en" ? "Bought" : "买入")} ${escapeHtml(positionOutcomeText(position))} · ${escapeHtml(currentLang === "en" ? "Shares" : "份额")} ${fmtShares(position.size)} · ${escapeHtml(currentLang === "en" ? "Avg" : "均价")} ${fmtPrice(position.avgPrice)} · ${escapeHtml(currentLang === "en" ? "Current" : "当前价")} ${fmtPrice(position.currPrice ?? position.marketPrice)}
-                          </div>
-                          <div class="elite-inline-meta">
-                            ${escapeHtml(fmtTime(position.kickoffShanghai))} · Edge ${fmtEdge(position.edge)} · ${escapeHtml(position.decisionLabel || "")} · ${escapeHtml(position.source || "")}${(position.recentBuy?.isoTime || position.recentBuy?.time) ? ` · ${escapeHtml(currentLang === "en" ? "Recent buy" : "最近买入")} ${escapeHtml(fmtDateTime(position.recentBuy.isoTime || position.recentBuy.time))} @ ${fmtPrice(position.recentBuy.price)}` : ""}
-                          </div>
-                        </div>
-                      `).join("")}
-                    </div>
-                  ` : `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "No active position matched the current matchday markets yet." : "暂未命中当前比赛日盘口持仓。")}</div>`}
-                  ${trader.sampleTitles?.length ? `<div class="elite-monitor-samples">${escapeHtml(currentLang === "en" ? "Settled football samples" : "已结算足球样本")}：${trader.sampleTitles.slice(0, 3).map(escapeHtml).join("；")}</div>` : ""}
-                </article>
-              `;
-            }).join("")}
+            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Current-match positions" : "当前比赛日正在买的账号")} · ${escapeHtml(activeTraders.length)}</div>
+            ${activeTraders.length ? activeTraders.map((trader, index) => renderTraderCard(trader, index)).join("") : `<div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "No elite account currently matches today's markets." : "当前比赛日暂未命中高手持仓。")}</div>`}
+            <div class="source-detail">${escapeHtml(currentLang === "en" ? "Historical elite accounts without current positions" : "历史高手账号（当前未买）")} · ${escapeHtml(historicalTraders.length)} · ${escapeHtml(currentLang === "en" ? "shown for background only" : "只作背景观察")}</div>
+            ${historicalTraders.slice(0, 30).map((trader, index) => renderTraderCard(trader, activeTraders.length + index, { compact: true })).join("")}
           </div>
         `;
         translateRenderedContent(list);
