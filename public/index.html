@@ -3146,6 +3146,8 @@
           const tier = trader.worldCupEliteTier || "watchlist";
           const tierLabel = trader.worldCupEliteLabel || (tier === "elite" ? (currentLang === "en" ? "World Cup elite" : "世界杯高手") : (currentLang === "en" ? "Watchlist" : "观察账号"));
           const tierReason = trader.worldCupEliteReason || "";
+          const styleLabel = trader.traderStyleLabel || (trader.traderStyle === "hedged" ? (currentLang === "en" ? "Hedged/arbitrage" : "对冲/套利型") : (currentLang === "en" ? "Directional" : "方向型"));
+          const styleReason = trader.traderStyleReason || "";
           const historyFreshness = trader.worldCupHistoryStale
             ? (currentLang === "en" ? "cached / stale" : "缓存/可能过期")
             : (trader.worldCupHistoryCacheHit ? (currentLang === "en" ? "cached" : "缓存") : "");
@@ -3181,11 +3183,13 @@
               </div>
               <div class="opportunity-meta">
                 <span class="opportunity-chip ${tier === "elite" ? "good" : ""}">${escapeHtml(tierLabel)}</span>
+                <span class="opportunity-chip">${escapeHtml(styleLabel)}</span>
                 <span class="opportunity-chip ${positions.length ? "good" : ""}">${escapeHtml(currentLang === "en" ? "Active positions" : "当前持仓")} ${escapeHtml(positions.length)}</span>
                 <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Current value" : "当前价值")} ${fmtMoney(trader.activeCurrentValue || 0)}</span>
                 <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Monitor score" : "监控分")} ${escapeHtml(Number(trader.score || 0).toFixed(3))}</span>
               </div>
               ${tierReason ? `<div class="elite-monitor-samples">${escapeHtml(tierReason)}</div>` : ""}
+              ${styleReason ? `<div class="elite-monitor-samples">${escapeHtml(styleReason)}</div>` : ""}
               ${positions.length ? `
                 <div class="elite-position-list">
                   ${positions.slice(0, 8).map((position) => `
@@ -3664,9 +3668,11 @@
               </div>
               <div class="elite-metrics">
                 <div>${escapeHtml(trader.worldCupEliteLabel || (watch ? "未达标观察" : "世界杯高手"))}</div>
+                <div>${escapeHtml(trader.traderStyleLabel || "")}</div>
                 <div>世界杯PNL ${sample ? fmtMoney(trader.worldCupPnl || 0) : "-"}</div>
                 <div>${historyLine}</div>
                 <div>${escapeHtml(trader.worldCupEliteReason || "")}</div>
+                <div>${escapeHtml(trader.traderStyleReason || "")}</div>
               </div>
             </div>
           `;
@@ -4134,11 +4140,11 @@
                     钱包 ${escapeHtml(shortWallet(holder.proxyWallet))} · 方向 ${escapeHtml(holder.outcome || rec.name)} · 均价 ${fmtPrice(holder.avgPrice)} · 当前 ${fmtMoney(holder.currentValue)} · 累计参与 ${fmtMoney(holder.totalBought)}
                   </div>
                   <div class="elite-inline-meta">
-                    ${holder.isElite ? `命中世界杯 Top10 #${escapeHtml(holder.worldCupRank || holder.traderRank)} · 世界杯胜率 ${fmtPct(holder.worldCupWinRateEstimate ?? holder.winRateEstimate)} · 世界杯PNL ${fmtMoney(holder.worldCupPnl || 0)} · 样本 ${escapeHtml(holder.worldCupSettledPositions || 0)}` : "未命中世界杯 Top10"}
+                    ${holder.isElite ? `命中方向型世界杯高手 #${escapeHtml(holder.worldCupRank || holder.traderRank)} · ${escapeHtml(holder.traderStyleLabel || "")} · 世界杯胜率 ${fmtPct(holder.worldCupWinRateEstimate ?? holder.winRateEstimate)} · 世界杯PNL ${fmtMoney(holder.worldCupPnl || 0)} · 样本 ${escapeHtml(holder.worldCupSettledPositions || 0)}` : "未命中方向型世界杯高手"}
                   </div>
                 </div>
               `).join("")}
-              ${signals.length ? `<div class="source-detail">世界杯 Top10 命中账号：${signals.slice(0, 12).map((signal) => `#${escapeHtml(signal.worldCupRank || signal.traderRank)} ${escapeHtml(signal.userName)}${renderProfileLink(signal)}`).join("，")}</div>` : ""}
+              ${signals.length ? `<div class="source-detail">方向型世界杯高手命中账号：${signals.slice(0, 12).map((signal) => `#${escapeHtml(signal.worldCupRank || signal.traderRank)} ${escapeHtml(signal.userName)}${renderProfileLink(signal)}`).join("，")}</div>` : ""}
             </div>
           </div>
         `;

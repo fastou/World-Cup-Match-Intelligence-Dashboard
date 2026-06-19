@@ -50,6 +50,8 @@ const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 10);
 const ELITE_MIN_WORLD_CUP_SAMPLE = Number(process.env.ELITE_MIN_WORLD_CUP_SAMPLE || 2);
 const ELITE_MIN_WORLD_CUP_WIN_RATE = Number(process.env.ELITE_MIN_WORLD_CUP_WIN_RATE || 0.5);
 const ELITE_MIN_WORLD_CUP_PNL = Number(process.env.ELITE_MIN_WORLD_CUP_PNL || 0);
+const ELITE_DIRECTIONAL_MIN_PURITY = Number(process.env.ELITE_DIRECTIONAL_MIN_PURITY || 0.72);
+const ELITE_HEDGE_MIN_SECONDARY_VALUE = Number(process.env.ELITE_HEDGE_MIN_SECONDARY_VALUE || 25);
 const ELITE_TRADER_CANDIDATE_LIMIT = Number(process.env.ELITE_TRADER_CANDIDATE_LIMIT || Math.max(260, ELITE_TRADER_LIMIT * 2));
 const ELITE_LEADERBOARD_PAGE_SIZE = 100;
 const ELITE_CLOSED_POSITION_LIMIT = Number(process.env.ELITE_CLOSED_POSITION_LIMIT || 80);
@@ -2486,6 +2488,13 @@ function worldCupEliteStatus(trader) {
       reason: `世界杯胜率 ${Math.round(winRate * 1000) / 10}% < ${Math.round(ELITE_MIN_WORLD_CUP_WIN_RATE * 100)}%`
     };
   }
+  if (trader.traderStyle === "hedged") {
+    return {
+      tier: "watchlist",
+      label: "对冲/套利型观察",
+      reason: trader.traderStyleReason || "当前持仓出现互斥方向组合，不作为可跟方向信号"
+    };
+  }
   return {
     tier: "elite",
     label: "世界杯高手",
@@ -2505,6 +2514,77 @@ function attachWorldCupEliteStatus(trader) {
 
 function isWorldCupEliteTrader(trader) {
   return trader?.worldCupEliteTier === "elite" || worldCupEliteStatus(trader).tier === "elite";
+}
+
+function analyzeDirectionalProfile(positions = []) {
+  const groups = new Map();
+  for (const position of positions || []) {
+    const groupKey = position.matchId && position.marketType
+      ? `${position.matchId}:${position.marketType}`
+      : `${position.matchId || ""}:${position.marketType || ""}:${position.conditionId || ""}`;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        matchId: position.matchId || "",
+        marketType: position.marketType || "",
+        conditionIds: new Set(),
+        marketName: position.marketName || "",
+        outcomes: new Map(),
+        totalValue: 0
+      });
+    }
+    const group = groups.get(groupKey);
+    group.conditionIds.add(position.conditionId || "");
+    const outcome = String(position.recommendationKey || position.outcome || "unknown");
+    const value = Number(position.currentValue || 0);
+    group.outcomes.set(outcome, (group.outcomes.get(outcome) || 0) + value);
+    group.totalValue += value;
+  }
+
+  let hedgedMarkets = 0;
+  let totalGroupedValue = 0;
+  let maxGroupValue = 0;
+  let worstPurity = 1;
+  const examples = [];
+  for (const group of groups.values()) {
+    const values = [...group.outcomes.values()].filter((value) => value > 0.01).sort((a, b) => b - a);
+    if (!values.length) continue;
+    totalGroupedValue += group.totalValue;
+    maxGroupValue = Math.max(maxGroupValue, group.totalValue);
+    const top = values[0] || 0;
+    const second = values[1] || 0;
+    const purity = group.totalValue > 0 ? top / group.totalValue : 1;
+    worstPurity = Math.min(worstPurity, purity);
+    if (values.length >= 2 && second >= ELITE_HEDGE_MIN_SECONDARY_VALUE && purity < ELITE_DIRECTIONAL_MIN_PURITY) {
+      hedgedMarkets += 1;
+      examples.push(`${group.marketName || group.marketType || "盘口"} 多方向持仓，主方向占比 ${Math.round(purity * 100)}%`);
+    }
+  }
+  const directionalPurity = totalGroupedValue > 0 ? Math.max(0, Math.min(1, worstPurity)) : 1;
+  const maxConcentration = totalGroupedValue > 0 ? maxGroupValue / totalGroupedValue : 1;
+  const isHedged = hedgedMarkets > 0;
+  return {
+    type: isHedged ? "hedged" : "directional",
+    label: isHedged ? "对冲/套利型观察" : "方向型账号",
+    directionalPurity,
+    hedgedMarkets,
+    maxConcentration,
+    reason: isHedged
+      ? examples.slice(0, 2).join("；")
+      : `当前持仓方向纯度 ${Math.round(directionalPurity * 100)}%`,
+    examples: examples.slice(0, 3)
+  };
+}
+
+function attachDirectionalProfile(trader) {
+  const profile = analyzeDirectionalProfile(trader.currentPositionMix || []);
+  return {
+    ...trader,
+    directionalProfile: profile,
+    traderStyle: profile.type,
+    traderStyleLabel: profile.label,
+    traderStyleReason: profile.reason,
+    directionalPurity: profile.directionalPurity
+  };
 }
 
 function collectEliteActivePositions(matches = []) {
@@ -2565,6 +2645,11 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
         worldCupEliteTier: trader.worldCupEliteTier || worldCupEliteStatus(trader).tier,
         worldCupEliteLabel: trader.worldCupEliteLabel || worldCupEliteStatus(trader).label,
         worldCupEliteReason: trader.worldCupEliteReason || worldCupEliteStatus(trader).reason,
+        traderStyle: trader.traderStyle || "directional",
+        traderStyleLabel: trader.traderStyleLabel || "方向型账号",
+        traderStyleReason: trader.traderStyleReason || "",
+        directionalPurity: trader.directionalPurity ?? null,
+        directionalProfile: trader.directionalProfile || null,
         worldCupHistoryStatus: trader.worldCupHistoryStatus || "empty",
         worldCupHistoryError: trader.worldCupHistoryError || "",
         worldCupHistoryFetchedAt: trader.worldCupHistoryFetchedAt || trader.closedPositionsFetchedAt || "",
@@ -6110,6 +6195,7 @@ async function fetchEliteLeaderboard({ force = false } = {}) {
 
 function marketHolderCandidateEntries(marketPositionResults, catalog = [], polymarket = {}) {
   const marketMeta = new Map();
+  const conditionMeta = new Map();
   for (const item of catalog || []) {
     marketMeta.set(item.conditionId, [
       item.marketName,
@@ -6117,6 +6203,13 @@ function marketHolderCandidateEntries(marketPositionResults, catalog = [], polym
       item.chartQuestion,
       item.chartLabel
     ].filter(Boolean).join(" "));
+    conditionMeta.set(item.conditionId, {
+      matchId: item.matchId,
+      recommendationKey: item.recommendationKey,
+      marketType: item.marketType,
+      marketName: item.marketName,
+      chartQuestion: item.chartQuestion
+    });
   }
   for (const market of polymarket?.markets || []) {
     marketMeta.set(market.conditionId, [
@@ -6131,6 +6224,7 @@ function marketHolderCandidateEntries(marketPositionResults, catalog = [], polym
   for (const result of marketPositionResults || []) {
     const metaText = marketMeta.get(result.conditionId) || "";
     if (!isWorldCupOrSoccerMarketText(metaText)) continue;
+    const meta = conditionMeta.get(result.conditionId) || {};
     for (const positions of Object.values(result.positionsByToken || {})) {
       for (const position of positions || []) {
         const wallet = walletKey(position.proxyWallet || position.owner || position.address);
@@ -6145,11 +6239,23 @@ function marketHolderCandidateEntries(marketPositionResults, catalog = [], polym
           vol: 0,
           currentValue: 0,
           source: "current-world-cup-holders",
-          holderSamples: 0
+          holderSamples: 0,
+          currentPositionMix: []
         };
         current.currentValue += currentValue;
         current.vol += Number(position.totalBought || currentValue || size || 0);
         current.holderSamples += 1;
+        current.currentPositionMix.push({
+          conditionId: result.conditionId,
+          matchId: meta.matchId || "",
+          marketType: meta.marketType || "",
+          recommendationKey: meta.recommendationKey || "",
+          marketName: meta.marketName || meta.chartQuestion || metaText,
+          outcome: position.outcome || "",
+          size,
+          currentValue,
+          totalBought: Number(position.totalBought || currentValue || size || 0)
+        });
         byWallet.set(wallet, current);
       }
     }
@@ -6192,6 +6298,7 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
   });
   const classified = summaries
     .filter((trader) => trader.worldCupSettledPositions > 0 || Number(trader.currentHolderValue || 0) > 0)
+    .map(attachDirectionalProfile)
     .map(attachWorldCupEliteStatus);
   const ranked = classified
     .filter(isWorldCupEliteTrader)
@@ -6250,6 +6357,7 @@ async function buildEliteLeaderboardFromMarketHolders(marketPositionResults, cat
 
 function rankWorldCupTraders(traders, limit = ELITE_TRADER_LIMIT) {
   return (traders || [])
+    .map(attachDirectionalProfile)
     .map(attachWorldCupEliteStatus)
     .filter(isWorldCupEliteTrader)
     .sort((a, b) => {
@@ -6271,6 +6379,7 @@ function rankWorldCupTraders(traders, limit = ELITE_TRADER_LIMIT) {
 
 function rankWorldCupWatchlist(traders, limit = ELITE_TRADER_LIMIT) {
   return (traders || [])
+    .map(attachDirectionalProfile)
     .map(attachWorldCupEliteStatus)
     .filter((trader) => !isWorldCupEliteTrader(trader) && (trader.worldCupSettledPositions > 0 || Number(trader.currentHolderValue || 0) > 0))
     .sort((a, b) => {
@@ -6380,6 +6489,13 @@ function normalizeEliteMarketPosition(position, trader) {
     worldCupWinRateEstimate: trader.worldCupWinRateEstimate,
     worldCupPnl: trader.worldCupPnl,
     worldCupSettledPositions: trader.worldCupSettledPositions,
+    worldCupEliteTier: trader.worldCupEliteTier,
+    worldCupEliteLabel: trader.worldCupEliteLabel,
+    worldCupEliteReason: trader.worldCupEliteReason,
+    traderStyle: trader.traderStyle,
+    traderStyleLabel: trader.traderStyleLabel,
+    traderStyleReason: trader.traderStyleReason,
+    directionalPurity: trader.directionalPurity,
     worldCupHistoryStatus: trader.worldCupHistoryStatus,
     worldCupHistoryError: trader.worldCupHistoryError,
     worldCupHistoryFetchedAt: trader.worldCupHistoryFetchedAt,
@@ -6437,6 +6553,13 @@ function normalizeTopHolderPosition(position, trader = null) {
     worldCupWinRateEstimate: trader?.worldCupWinRateEstimate ?? null,
     worldCupPnl: trader?.worldCupPnl ?? null,
     worldCupSettledPositions: trader?.worldCupSettledPositions ?? null,
+    worldCupEliteTier: trader?.worldCupEliteTier || "",
+    worldCupEliteLabel: trader?.worldCupEliteLabel || "",
+    worldCupEliteReason: trader?.worldCupEliteReason || "",
+    traderStyle: trader?.traderStyle || "",
+    traderStyleLabel: trader?.traderStyleLabel || "",
+    traderStyleReason: trader?.traderStyleReason || "",
+    directionalPurity: trader?.directionalPurity ?? null,
     worldCupHistoryStatus: trader?.worldCupHistoryStatus || "",
     worldCupHistoryError: trader?.worldCupHistoryError || "",
     worldCupHistoryFetchedAt: trader?.worldCupHistoryFetchedAt || "",
