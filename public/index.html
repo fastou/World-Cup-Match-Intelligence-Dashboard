@@ -1463,6 +1463,23 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .elite-profile-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        margin-left: 6px;
+        color: var(--green);
+        font-size: 11px;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      .elite-profile-link:hover,
+      .elite-profile-link:focus-visible {
+        text-decoration: underline;
+        outline: none;
+      }
+
       .elite-metrics {
         text-align: right;
         color: var(--muted);
@@ -2780,6 +2797,16 @@
         return wallet.length > 12 ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : wallet;
       };
 
+      const profileUrlFor = (item = {}) => item.profileUrl || (item.proxyWallet ? `https://polymarket.com/profile/${encodeURIComponent(item.proxyWallet)}` : "");
+
+      const renderProfileLink = (item = {}, label = null) => {
+        const url = profileUrlFor(item);
+        if (!url) return "";
+        const text = label || (currentLang === "en" ? "Profile" : "账户");
+        const title = currentLang === "en" ? "Open Polymarket profile" : "打开 Polymarket 账户";
+        return `<a class="elite-profile-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(title)}">${escapeHtml(text)}↗</a>`;
+      };
+
       const fmtLine = (value) => {
         if (typeof value !== "number") return "-";
         return value > 0 ? `+${value}` : `${value}`;
@@ -3112,7 +3139,7 @@
                   <div class="elite-monitor-head">
                     <div class="elite-rank">#${escapeHtml(trader.soccerRank || index + 1)}</div>
                     <div class="elite-monitor-title">
-                      <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName || "-")}</div>
+                      <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName || "-")}${renderProfileLink(trader)}</div>
                       <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}${trader.verifiedBadge ? ` · ${escapeHtml(currentLang === "en" ? "verified" : "已认证")}` : ""}</div>
                     </div>
                     <div class="elite-metrics">
@@ -3577,7 +3604,7 @@
               <div class="elite-card">
                 <div class="elite-rank">#${escapeHtml(trader.soccerRank)}</div>
                 <div>
-                  <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}</div>
+                  <div class="elite-name" title="${escapeHtml(trader.userName)}">${escapeHtml(trader.userName)}${renderProfileLink(trader)}</div>
                   <div class="elite-wallet">${escapeHtml(shortWallet(trader.proxyWallet))}</div>
                 </div>
                 <div class="elite-metrics">
@@ -4036,7 +4063,7 @@
               ${holders.slice(0, 20).map((holder) => `
                 <div class="elite-inline-card">
                   <div class="elite-inline-head">
-                    <span>#${escapeHtml(holder.holderRank)} ${escapeHtml(holder.userName)}</span>
+                    <span>#${escapeHtml(holder.holderRank)} ${escapeHtml(holder.userName)}${renderProfileLink(holder)}</span>
                     <span>${fmtShares(holder.size)}</span>
                   </div>
                   <div class="elite-inline-meta">
@@ -4047,7 +4074,7 @@
                   </div>
                 </div>
               `).join("")}
-              ${signals.length ? `<div class="source-detail">足球 Top100 命中账号：${signals.slice(0, 12).map((signal) => `#${signal.traderRank} ${signal.userName}`).join("，")}</div>` : ""}
+              ${signals.length ? `<div class="source-detail">足球 Top100 命中账号：${signals.slice(0, 12).map((signal) => `#${escapeHtml(signal.traderRank)} ${escapeHtml(signal.userName)}${renderProfileLink(signal)}`).join("，")}</div>` : ""}
             </div>
           </div>
         `;

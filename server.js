@@ -2467,6 +2467,7 @@ function collectEliteActivePositions(matches = []) {
           marketTypeLabel: rec.marketTypeLabel,
           marketName: rec.name,
           outcome: signal.outcome || rec.name,
+          profileUrl: signal.profileUrl || polymarketProfileUrl(signal.proxyWallet),
           size: signal.size,
           currentValue: signal.currentValue,
           totalBought: signal.totalBought,
@@ -2495,6 +2496,7 @@ function buildEliteMonitorPayload(eliteTraders, matches, { source = "dashboard" 
         soccerRank: trader.soccerRank,
         userName: trader.userName,
         proxyWallet: trader.proxyWallet,
+        profileUrl: trader.profileUrl || polymarketProfileUrl(trader.proxyWallet || trader.userName),
         verifiedBadge: trader.verifiedBadge,
         winRateEstimate: trader.winRateEstimate,
         soccerPnl: trader.soccerPnl,
@@ -5531,6 +5533,11 @@ function walletKey(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function polymarketProfileUrl(value) {
+  const profile = String(value || "").trim();
+  return profile ? `https://polymarket.com/profile/${encodeURIComponent(profile)}` : "";
+}
+
 function isSoccerPosition(position) {
   const text = [
     position.title,
@@ -5616,6 +5623,7 @@ function summarizeSoccerPerformance(entry, closedPositions) {
     rank: Number(entry.rank || 0) || null,
     userName: entry.userName || entry.name || walletKey(entry.proxyWallet).slice(0, 10),
     proxyWallet: entry.proxyWallet,
+    profileUrl: polymarketProfileUrl(entry.proxyWallet || entry.userName || entry.name),
     xUsername: entry.xUsername || "",
     verifiedBadge: Boolean(entry.verifiedBadge || entry.verified),
     profileImage: entry.profileImage || "",
@@ -5962,6 +5970,7 @@ function normalizeEliteMarketPosition(position, trader) {
     traderRank: trader.soccerRank,
     userName: trader.userName,
     proxyWallet: trader.proxyWallet,
+    profileUrl: trader.profileUrl || polymarketProfileUrl(trader.proxyWallet || trader.userName),
     verifiedBadge: trader.verifiedBadge,
     winRateEstimate: trader.winRateEstimate,
     soccerPnl: trader.soccerPnl,
@@ -5999,6 +6008,7 @@ function normalizeTopHolderPosition(position, trader = null) {
   return {
     userName: trader?.userName || displayUserName(position),
     proxyWallet: position.proxyWallet || position.owner || position.address || "",
+    profileUrl: trader?.profileUrl || polymarketProfileUrl(position.proxyWallet || position.owner || position.address || position.userName),
     outcome: position.outcome || "",
     avgPrice: numericOrNull(position.avgPrice),
     size,
