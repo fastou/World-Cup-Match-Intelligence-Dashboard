@@ -2340,6 +2340,7 @@
         "建议": "Signals",
         "比赛情报": "Match Intelligence",
         "高手": "Accounts",
+        "榜单": "Leaderboard",
         "静态": "Static",
         "静态信息": "Static Information",
         "近四年交手": "Last Four Years Head-to-Head",
@@ -2922,7 +2923,6 @@
             ${renderHeadToHead(match)}
             ${renderRecentForm(match)}
             ${renderWorldCupRecords(match)}
-            ${renderBettingExpert(match)}
             ${renderHumanMatchup(match)}
             <section class="static-block">
               <h4>静态信息</h4>
@@ -4395,6 +4395,7 @@
               <button class="tab active" data-tab="rec">建议</button>
               <button class="tab" data-tab="intel">比赛情报</button>
               <button class="tab" data-tab="elite">高手</button>
+              <button class="tab" data-tab="leaderboard">榜单</button>
               <button class="tab" data-tab="static">静态</button>
               <button class="tab" data-tab="dynamic">动态</button>
               <button class="tab" data-tab="market">盘口</button>
@@ -4428,6 +4429,10 @@
 
             <div class="tab-content" data-content="elite">
               ${renderEliteSignals(match)}
+            </div>
+
+            <div class="tab-content" data-content="leaderboard">
+              ${renderBettingExpert(match)}
             </div>
 
             <div class="tab-content" data-content="static">
