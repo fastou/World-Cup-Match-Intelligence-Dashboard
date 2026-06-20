@@ -402,6 +402,10 @@ const WORLDCUP_MARKET_SEARCHES = [
   }
 ];
 
+const POLYMARKET_EVENT_SLUG_OVERRIDES = {
+  "BRA-HAI": ["fifwc-bra-hai-2026-06-19"]
+};
+
 const NON_SOCCER_POSITION_KEYWORDS = [
   "nfl",
   "nba",
@@ -4796,10 +4800,10 @@ function scheduleTeamRecord(team, fifaRankings, worldCupRecords, squadProfiles) 
 }
 
 function autoBaselineLambda(homeRating, awayRating) {
-  const diff = clamp((homeRating - awayRating) / 20, -1.1, 1.1);
+  const diff = clamp((homeRating - awayRating) / 20, -1.35, 1.35);
   return {
-    lambdaHome: roundTo(clamp(1.18 + diff * 0.3, 0.55, 2.25), 2),
-    lambdaAway: roundTo(clamp(1.02 - diff * 0.24, 0.45, 2.05), 2)
+    lambdaHome: roundTo(clamp(1.2 + diff * 0.88, 0.35, 2.6), 2),
+    lambdaAway: roundTo(clamp(1.02 - diff * 0.52, 0.3, 2.35), 2)
   };
 }
 
@@ -5107,9 +5111,26 @@ function buildPolymarketEventSlugSearches(schedule = null) {
   const searches = [];
   for (const event of schedule?.matches || []) {
     if (event.completed || isFinishedStatus(event.status)) continue;
+    const homeCodeRaw = eventTeamCode(event, "home");
+    const awayCodeRaw = eventTeamCode(event, "away");
     const homeCodes = polymarketTeamSlugCandidates(eventTeamCode(event, "home"));
     const awayCodes = polymarketTeamSlugCandidates(eventTeamCode(event, "away"));
     if (!homeCodes.length || !awayCodes.length) continue;
+    const overrideKey = `${homeCodeRaw}-${awayCodeRaw}`;
+    const reverseOverrideKey = `${awayCodeRaw}-${homeCodeRaw}`;
+    for (const slug of [
+      ...(POLYMARKET_EVENT_SLUG_OVERRIDES[overrideKey] || []),
+      ...(POLYMARKET_EVENT_SLUG_OVERRIDES[reverseOverrideKey] || [])
+    ]) {
+      searches.push({
+        label: `${eventTeamSearchName(event, "home")} vs ${eventTeamSearchName(event, "away")} override`,
+        slug,
+        teamNeedles: [
+          eventTeamSearchName(event, "home").toLowerCase(),
+          eventTeamSearchName(event, "away").toLowerCase()
+        ]
+      });
+    }
     for (const dateKey of polymarketDateCandidates(event.kickoffUtc)) {
       for (const homeCode of homeCodes) {
         for (const awayCode of awayCodes) {
@@ -5147,7 +5168,9 @@ function polymarketTeamSlug(code) {
 
 function polymarketTeamSlugCandidates(code) {
   const overrides = {
+    BRA: ["bra", "br", "brazil"],
     CPV: ["cvi", "cpv"],
+    HAI: ["hai", "hti", "haiti"],
     POR: ["prt", "por"],
     COD: ["cdr", "cod", "drc", "cgo"],
     KOR: ["kr", "kor"]
