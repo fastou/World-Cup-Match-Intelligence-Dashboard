@@ -1227,6 +1227,18 @@ function exactCleanSheetRisk(match, side) {
   }, 0);
 }
 
+function lowScoreCleanSheetMass(match) {
+  const scores = match?.probabilities?.topScoresFull || [];
+  return scores.reduce((sum, row) => {
+    const homeGoals = Number(row.homeGoals);
+    const awayGoals = Number(row.awayGoals);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return sum;
+    const totalGoals = homeGoals + awayGoals;
+    if (totalGoals <= 2 && (homeGoals === 0 || awayGoals === 0)) return sum + (row.probability || 0);
+    return sum;
+  }, 0);
+}
+
 function marketReviewAdjustments(match, rec) {
   const reasons = [];
   let edgePenalty = 0;
@@ -1240,6 +1252,7 @@ function marketReviewAdjustments(match, rec) {
   if (rec.marketType === "btts" && rec.key === "bttsYes") {
     const oneNilRisk = scoreProbability(match, "1-0") + scoreProbability(match, "0-1");
     const nilNilRisk = scoreProbability(match, "0-0");
+    const cleanLowScoreMass = lowScoreCleanSheetMass(match);
     if (under25 >= 0.58 && btts <= 0.61) {
       edgePenalty += 0.035;
       scorePenalty += 0.06;
@@ -1249,6 +1262,16 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.025;
       scorePenalty += 0.045;
       reasons.push("强队零封/1-0风险偏高，BTTS 不作为主推荐。");
+    }
+    if (cleanLowScoreMass >= 0.42 && under25 >= 0.57) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.07;
+      reasons.push("复盘规则：低比分零封路径占比过高，弱队进球不能仅凭反击想象加仓。");
+    }
+    if (favoriteCleanSheet >= 0.24 && rec.modelProbability < 0.58) {
+      edgePenalty += 0.025;
+      scorePenalty += 0.055;
+      reasons.push("强队控场型优势明显，领先后更可能守住零封而不是互捅。");
     }
   }
 
