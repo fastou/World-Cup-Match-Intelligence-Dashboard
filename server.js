@@ -31,6 +31,7 @@ const OPPORTUNITY_REFRESH_MS = Number(process.env.OPPORTUNITY_REFRESH_MS || 60 *
 const OPPORTUNITY_AI_TIMEOUT_MS = Number(process.env.OPPORTUNITY_AI_TIMEOUT_MS || 25000);
 const OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS = Number(process.env.OPPORTUNITY_PRICE_CHECK_TIMEOUT_MS || 18000);
 const OPPORTUNITY_MAX_ITEMS = Number(process.env.OPPORTUNITY_MAX_ITEMS || 8);
+const OPPORTUNITY_OBSERVATION_MAX_ITEMS = Number(process.env.OPPORTUNITY_OBSERVATION_MAX_ITEMS || 10);
 const OPPORTUNITY_REVIEW_LIMIT = Number(process.env.OPPORTUNITY_REVIEW_LIMIT || 40);
 const OPPORTUNITY_REVIEW_SCHEMA_CHECK = process.env.OPPORTUNITY_REVIEW_SCHEMA_CHECK === "1";
 const PRICE_HISTORY_HOURS = 24;
@@ -2018,6 +2019,164 @@ function opportunityCandidateRows(matches, scanDate, nowMs = Date.now()) {
   return opportunitySortRows(rows, nowMs);
 }
 
+function normalizedMarketText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}+\-.]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function bettingExpertTipText(tip) {
+  return normalizedMarketText([
+    tip?.pick,
+    tip?.description,
+    typeof tip?.handicap === "number" ? String(tip.handicap) : ""
+  ].filter(Boolean).join(" "));
+}
+
+function bettingExpertTeamAliases(match, side) {
+  return marketTeamAliases(match, side)
+    .map(normalizedMarketText)
+    .filter((alias) => alias && alias.length > 1);
+}
+
+function bettingExpertTipHasTeam(tipText, aliases) {
+  return (aliases || []).some((alias) => textContainsAlias(tipText, alias));
+}
+
+function bettingExpertLineMatches(rec, tipText, tip) {
+  if (rec.marketType === "total") {
+    const line = rec.key === "under25" || rec.key === "over25" ? 2.5 : null;
+    if (line == null) return false;
+    const lineText = String(line);
+    const handicap = typeof tip?.handicap === "number" ? Math.abs(tip.handicap) : null;
+    return tipText.includes(lineText) || handicap === line;
+  }
+  if (rec.marketType === "handicap") {
+    const line = rec.key?.endsWith("-away") ? rec.handicap?.awayLine : rec.handicap?.homeLine;
+    if (typeof line !== "number") return false;
+    const handicap = typeof tip?.handicap === "number" ? tip.handicap : null;
+    if (handicap != null && Math.abs(handicap - line) <= 0.01) return true;
+    const signed = formatLine(line);
+    return tipText.replace(/\s+/g, "").includes(signed.replace(/\s+/g, ""));
+  }
+  return true;
+}
+
+function bettingExpertTipMatchesRecommendation(tip, match, rec) {
+  if (!tip || !match || !rec) return false;
+  const tipText = bettingExpertTipText(tip);
+  if (!tipText) return false;
+  if (/\b(first|1st)\s+half\b/.test(tipText)) return false;
+  if (rec.marketType === "btts") {
+    const isBtts = tipText.includes("both teams to score")
+      || tipText.includes("btts")
+      || (tipText.includes("both teams") && tipText.includes("score"));
+    if (!isBtts) return false;
+    if (rec.key === "bttsYes") return /\byes\b/.test(tipText) || tipText.includes("both teams to score yes");
+    if (rec.key === "bttsNo") return /\bno\b/.test(tipText) || tipText.includes("both teams to score no");
+    return false;
+  }
+  if (rec.marketType === "total") {
+    if (!bettingExpertLineMatches(rec, tipText, tip)) return false;
+    if (rec.key === "over25") return /\bover\b/.test(tipText) || tipText.includes("o 2.5");
+    if (rec.key === "under25") return /\bunder\b/.test(tipText) || tipText.includes("u 2.5");
+    return false;
+  }
+  if (rec.marketType === "moneyline") {
+    if (rec.key === "draw") return /\bdraw\b/.test(tipText) || /\bx\b/.test(tipText);
+    const aliases = rec.key === "home" ? bettingExpertTeamAliases(match, "home") : bettingExpertTeamAliases(match, "away");
+    const hasTeam = bettingExpertTipHasTeam(tipText, aliases);
+    const hasLineToken = /(^|\s)[+-]\d/.test(tipText);
+    return hasTeam && !(/\bah\b|handicap|over|under|btts|both teams/.test(tipText) || hasLineToken);
+  }
+  if (rec.marketType === "handicap") {
+    const aliases = rec.key?.endsWith("-home") ? bettingExpertTeamAliases(match, "home") : bettingExpertTeamAliases(match, "away");
+    const hasTeam = bettingExpertTipHasTeam(tipText, aliases);
+    return hasTeam && bettingExpertLineMatches(rec, tipText, tip) && (/\bah\b|handicap|\+|-/.test(tipText) || typeof tip?.handicap === "number");
+  }
+  return false;
+}
+
+function bettingExpertSignalsForRecommendation(match, rec) {
+  const source = match?.bettingExpert || {};
+  const leaderboardTips = (source.topTipsters || []).map((tip) => ({
+    ...tip,
+    signalTier: "leaderboard",
+    signalTierLabel: "BettingExpert 世界杯榜单命中"
+  }));
+  const publicTips = (source.publicTipsters || []).map((tip) => ({
+    ...tip,
+    signalTier: "public",
+    signalTierLabel: tip.sourceTierLabel || "本场公开高分 tips"
+  }));
+  return [...leaderboardTips, ...publicTips]
+    .filter((tip) => bettingExpertTipMatchesRecommendation(tip, match, rec))
+    .sort((a, b) => {
+      const tierDiff = (a.signalTier === "leaderboard" ? 0 : 1) - (b.signalTier === "leaderboard" ? 0 : 1);
+      if (tierDiff) return tierDiff;
+      return (b.rankingScore || 0) - (a.rankingScore || 0);
+    })
+    .slice(0, 3);
+}
+
+function opportunityObservationRows(matches, scanDate, nowMs = Date.now()) {
+  const rows = [];
+  const strictIds = new Set(opportunityCandidateRows(matches, scanDate, nowMs).map(opportunityRowId));
+  const windowEndMs = nowMs + MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  for (const match of matches || []) {
+    const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
+    if (!kickoffMs) continue;
+    if (kickoffMs > windowEndMs) continue;
+    if (isFinishedStatus(match.scheduleStatus)) continue;
+    if (kickoffMs < nowMs - MATCH_LIVE_GRACE_HOURS * 60 * 60 * 1000) continue;
+    const matchScanDate = shanghaiDateDashed(new Date(match.kickoffShanghai || match.kickoffLocal));
+    for (const rec of match.recommendations || []) {
+      const id = `${match?.id || ""}:${rec?.key || ""}:${rec?.marketType || ""}`;
+      if (strictIds.has(id)) continue;
+      const hasPrice = typeof rec.marketPrice === "number";
+      const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
+      const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
+      const maxBuyPrice = typeof rec.maxBuyPrice === "number" ? rec.maxBuyPrice : null;
+      const priceGap = hasPrice && maxBuyPrice != null ? maxBuyPrice - rec.marketPrice : null;
+      const tipSignals = bettingExpertSignalsForRecommendation(match, rec);
+      if (!hasPrice || typeof rec.edge !== "number") continue;
+      const reasons = [];
+      if (hasLiveChart) reasons.push("已匹配 Polymarket 实时曲线，可点击复核当前价。");
+      if (priceGap != null && priceGap >= -0.04) reasons.push(`当前价距模型建议上限 ${formatPercent(priceGap)}，接近但未达严格买入纪律。`);
+      if (typeof edgeValue === "number" && edgeValue >= 0.025) reasons.push(`纪律后 edge ${formatPercent(edgeValue)}，低于买入雷达阈值但值得观察。`);
+      if (tipSignals.length) {
+        const label = tipSignals.slice(0, 2).map((tip) => `${tip.userName || "-"}: ${tip.pick || "-"}`).join("；");
+        reasons.push(`BettingExpert 公开信号：${label}。`);
+      }
+      const observationEligible = (
+        (hasLiveChart && edgeValue >= -0.04)
+        || (priceGap != null && priceGap >= -0.04 && edgeValue >= -0.04)
+        || (tipSignals.length && edgeValue >= -0.08)
+      );
+      if (!observationEligible || !reasons.length) continue;
+      const score = tradableRecommendationScore(rec, match)
+        + (hasLiveChart ? 0.035 : 0)
+        + Math.min(0.025, tipSignals.length * 0.012)
+        + (priceGap != null ? clamp(priceGap, -0.04, 0.04) * 0.3 : 0)
+        + (matchScanDate === scanDate ? 0.006 : 0);
+      rows.push({
+        match,
+        rec,
+        hasLiveChart,
+        matchScanDate,
+        score,
+        observationReasons: reasons,
+        tipSignals
+      });
+    }
+  }
+  return opportunitySortRows(rows, nowMs);
+}
+
 function opportunityRowId(row) {
   return `${row.match?.id || ""}:${row.rec?.key || ""}:${row.rec?.marketType || ""}`;
 }
@@ -2129,6 +2288,72 @@ function buildRuleOpportunity(row, index) {
     entryText: `只在 ${formatCents(rec.maxBuyPrice)} 或以下考虑；首发/伤停/价格跳动后重新评估。`,
     reasons: reasons.slice(0, 5),
     risks: topRiskNotes(match, rec),
+    expiresAt,
+    createdAt: new Date().toISOString(),
+    status: Date.parse(expiresAt) > Date.now() ? "active" : "expired"
+  };
+}
+
+function buildObservationOpportunity(row, index) {
+  const { match, rec, hasLiveChart, score, observationReasons = [], tipSignals = [] } = row;
+  const expiresAt = opportunityExpiryForMatch(match);
+  const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
+  const priceGap = typeof rec.maxBuyPrice === "number" && typeof rec.marketPrice === "number"
+    ? rec.maxBuyPrice - rec.marketPrice
+    : null;
+  const source = [
+    recommendationSourceText(rec),
+    tipSignals.length ? "BettingExpert" : ""
+  ].filter(Boolean).join(" + ") || recommendationSourceText(rec);
+  const tipReason = tipSignals.length
+    ? `公开用户信号：${tipSignals.slice(0, 2).map((tip) => `${tip.userName || "-"} ${tip.pick || "-"}`).join("；")}。`
+    : "";
+  const reasons = [
+    ...observationReasons,
+    `模型概率 ${formatPercent(rec.modelProbability)}，当前价格 ${formatCents(rec.marketPrice)}，edge ${formatPercent(rec.edge)}。`,
+    typeof edgeValue === "number" && edgeValue !== rec.edge ? `复盘纪律后 edge ${formatPercent(edgeValue)}。` : "",
+    priceGap != null ? `距离建议上限 ${formatPercent(priceGap)}；未达纪律时不追价。` : "",
+    tipReason
+  ].filter(Boolean);
+  const action = edgeValue >= 0.025 && hasLiveChart ? "watch" : "wait";
+  return {
+    id: `${match.id}:${rec.key}:observation:${Math.round((rec.marketPrice || 0) * 1000)}:${index}`,
+    tier: "observation",
+    matchId: match.id,
+    matchName: `${match.homeName} vs ${match.awayName}`,
+    kickoffShanghai: match.kickoffShanghai,
+    marketKey: rec.key,
+    marketType: rec.marketType,
+    marketTypeLabel: rec.marketTypeLabel,
+    name: rec.name,
+    action,
+    confidence: hasLiveChart ? "medium" : "low",
+    stake: "none",
+    modelProbability: rec.modelProbability,
+    marketPrice: rec.marketPrice,
+    edge: rec.edge,
+    disciplinedEdge: typeof edgeValue === "number" ? edgeValue : null,
+    maxBuyPrice: rec.maxBuyPrice,
+    source,
+    score: roundTo(score, 4),
+    title: `${match.homeName} vs ${match.awayName} · ${rec.name}`,
+    summary: `${rec.name} 进入观察雷达；还没有达到严格买入纪律，点击复核当前价。`,
+    entryText: "观察项不是买入提醒。只有实时价低于建议上限、首发/伤停没有反向变化，并且复核后 edge 仍足够时才重新考虑。",
+    reasons: [...new Set(reasons)].slice(0, 5),
+    risks: [
+      "观察雷达只提示可复核信号，不代表可以买入。",
+      ...topRiskNotes(match, rec)
+    ].slice(0, 5),
+    tipSignals: tipSignals.map((tip) => ({
+      userName: tip.userName,
+      profileUrl: tip.profileUrl,
+      pick: tip.pick,
+      odds: tip.odds,
+      stake: tip.stake,
+      rankingScore: tip.rankingScore,
+      signalTier: tip.signalTier,
+      signalTierLabel: tip.signalTierLabel
+    })),
     expiresAt,
     createdAt: new Date().toISOString(),
     status: Date.parse(expiresAt) > Date.now() ? "active" : "expired"
@@ -2429,6 +2654,11 @@ async function buildOpportunityRadar({ force = false } = {}) {
   const activeItems = items
     .filter((item) => Date.parse(item.expiresAt || "") > Date.now())
     .slice(0, OPPORTUNITY_MAX_ITEMS);
+  const observationRows = opportunityObservationRows(radarMatches, scanDate, now);
+  const observationCandidates = diversifiedOpportunityRows(observationRows, OPPORTUNITY_OBSERVATION_MAX_ITEMS, now);
+  const observations = observationCandidates.map(buildObservationOpportunity)
+    .filter((item) => Date.parse(item.expiresAt || "") > Date.now())
+    .slice(0, OPPORTUNITY_OBSERVATION_MAX_ITEMS);
   const payload = {
     meta: {
       ok: true,
@@ -2440,11 +2670,14 @@ async function buildOpportunityRadar({ force = false } = {}) {
       focusMarketDate: focus.matchDate || "",
       focusMatchCount: radarMatches.length,
       candidateCount: candidateRows.length,
+      observationCandidateCount: observationRows.length,
+      observationCount: observations.length,
       nextRefreshAt: new Date(Date.now() + OPPORTUNITY_REFRESH_MS).toISOString(),
       source: "AI opportunity radar",
-      disclaimer: "研究辅助提醒，不自动下单，不承诺收益。"
+      disclaimer: "研究辅助提醒，不自动下单，不承诺收益；观察雷达不是买入指令。"
     },
-    items: activeItems
+    items: activeItems,
+    observations
   };
   opportunityCache = payload;
   writeJsonAtomic(OPPORTUNITY_CACHE_PATH, payload).catch((error) => {

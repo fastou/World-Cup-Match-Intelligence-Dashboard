@@ -270,6 +270,11 @@
         border-color: rgba(20, 125, 100, 0.48);
       }
 
+      .opportunity-card.observation {
+        border-color: rgba(120, 137, 129, 0.32);
+        background: #f8faf7;
+      }
+
       .opportunity-card-head {
         display: flex;
         align-items: flex-start;
@@ -281,6 +286,17 @@
         font-size: 15px;
         font-weight: 850;
         line-height: 1.3;
+      }
+
+      .opportunity-group-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 4px;
+        color: var(--ink);
+        font-size: 14px;
+        font-weight: 850;
       }
 
       .opportunity-summary {
@@ -3120,6 +3136,14 @@
         });
       }
 
+      function activeOpportunityObservations(payload) {
+        const now = Date.now();
+        return (payload?.observations || []).filter((item) => {
+          const expiresAt = Date.parse(item.expiresAt || "");
+          return !Number.isFinite(expiresAt) || expiresAt > now;
+        });
+      }
+
       function opportunityActionLabel(action) {
         const labels = {
           watch: currentLang === "en" ? "Watch" : "观察",
@@ -3206,6 +3230,55 @@
             ${riskLines}
           </div>
         `;
+      }
+
+      function renderOpportunityCards(items, { observation = false } = {}) {
+        return items.map((item) => {
+          const check = opportunityChecks.get(item.id);
+          const cardClass = [
+            "opportunity-card",
+            observation || item.tier === "observation" ? "observation" : "",
+            check?.loading ? "checking" : "",
+            check && !check.loading ? "checked" : ""
+          ].filter(Boolean).join(" ");
+          const tierChip = observation || item.tier === "observation"
+            ? `<span class="opportunity-chip warn">${escapeHtml(currentLang === "en" ? "Observation only" : "仅观察")}</span>`
+            : "";
+          return `
+          <article class="${escapeHtml(cardClass)}" data-opportunity-id="${escapeHtml(item.id)}" role="button" tabindex="0" aria-label="${escapeHtml(currentLang === "en" ? "Refresh current price for this opportunity" : "刷新这条机会的当前价格")}">
+            <div class="opportunity-card-head">
+              <div>
+                <div class="opportunity-title">${escapeHtml(item.title || `${item.matchName} · ${item.name}`)}</div>
+                <div class="confidence-note">${escapeHtml(item.marketTypeLabel || "")} · ${escapeHtml(fmtTime(item.kickoffShanghai))}</div>
+              </div>
+              <span class="opportunity-chip ${item.action === "watch" ? "good" : "warn"}">${escapeHtml(opportunityActionLabel(item.action))}</span>
+            </div>
+            <div class="opportunity-summary">${escapeHtml(item.summary || "")}</div>
+            <div class="opportunity-meta">
+              ${tierChip}
+              <span class="opportunity-chip good">${escapeHtml(opportunityConfidenceLabel(item.confidence))}</span>
+              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Price" : "价格")} ${escapeHtml(fmtPrice(item.marketPrice))}</span>
+              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(item.maxBuyPrice))}</span>
+              <span class="opportunity-chip">${escapeHtml("Edge")} ${escapeHtml(fmtEdge(item.disciplinedEdge ?? item.edge))}</span>
+              <span class="opportunity-chip">${escapeHtml(item.source || "-")}</span>
+              <span class="opportunity-chip warn">${escapeHtml(currentLang === "en" ? "Expires" : "过期")} ${escapeHtml(fmtTime(item.expiresAt))}</span>
+            </div>
+            <div class="opportunity-section">
+              <strong>${escapeHtml(currentLang === "en" ? "Entry discipline" : "买价纪律")}</strong>
+              <div class="confidence-note">${escapeHtml(item.entryText || "")}</div>
+            </div>
+            ${renderOpportunityCheck(item)}
+            <div class="opportunity-section">
+              <strong>${escapeHtml(currentLang === "en" ? "Reasons" : "理由")}</strong>
+              <ul>${(item.reasons || []).slice(0, 5).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+            </div>
+            <div class="opportunity-section">
+              <strong>${escapeHtml(currentLang === "en" ? "Risks" : "风险")}</strong>
+              <ul>${(item.risks || []).slice(0, 5).map((risk) => `<li>${escapeHtml(risk)}</li>`).join("")}</ul>
+            </div>
+          </article>
+        `;
+        }).join("");
       }
 
       function positionOutcomeText(position = {}) {
@@ -3427,6 +3500,8 @@
         currentOpportunities = payload || { meta: {}, items: [] };
         const labels = APP_LABELS[currentLang];
         const items = activeOpportunities(currentOpportunities);
+        const observations = activeOpportunityObservations(currentOpportunities);
+        const totalActive = items.length + observations.length;
         const button = document.getElementById("opportunityButton");
         const count = document.getElementById("opportunityCount");
         const list = document.getElementById("opportunityList");
@@ -3438,9 +3513,9 @@
           tab.setAttribute("aria-selected", active ? "true" : "false");
         });
 
-        button.classList.toggle("live", items.length > 0);
-        button.classList.toggle("empty", items.length === 0);
-        count.textContent = String(items.length);
+        button.classList.toggle("live", totalActive > 0);
+        button.classList.toggle("empty", totalActive === 0);
+        count.textContent = String(totalActive);
         if (currentOpportunityTab === "review") {
           renderOpportunityReview();
           return;
@@ -3456,57 +3531,39 @@
         meta.textContent = [
           scanWindow,
           scanDate,
+          `${currentLang === "en" ? "Buy radar" : "买入雷达"} ${items.length}`,
+          `${currentLang === "en" ? "Observation radar" : "观察雷达"} ${observations.length}`,
           currentOpportunities.meta?.nextRefreshAt ? `${currentLang === "en" ? "Next" : "下次"} ${fmtTime(currentOpportunities.meta.nextRefreshAt)}` : labels.opportunityMetaEmpty,
           currentOpportunities.meta?.backgroundRefresh ? (currentLang === "en" ? "refreshing" : "刷新中") : ""
         ].filter(Boolean).join(" · ");
 
-        if (!items.length) {
+        if (!totalActive) {
           list.innerHTML = `<div class="opportunity-empty">${escapeHtml(labels.opportunityEmpty)}<div class="confidence-note">${escapeHtml(currentOpportunities.meta?.disclaimer || "研究辅助提醒，不自动下单，不承诺收益。")}</div></div>`;
           translateRenderedContent(list);
           return;
         }
 
-        list.innerHTML = items.map((item) => {
-          const check = opportunityChecks.get(item.id);
-          const cardClass = [
-            "opportunity-card",
-            check?.loading ? "checking" : "",
-            check && !check.loading ? "checked" : ""
-          ].filter(Boolean).join(" ");
-          return `
-          <article class="${escapeHtml(cardClass)}" data-opportunity-id="${escapeHtml(item.id)}" role="button" tabindex="0" aria-label="${escapeHtml(currentLang === "en" ? "Refresh current price for this opportunity" : "刷新这条机会的当前价格")}">
-            <div class="opportunity-card-head">
-              <div>
-                <div class="opportunity-title">${escapeHtml(item.title || `${item.matchName} · ${item.name}`)}</div>
-                <div class="confidence-note">${escapeHtml(item.marketTypeLabel || "")} · ${escapeHtml(fmtTime(item.kickoffShanghai))}</div>
-              </div>
-              <span class="opportunity-chip ${item.action === "watch" ? "good" : "warn"}">${escapeHtml(opportunityActionLabel(item.action))}</span>
+        const strictHtml = items.length
+          ? `
+            <div class="opportunity-group-title">
+              <span>${escapeHtml(currentLang === "en" ? "Buy Radar" : "买入雷达")}</span>
+              <span class="confidence-note">${escapeHtml(currentLang === "en" ? "Strict price and data gates" : "严格价格与数据闸门")}</span>
             </div>
-            <div class="opportunity-summary">${escapeHtml(item.summary || "")}</div>
-            <div class="opportunity-meta">
-              <span class="opportunity-chip good">${escapeHtml(opportunityConfidenceLabel(item.confidence))}</span>
-              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Price" : "价格")} ${escapeHtml(fmtPrice(item.marketPrice))}</span>
-              <span class="opportunity-chip">${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(item.maxBuyPrice))}</span>
-              <span class="opportunity-chip">${escapeHtml("Edge")} ${escapeHtml(fmtEdge(item.edge))}</span>
-              <span class="opportunity-chip">${escapeHtml(item.source || "-")}</span>
-              <span class="opportunity-chip warn">${escapeHtml(currentLang === "en" ? "Expires" : "过期")} ${escapeHtml(fmtTime(item.expiresAt))}</span>
+            ${renderOpportunityCards(items)}
+          `
+          : `
+            <div class="opportunity-empty">${escapeHtml(currentLang === "en" ? "No item currently passes the strict buy radar." : "当前没有通过严格买入雷达的项目。")}<div class="confidence-note">${escapeHtml(currentLang === "en" ? "Observation items below are for re-checking, not buy instructions." : "下面的观察项只用于复核，不是买入指令。")}</div></div>
+          `;
+        const observationHtml = observations.length
+          ? `
+            <div class="opportunity-group-title">
+              <span>${escapeHtml(currentLang === "en" ? "Observation Radar" : "观察雷达")}</span>
+              <span class="confidence-note">${escapeHtml(currentLang === "en" ? "Live curves, near-threshold prices, and public tipster signals" : "实时曲线、接近阈值价格、公开用户信号")}</span>
             </div>
-            <div class="opportunity-section">
-              <strong>${escapeHtml(currentLang === "en" ? "Entry discipline" : "买价纪律")}</strong>
-              <div class="confidence-note">${escapeHtml(item.entryText || "")}</div>
-            </div>
-            ${renderOpportunityCheck(item)}
-            <div class="opportunity-section">
-              <strong>${escapeHtml(currentLang === "en" ? "Reasons" : "理由")}</strong>
-              <ul>${(item.reasons || []).slice(0, 5).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
-            </div>
-            <div class="opportunity-section">
-              <strong>${escapeHtml(currentLang === "en" ? "Risks" : "风险")}</strong>
-              <ul>${(item.risks || []).slice(0, 5).map((risk) => `<li>${escapeHtml(risk)}</li>`).join("")}</ul>
-            </div>
-          </article>
-        `;
-        }).join("");
+            ${renderOpportunityCards(observations, { observation: true })}
+          `
+          : "";
+        list.innerHTML = `${strictHtml}${observationHtml}`;
         translateRenderedContent(list);
       }
 
@@ -3526,7 +3583,8 @@
               error: error.message,
               disclaimer: currentLang === "en" ? "Opportunity radar is temporarily unavailable." : "机会雷达暂时不可用。"
             },
-            items: []
+            items: [],
+            observations: []
           };
           renderOpportunities(currentOpportunities);
         }
@@ -3592,7 +3650,10 @@
       }
 
       function findOpportunityItem(id) {
-        return activeOpportunities(currentOpportunities).find((item) => item.id === id) || null;
+        return [
+          ...activeOpportunities(currentOpportunities),
+          ...activeOpportunityObservations(currentOpportunities)
+        ].find((item) => item.id === id) || null;
       }
 
       async function checkOpportunityPrice(id) {
