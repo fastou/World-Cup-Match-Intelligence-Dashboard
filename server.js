@@ -16,6 +16,7 @@ const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
 const OPPORTUNITY_CACHE_PATH = path.join(ROOT, "data", "worldcup-opportunity-cache.json");
 const ELITE_ACCOUNT_CACHE_PATH = path.join(ROOT, "data", "worldcup-elite-account-cache.json");
+const BETTINGEXPERT_CACHE_PATH = path.join(ROOT, "data", "worldcup-bettingexpert-cache.json");
 const H2H_OVERRIDES_PATH = path.join(ROOT, "data", "head-to-head-overrides.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
@@ -49,6 +50,7 @@ const BETTINGEXPERT_BASE = "https://www.bettingexpert.com";
 const BETTINGEXPERT_FETCH_TIMEOUT_MS = Number(process.env.BETTINGEXPERT_FETCH_TIMEOUT_MS || 5500);
 const BETTINGEXPERT_MATCH_LIMIT = Number(process.env.BETTINGEXPERT_MATCH_LIMIT || 16);
 const BETTINGEXPERT_TIPSTER_LIMIT = Number(process.env.BETTINGEXPERT_TIPSTER_LIMIT || 20);
+const BETTINGEXPERT_CACHE_MAX_AGE_MS = Number(process.env.BETTINGEXPERT_CACHE_MAX_AGE_MS || 48 * 60 * 60 * 1000);
 const ELITE_LEADERBOARD_CACHE_TTL_MS = Number(process.env.ELITE_LEADERBOARD_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 10);
 const ELITE_MIN_WORLD_CUP_SAMPLE = Number(process.env.ELITE_MIN_WORLD_CUP_SAMPLE || 2);
@@ -140,6 +142,8 @@ let opportunityRefreshPromise = null;
 let eliteLeaderboardCache = null;
 let eliteLeaderboardCacheAt = 0;
 let eliteAccountHistoryCache = null;
+let bettingExpertCache = null;
+let bettingExpertCacheDirty = false;
 let envFileCache = null;
 let codexOpenAiConfigCache = null;
 
@@ -464,7 +468,7 @@ async function readOptionalJson(filePath, fallback) {
 }
 
 async function writeJsonAtomic(filePath, payload) {
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(tmpPath, JSON.stringify(payload));
   await fs.rename(tmpPath, filePath);
@@ -5344,6 +5348,102 @@ function bettingExpertTipsterScore(tip) {
   return (profit / 100000) + (yieldValue / 8) + (rating / 10) + Math.min(stake, 10) / 100;
 }
 
+function bettingExpertCacheKey(url) {
+  return String(url || "")
+    .replace(/^https?:\/\/www\.bettingexpert\.com/i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+}
+
+function isFreshBettingExpertCacheEntry(entry) {
+  const updatedAt = Date.parse(entry?.updatedAt || "");
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt <= BETTINGEXPERT_CACHE_MAX_AGE_MS;
+}
+
+async function loadBettingExpertCache() {
+  if (bettingExpertCache) return bettingExpertCache;
+  bettingExpertCache = await readOptionalJson(BETTINGEXPERT_CACHE_PATH, {
+    updatedAt: "",
+    leaderboard: null,
+    matches: {}
+  });
+  if (!bettingExpertCache || typeof bettingExpertCache !== "object") {
+    bettingExpertCache = { updatedAt: "", leaderboard: null, matches: {} };
+  }
+  if (!bettingExpertCache.matches || typeof bettingExpertCache.matches !== "object") {
+    bettingExpertCache.matches = {};
+  }
+  return bettingExpertCache;
+}
+
+async function saveBettingExpertCache() {
+  if (!bettingExpertCache) return;
+  bettingExpertCache.updatedAt = new Date().toISOString();
+  await writeJsonAtomic(BETTINGEXPERT_CACHE_PATH, bettingExpertCache);
+  bettingExpertCacheDirty = false;
+}
+
+function cachedBettingExpertLeaderboard(cache) {
+  const entry = cache?.leaderboard;
+  if (!entry?.rows?.length || !isFreshBettingExpertCacheEntry(entry)) return null;
+  return {
+    ...entry,
+    ok: true,
+    cached: true,
+    cacheHit: true,
+    rowCount: entry.rowCount || entry.rows.length,
+    error: undefined
+  };
+}
+
+function cachedBettingExpertMatch(cache, url) {
+  const key = bettingExpertCacheKey(url);
+  const entry = cache?.matches?.[key];
+  if (!entry?.tips?.length || !isFreshBettingExpertCacheEntry(entry)) return null;
+  return {
+    ...entry,
+    ok: true,
+    cached: true,
+    cacheHit: true
+  };
+}
+
+function updateBettingExpertMatchCache(cache, url, tips, source = {}) {
+  if (!cache || !url || !Array.isArray(tips) || !tips.length) return;
+  const key = bettingExpertCacheKey(url);
+  cache.matches[key] = {
+    ok: true,
+    source: "BettingExpert",
+    url,
+    updatedAt: new Date().toISOString(),
+    latencyMs: source.latencyMs,
+    totalTips: tips.length,
+    tips
+  };
+  bettingExpertCacheDirty = true;
+}
+
+function mergeBettingExpertLeaderboardRows(currentRows, cachedRows) {
+  const byUser = new Map();
+  for (const row of cachedRows || []) {
+    const key = String(row.userName || "").toLowerCase();
+    if (!key) continue;
+    byUser.set(key, row);
+  }
+  for (const row of currentRows || []) {
+    const key = String(row.userName || "").toLowerCase();
+    if (!key) continue;
+    byUser.set(key, {
+      ...(byUser.get(key) || {}),
+      ...row
+    });
+  }
+  return Array.from(byUser.values())
+    .sort((a, b) => (a.rank || 9999) - (b.rank || 9999))
+    .slice(0, BETTINGEXPERT_TIPSTER_LIMIT);
+}
+
 function normalizeBettingExpertTip(tip, rank) {
   const leaderboard = tip.leaderboard || null;
   return {
@@ -5370,10 +5470,50 @@ function normalizeBettingExpertTip(tip, rank) {
   };
 }
 
-async function fetchBettingExpertLeaderboard() {
+function normalizeBettingExpertOpenTip(tip, rank) {
+  return {
+    rank,
+    userName: tip.user?.name || tip.user?.username || "-",
+    userGuid: tip.user?.guid || "",
+    profileUrl: tip.user?.username ? `${BETTINGEXPERT_BASE}/user/profile/${encodeURIComponent(tip.user.username)}` : "",
+    publicRating: tip.user?.rating,
+    publicYield: tip.user?.yield,
+    publicProfit: tip.user?.profit,
+    rankingScore: roundTo(bettingExpertTipsterScore(tip), 4),
+    pick: tip.oneliner,
+    odds: tip.bet?.odds,
+    stake: tip.bet?.stake,
+    handicap: tip.bet?.handicap,
+    postedAt: tip.createdAt,
+    timeAgo: tip.timeAgo,
+    bookmakerOutcomeId: tip.bet?.outcomeId,
+    description: tip.description,
+    matchTitle: tip.matchTitle,
+    sourceTier: "match-public-tip",
+    sourceTierLabel: "本场公开 tips 高分观察",
+    sourceTierLabelEn: "High-scoring public match tip"
+  };
+}
+
+function rankBettingExpertOpenTips(tips, limit = BETTINGEXPERT_TIPSTER_LIMIT) {
+  return (tips || [])
+    .filter((tip) => tip?.user?.username && tip?.oneliner)
+    .sort((a, b) => bettingExpertTipsterScore(b) - bettingExpertTipsterScore(a))
+    .slice(0, limit)
+    .map((tip, index) => normalizeBettingExpertOpenTip(tip, index + 1));
+}
+
+async function fetchBettingExpertLeaderboard(cache = null) {
   const url = `${BETTINGEXPERT_BASE}/football/international/world-cup`;
   const result = await timedFetchText(url, { timeoutMs: BETTINGEXPERT_FETCH_TIMEOUT_MS });
   if (!result.ok || result.text.includes('id="__next_error__"')) {
+    const cached = cachedBettingExpertLeaderboard(cache);
+    if (cached) {
+      return {
+        ...cached,
+        error: result.error ? `live fetch failed; using cached leaderboard: ${result.error}` : "live fetch failed; using cached leaderboard"
+      };
+    }
     return {
       ok: false,
       source: "BettingExpert",
@@ -5384,19 +5524,42 @@ async function fetchBettingExpertLeaderboard() {
     };
   }
   const rows = parseBettingExpertWorldCupLeaderboard(result.text);
+  const cached = cachedBettingExpertLeaderboard(cache);
+  const mergedRows = cached ? mergeBettingExpertLeaderboardRows(rows, cached.rows) : rows;
+  if (mergedRows.length && cache) {
+    cache.leaderboard = {
+      ok: true,
+      source: "BettingExpert",
+      sourceUrl: url,
+      updatedAt: new Date().toISOString(),
+      latencyMs: result.latencyMs,
+      rows: mergedRows,
+      rowCount: mergedRows.length
+    };
+    bettingExpertCacheDirty = true;
+  }
+  if (!mergedRows.length) {
+    if (cached) {
+      return {
+        ...cached,
+        error: "No live World Cup leaderboard rows parsed; using cached leaderboard"
+      };
+    }
+  }
   return {
-    ok: rows.length > 0,
+    ok: mergedRows.length > 0,
     source: "BettingExpert",
     sourceUrl: url,
     updatedAt: new Date().toISOString(),
     latencyMs: result.latencyMs,
-    rows,
-    rowCount: rows.length,
-    error: rows.length ? undefined : "No public World Cup leaderboard rows parsed"
+    rows: mergedRows,
+    rowCount: mergedRows.length,
+    mergedCache: Boolean(cached && mergedRows.length > rows.length),
+    error: mergedRows.length ? undefined : "No public World Cup leaderboard rows parsed"
   };
 }
 
-async function fetchBettingExpertForMatch(match, leaderboard = null) {
+async function fetchBettingExpertForMatch(match, leaderboard = null, cache = null) {
   const urls = bettingExpertMatchUrls(match);
   if (!urls.length) {
     return {
@@ -5412,6 +5575,10 @@ async function fetchBettingExpertForMatch(match, leaderboard = null) {
   const leaderboardRows = Array.isArray(leaderboard?.rows) ? leaderboard.rows : [];
   const leaderboardByUser = new Map(leaderboardRows.map((row) => [String(row.userName || "").toLowerCase(), row]));
   let lastError = "";
+  let selectedUrl = urls[0];
+  let selectedResult = null;
+  let selectedTips = [];
+  let usedCachedMatch = false;
   for (const url of urls) {
     let result = null;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -5425,8 +5592,29 @@ async function fetchBettingExpertForMatch(match, leaderboard = null) {
       }
       if (attempt < 2) await wait(250);
     }
-    if (!result?.ok || result.text.includes('id="__next_error__"')) continue;
+    if (!result?.ok || result.text.includes('id="__next_error__"')) {
+      const cached = cachedBettingExpertMatch(cache, url);
+      if (cached?.tips?.length) {
+        selectedUrl = url;
+        selectedResult = cached;
+        selectedTips = cached.tips;
+        usedCachedMatch = true;
+        break;
+      }
+      continue;
+    }
     const tips = parseBettingExpertTips(result.text);
+    if (tips.length && cache) {
+      updateBettingExpertMatchCache(cache, url, tips, result);
+    }
+    selectedUrl = url;
+    selectedResult = result;
+    selectedTips = tips;
+    usedCachedMatch = false;
+    break;
+  }
+  if (selectedResult) {
+    const tips = selectedTips;
     const matchedTips = leaderboardRows.length
       ? tips
         .map((tip) => ({
@@ -5440,20 +5628,24 @@ async function fetchBettingExpertForMatch(match, leaderboard = null) {
       .sort((a, b) => (a.leaderboard?.rank || 999) - (b.leaderboard?.rank || 999))
       .slice(0, BETTINGEXPERT_TIPSTER_LIMIT)
       .map((tip, index) => normalizeBettingExpertTip(tip, index + 1));
+    const publicTipsters = topTipsters.length ? [] : rankBettingExpertOpenTips(tips, Math.min(8, BETTINGEXPERT_TIPSTER_LIMIT));
     return {
       ok: true,
       status: leaderboardRows.length ? (topTipsters.length ? "synced" : "no-leaderboard-hit") : "leaderboard-unavailable",
       source: "BettingExpert",
-      sourceUrl: url,
-      url,
+      sourceUrl: selectedUrl,
+      url: selectedUrl,
       updatedAt: new Date().toISOString(),
       fetchedAt: new Date().toISOString(),
-      latencyMs: result.latencyMs,
+      latencyMs: selectedResult.latencyMs,
+      cached: Boolean(usedCachedMatch || leaderboard?.cached),
       totalTips: tips.length,
       leaderboardCount: leaderboardRows.length,
       matchedTipCount: topTipsters.length,
-      rankingBasis: "Matched only public BettingExpert World Cup leaderboard users against this match page's public tips. If fewer than 20 leaderboard rows are exposed, the public limit is shown instead of inferred.",
-      rankingBasisZh: "只把 BettingExpert 世界杯榜单公开用户与本场公开 tips 匹配；公开榜单不足 20 人时显示真实抓到的人数，不推断。",
+      publicTipCount: tips.length,
+      publicTipsters,
+      rankingBasis: "Matched only public BettingExpert World Cup leaderboard users against this match page's public tips. If no leaderboard user matches, public match tips are shown separately as high-scoring observations, not verified win-rate elites.",
+      rankingBasisZh: "优先匹配 BettingExpert 世界杯榜单公开用户与本场公开 tips；若榜单用户未命中，则单独显示本场公开 tips 的高分观察，不把它们当成已验证胜率高手。",
       topTipsters
     };
   }
@@ -5491,12 +5683,22 @@ async function attachBettingExpertSignals(matches, { enabled = true } = {}) {
       matchedTipCount: 0
     };
   }
-  const leaderboard = await fetchBettingExpertLeaderboard();
-  const rows = await mapLimit(targetMatches, 2, (match) => fetchBettingExpertForMatch(match, leaderboard));
+  const cache = await loadBettingExpertCache();
+  const leaderboard = await fetchBettingExpertLeaderboard(cache);
+  const rows = await mapLimit(targetMatches, 2, (match) => fetchBettingExpertForMatch(match, leaderboard, cache));
   let matchedTipCount = 0;
+  let publicTipCount = 0;
   for (let index = 0; index < targetMatches.length; index += 1) {
     targetMatches[index].bettingExpert = rows[index];
     matchedTipCount += rows[index]?.matchedTipCount || 0;
+    publicTipCount += rows[index]?.publicTipCount || rows[index]?.totalTips || 0;
+  }
+  if (bettingExpertCacheDirty) {
+    try {
+      await saveBettingExpertCache();
+    } catch (error) {
+      console.error(`Failed to persist BettingExpert cache: ${error.message}`);
+    }
   }
   for (const match of (matches || []).slice(BETTINGEXPERT_MATCH_LIMIT)) {
     match.bettingExpert = {
@@ -5518,8 +5720,9 @@ async function attachBettingExpertSignals(matches, { enabled = true } = {}) {
     okMatchCount: okCount,
     leaderboard,
     leaderboardCount: leaderboard.rowCount || 0,
+    publicTipCount,
     error: okCount ? undefined : (rows.find((row) => row?.error)?.error || "BettingExpert unavailable"),
-    detail: `${okCount}/${rows.length} matches synced · ${leaderboard.rowCount || 0} public World Cup leaderboard users · ${matchedTipCount} matched tips`
+    detail: `${okCount}/${rows.length} matches synced · ${leaderboard.rowCount || 0} public World Cup leaderboard users · ${matchedTipCount} matched leaderboard tips · ${publicTipCount} public match tips`
   };
 }
 

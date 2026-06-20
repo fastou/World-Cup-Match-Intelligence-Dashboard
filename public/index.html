@@ -1214,6 +1214,13 @@
         gap: 8px;
       }
 
+      .bettingexpert-section-title {
+        margin-top: 4px;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
       .bettingexpert-row {
         display: grid;
         grid-template-columns: minmax(150px, 0.9fr) minmax(180px, 1.1fr) minmax(160px, 0.9fr);
@@ -2757,6 +2764,37 @@
         return `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
       }
 
+      function renderBettingExpertRows(tipsters, options = {}) {
+        const {
+          winRateLabel = currentLang === "en" ? "World Cup leaderboard win rate" : "世界杯榜单胜率",
+          showWinRate = true,
+          rankPrefix = "#"
+        } = options;
+        return `
+          <div class="bettingexpert-list">
+            ${tipsters.map((tipster) => `
+              <div class="bettingexpert-row">
+                <div class="bettingexpert-user">
+                  <span class="bettingexpert-rank">${escapeHtml(rankPrefix)}${escapeHtml(tipster.rank || "-")}</span>
+                  <strong title="${escapeHtml(tipster.userName || "-")}">${tipster.profileUrl ? `<a href="${escapeHtml(tipster.profileUrl)}" target="_blank" rel="noreferrer">${escapeHtml(tipster.userName || "-")}</a>` : escapeHtml(tipster.userName || "-")}</strong>
+                  ${showWinRate ? `<div class="form-meta">${escapeHtml(winRateLabel)}：${escapeHtml(typeof tipster.worldCupWinRate === "number" ? fmtPct(tipster.worldCupWinRate) : (currentLang === "en" ? "Not exposed on list row" : "该榜单行未公开"))}</div>` : `<div class="form-meta">${escapeHtml(currentLang === "en" ? "Public performance score" : "公开表现分")}：${escapeHtml(fmtDecimal(tipster.rankingScore, 2))}</div>`}
+                </div>
+                <div class="bettingexpert-pick">
+                  <strong title="${escapeHtml(tipster.pick || "-")}">${escapeHtml(tipster.pick || "-")}</strong>
+                  <div class="form-meta">${escapeHtml(currentLang === "en" ? "Odds" : "赔率")} ${escapeHtml(fmtDecimal(tipster.odds))} · ${escapeHtml(currentLang === "en" ? "Stake" : "信心")} ${escapeHtml(fmtDecimal(tipster.stake, 1))}${typeof tipster.handicap === "number" ? ` · ${escapeHtml(currentLang === "en" ? "Line" : "盘口")} ${escapeHtml(tipster.handicap > 0 ? `+${tipster.handicap}` : `${tipster.handicap}`)}` : ""}</div>
+                  <div class="form-meta">${escapeHtml(tipster.timeAgo || fmtTime(tipster.postedAt))}</div>
+                </div>
+                <div class="bettingexpert-stats">
+                  <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Profit" : "公开收益")} ${escapeHtml(fmtMoney(tipster.publicProfit))}</span>
+                  <span class="bettingexpert-chip">Yield ${escapeHtml(fmtPublicYield(tipster.publicYield))}</span>
+                  <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Rating" : "评分")} ${escapeHtml(fmtDecimal(tipster.publicRating, 1))}</span>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
       function bettingExpertStatusLabel(source) {
         const status = source?.status || "unavailable";
         if (currentLang === "en") {
@@ -2784,6 +2822,7 @@
       function renderBettingExpert(match) {
         const source = match.bettingExpert || {};
         const tipsters = Array.isArray(source.topTipsters) ? source.topTipsters : [];
+        const publicTipsters = Array.isArray(source.publicTipsters) ? source.publicTipsters : [];
         const basis = currentLang === "en"
           ? source.rankingBasis || "Matched BettingExpert World Cup leaderboard users against public match tips."
           : source.rankingBasisZh || "匹配 BettingExpert 世界杯榜单用户与本场公开 tips。";
@@ -2801,33 +2840,22 @@
               <div class="bettingexpert-meta">
                 <span class="bettingexpert-chip">${escapeHtml(bettingExpertStatusLabel(source))}</span>
                 <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Matched tips" : "命中判断")} ${escapeHtml(source.matchedTipCount ?? tipsters.length ?? 0)}</span>
+                <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Public tips" : "本场公开tips")} ${escapeHtml(source.publicTipCount ?? source.totalTips ?? "-")}</span>
                 <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Leaderboard users" : "榜单人数")} ${escapeHtml(source.leaderboardCount ?? "-")}</span>
+                ${source.cached ? `<span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Cached fallback" : "缓存兜底")}</span>` : ""}
                 <span class="bettingexpert-chip">${sourceLabel} · ${fmtTime(source.updatedAt || source.fetchedAt)}</span>
               </div>
               <div class="form-summary">${escapeHtml(basis)}</div>
               ${tipsters.length ? `
-                <div class="bettingexpert-list">
-                  ${tipsters.map((tipster) => `
-                    <div class="bettingexpert-row">
-                      <div class="bettingexpert-user">
-                        <span class="bettingexpert-rank">#${escapeHtml(tipster.rank || "-")}</span>
-                        <strong title="${escapeHtml(tipster.userName || "-")}">${tipster.profileUrl ? `<a href="${escapeHtml(tipster.profileUrl)}" target="_blank" rel="noreferrer">${escapeHtml(tipster.userName || "-")}</a>` : escapeHtml(tipster.userName || "-")}</strong>
-                        <div class="form-meta">${escapeHtml(currentLang === "en" ? "World Cup leaderboard win rate" : "世界杯榜单胜率")}：${escapeHtml(typeof tipster.worldCupWinRate === "number" ? fmtPct(tipster.worldCupWinRate) : (currentLang === "en" ? "Not exposed on list row" : "该榜单行未公开"))}</div>
-                      </div>
-                      <div class="bettingexpert-pick">
-                        <strong title="${escapeHtml(tipster.pick || "-")}">${escapeHtml(tipster.pick || "-")}</strong>
-                        <div class="form-meta">${escapeHtml(currentLang === "en" ? "Odds" : "赔率")} ${escapeHtml(fmtDecimal(tipster.odds))} · ${escapeHtml(currentLang === "en" ? "Stake" : "信心")} ${escapeHtml(fmtDecimal(tipster.stake, 1))}${typeof tipster.handicap === "number" ? ` · ${escapeHtml(currentLang === "en" ? "Line" : "盘口")} ${escapeHtml(tipster.handicap > 0 ? `+${tipster.handicap}` : `${tipster.handicap}`)}` : ""}</div>
-                        <div class="form-meta">${escapeHtml(tipster.timeAgo || fmtTime(tipster.postedAt))}</div>
-                      </div>
-                      <div class="bettingexpert-stats">
-                        <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Profit" : "公开收益")} ${escapeHtml(fmtMoney(tipster.publicProfit))}</span>
-                        <span class="bettingexpert-chip">Yield ${escapeHtml(fmtPublicYield(tipster.publicYield))}</span>
-                        <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Rating" : "评分")} ${escapeHtml(fmtDecimal(tipster.publicRating, 1))}</span>
-                      </div>
-                    </div>
-                  `).join("")}
-                </div>
-              ` : `<div class="empty">${escapeHtml(source.error || emptyText)}</div>`}
+                <div class="bettingexpert-section-title">${escapeHtml(currentLang === "en" ? "World Cup leaderboard matches" : "世界杯榜单用户命中")}</div>
+                ${renderBettingExpertRows(tipsters)}
+              ` : ""}
+              ${publicTipsters.length ? `
+                <div class="bettingexpert-section-title">${escapeHtml(currentLang === "en" ? "Public match-tip observations" : "本场公开高分用户观察")}</div>
+                <div class="form-summary">${escapeHtml(currentLang === "en" ? "These rows are ranked from public BettingExpert profit/yield/rating/stake fields. They are not verified World Cup win-rate elites." : "这些用户按 BettingExpert 公开收益/yield/评分/信心排序；不是已验证世界杯胜率高手。")}</div>
+                ${renderBettingExpertRows(publicTipsters, { showWinRate: false, rankPrefix: currentLang === "en" ? "Obs " : "观测 " })}
+              ` : ""}
+              ${!tipsters.length && !publicTipsters.length ? `<div class="empty">${escapeHtml(source.error || emptyText)}</div>` : ""}
             </div>
           </section>
         `;
@@ -4670,7 +4698,7 @@
       applyLanguageStatic();
       loadDashboard();
       loadOpportunities();
-      setInterval(() => loadDashboard(true), 5 * 60 * 1000);
+      setInterval(() => loadDashboard(false), 5 * 60 * 1000);
       setInterval(() => loadOpportunities(false), 5 * 60 * 1000);
       setInterval(() => renderOpportunities(currentOpportunities), 60 * 1000);
     </script>
