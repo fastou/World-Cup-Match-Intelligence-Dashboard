@@ -147,6 +147,7 @@ When maintaining public market data:
 - Fetch and display top holders for relevant Polymarket condition/token pairs when public holder data is available. Mark whether holders match the World Cup Top 10 list.
 - Store holder snapshots separately for recommendation-mapped markets and general World Cup market-pool tokens so later analysis can compare holder behavior to outcomes.
 - If account or position data is unavailable, show unavailable status instead of fallback-looking fake rows.
+- BettingExpert may be used as a public community-tipster source under each match. First parse the public World Cup leaderboard, then match those leaderboard users against each match page's public tips. If the leaderboard exposes fewer than 20 users or omits win-rate fields on some rows, show that source limit explicitly rather than filling ordinary match-page users into the Top 20.
 
 ## History And Backtesting
 

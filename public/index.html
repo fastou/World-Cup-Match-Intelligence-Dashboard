@@ -1184,6 +1184,80 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .bettingexpert-board {
+        display: grid;
+        gap: 10px;
+      }
+
+      .bettingexpert-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .bettingexpert-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 3px 8px;
+        border: 1px solid #e4ebe6;
+        border-radius: 999px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .bettingexpert-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .bettingexpert-row {
+        display: grid;
+        grid-template-columns: minmax(150px, 0.9fr) minmax(180px, 1.1fr) minmax(160px, 0.9fr);
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid #e6ebe7;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .bettingexpert-user {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      .bettingexpert-user strong,
+      .bettingexpert-pick strong {
+        overflow: hidden;
+        color: var(--ink);
+        font-size: 13px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .bettingexpert-rank {
+        color: #1f6b54;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .bettingexpert-pick {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .bettingexpert-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-content: start;
+      }
+
       .matchup-insight-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1977,6 +2051,7 @@
         .matchup-insight-grid,
         .line-profile-grid,
         .form-grid,
+        .bettingexpert-row,
         .lineup-box,
         .framework-grid,
         .elite-summary-grid,
@@ -2671,6 +2746,92 @@
         `;
       }
 
+      function fmtDecimal(value, digits = 2) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        return value.toFixed(digits);
+      }
+
+      function fmtPublicYield(value) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        return `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
+      }
+
+      function bettingExpertStatusLabel(source) {
+        const status = source?.status || "unavailable";
+        if (currentLang === "en") {
+          return {
+            synced: "Synced",
+            "no-tips": "No matched user tips",
+            "no-leaderboard-hit": "No leaderboard hit",
+            "leaderboard-unavailable": "Leaderboard unavailable",
+            unavailable: "Unavailable",
+            disabled: "Disabled",
+            "skipped-limit": "Skipped"
+          }[status] || status;
+        }
+        return {
+          synced: "已同步",
+          "no-tips": "暂无命中用户判断",
+          "no-leaderboard-hit": "暂无榜单用户命中",
+          "leaderboard-unavailable": "榜单不可用",
+          unavailable: "不可用",
+          disabled: "已关闭",
+          "skipped-limit": "已跳过"
+        }[status] || status;
+      }
+
+      function renderBettingExpert(match) {
+        const source = match.bettingExpert || {};
+        const tipsters = Array.isArray(source.topTipsters) ? source.topTipsters : [];
+        const basis = currentLang === "en"
+          ? source.rankingBasis || "Matched BettingExpert World Cup leaderboard users against public match tips."
+          : source.rankingBasisZh || "匹配 BettingExpert 世界杯榜单用户与本场公开 tips。";
+        const title = currentLang === "en" ? "BettingExpert World Cup Leaderboard Reads" : "BettingExpert 世界杯榜单用户判断";
+        const sourceLabel = source.url || source.sourceUrl
+          ? `<a href="${escapeHtml(source.url || source.sourceUrl)}" target="_blank" rel="noreferrer">BettingExpert</a>`
+          : "BettingExpert";
+        const emptyText = currentLang === "en"
+          ? "No public BettingExpert user tip matched this match yet."
+          : "当前还没有抓到 BettingExpert 对这场的公开用户判断。";
+        return `
+          <section class="static-block wide">
+            <h4>${escapeHtml(title)}</h4>
+            <div class="bettingexpert-board">
+              <div class="bettingexpert-meta">
+                <span class="bettingexpert-chip">${escapeHtml(bettingExpertStatusLabel(source))}</span>
+                <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Matched tips" : "命中判断")} ${escapeHtml(source.matchedTipCount ?? tipsters.length ?? 0)}</span>
+                <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Leaderboard users" : "榜单人数")} ${escapeHtml(source.leaderboardCount ?? "-")}</span>
+                <span class="bettingexpert-chip">${sourceLabel} · ${fmtTime(source.updatedAt || source.fetchedAt)}</span>
+              </div>
+              <div class="form-summary">${escapeHtml(basis)}</div>
+              ${tipsters.length ? `
+                <div class="bettingexpert-list">
+                  ${tipsters.map((tipster) => `
+                    <div class="bettingexpert-row">
+                      <div class="bettingexpert-user">
+                        <span class="bettingexpert-rank">#${escapeHtml(tipster.rank || "-")}</span>
+                        <strong title="${escapeHtml(tipster.userName || "-")}">${tipster.profileUrl ? `<a href="${escapeHtml(tipster.profileUrl)}" target="_blank" rel="noreferrer">${escapeHtml(tipster.userName || "-")}</a>` : escapeHtml(tipster.userName || "-")}</strong>
+                        <div class="form-meta">${escapeHtml(currentLang === "en" ? "World Cup leaderboard win rate" : "世界杯榜单胜率")}：${escapeHtml(typeof tipster.worldCupWinRate === "number" ? fmtPct(tipster.worldCupWinRate) : (currentLang === "en" ? "Not exposed on list row" : "该榜单行未公开"))}</div>
+                      </div>
+                      <div class="bettingexpert-pick">
+                        <strong title="${escapeHtml(tipster.pick || "-")}">${escapeHtml(tipster.pick || "-")}</strong>
+                        <div class="form-meta">${escapeHtml(currentLang === "en" ? "Odds" : "赔率")} ${escapeHtml(fmtDecimal(tipster.odds))} · ${escapeHtml(currentLang === "en" ? "Stake" : "信心")} ${escapeHtml(fmtDecimal(tipster.stake, 1))}${typeof tipster.handicap === "number" ? ` · ${escapeHtml(currentLang === "en" ? "Line" : "盘口")} ${escapeHtml(tipster.handicap > 0 ? `+${tipster.handicap}` : `${tipster.handicap}`)}` : ""}</div>
+                        <div class="form-meta">${escapeHtml(tipster.timeAgo || fmtTime(tipster.postedAt))}</div>
+                      </div>
+                      <div class="bettingexpert-stats">
+                        <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Profit" : "公开收益")} ${escapeHtml(fmtMoney(tipster.publicProfit))}</span>
+                        <span class="bettingexpert-chip">Yield ${escapeHtml(fmtPublicYield(tipster.publicYield))}</span>
+                        <span class="bettingexpert-chip">${escapeHtml(currentLang === "en" ? "Rating" : "评分")} ${escapeHtml(fmtDecimal(tipster.publicRating, 1))}</span>
+                      </div>
+                    </div>
+                  `).join("")}
+                </div>
+              ` : `<div class="empty">${escapeHtml(source.error || emptyText)}</div>`}
+            </div>
+          </section>
+        `;
+      }
+
       function formatLineProfile(group) {
         if (!group || !group.players) return currentLang === "en" ? "No data" : "无数据";
         const topTierPct = typeof group.topTierShare === "number" ? `${(group.topTierShare * 100).toFixed(1)}%` : "-";
@@ -2761,6 +2922,7 @@
             ${renderHeadToHead(match)}
             ${renderRecentForm(match)}
             ${renderWorldCupRecords(match)}
+            ${renderBettingExpert(match)}
             ${renderHumanMatchup(match)}
             <section class="static-block">
               <h4>静态信息</h4>

@@ -45,6 +45,10 @@ const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
+const BETTINGEXPERT_BASE = "https://www.bettingexpert.com";
+const BETTINGEXPERT_FETCH_TIMEOUT_MS = Number(process.env.BETTINGEXPERT_FETCH_TIMEOUT_MS || 5500);
+const BETTINGEXPERT_MATCH_LIMIT = Number(process.env.BETTINGEXPERT_MATCH_LIMIT || 16);
+const BETTINGEXPERT_TIPSTER_LIMIT = Number(process.env.BETTINGEXPERT_TIPSTER_LIMIT || 20);
 const ELITE_LEADERBOARD_CACHE_TTL_MS = Number(process.env.ELITE_LEADERBOARD_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const ELITE_TRADER_LIMIT = Number(process.env.ELITE_TRADER_LIMIT || 10);
 const ELITE_MIN_WORLD_CUP_SAMPLE = Number(process.env.ELITE_MIN_WORLD_CUP_SAMPLE || 2);
@@ -5035,16 +5039,18 @@ async function timedFetchJsonWithRetry(url, options = {}, attempts = 2) {
 
 async function timedFetchText(url, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeoutMs = Number(options.timeoutMs || FETCH_TIMEOUT_MS);
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
       headers: {
         "accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*",
         "user-agent": "Mozilla/5.0 worldcup-polymarket-dashboard/0.1",
-        ...(options.headers || {})
+        ...(fetchOptions.headers || {})
       }
     });
     const text = await response.text();
@@ -5090,6 +5096,431 @@ function buildPolymarketSearches(schedule = null) {
     seen.add(key);
     return true;
   });
+}
+
+function bettingExpertTeamSlug(value, teamCode = "") {
+  const code = String(teamCode || "").toUpperCase();
+  const overrides = {
+    USA: "usa",
+    KOR: "south-korea",
+    TUR: "turkey",
+    BIH: "bosnia-and-herzegovina",
+    CIV: "ivory-coast",
+    CPV: "cape-verde",
+    CUW: "curacao",
+    COD: "dr-congo",
+    KSA: "saudi-arabia",
+    NZL: "new-zealand",
+    RSA: "south-africa"
+  };
+  const base = overrides[code] || value || TEAM_SEARCH_NAMES[code] || code;
+  return String(base || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function bettingExpertMatchUrls(match) {
+  const homeSlug = bettingExpertTeamSlug(match.homeEnglishName || match.homeName, match.home);
+  const awaySlug = bettingExpertTeamSlug(match.awayEnglishName || match.awayName, match.away);
+  if (!homeSlug || !awaySlug) return [];
+  return [
+    `${BETTINGEXPERT_BASE}/football/${homeSlug}-vs-${awaySlug}`,
+    `${BETTINGEXPERT_BASE}/football/${awaySlug}-vs-${homeSlug}`
+  ];
+}
+
+function decodeBettingExpertHtmlText(value) {
+  return String(value || "")
+    .replace(/\\u0026/g, "&")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, "\"")
+    .replace(/&#8217;/g, "'")
+    .replace(/&#8211;/g, "-")
+    .replace(/&quot;/g, "\"")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function jsonStringValue(raw) {
+  const value = String(raw || "");
+  try {
+    return JSON.parse(`"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`);
+  } catch {
+    return decodeBettingExpertHtmlText(value);
+  }
+}
+
+function extractObjectAfter(text, startIndex) {
+  const open = text.indexOf("{", startIndex);
+  if (open < 0) return "";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(open, index + 1);
+    }
+  }
+  return "";
+}
+
+function parseBettingExpertTipObject(rawObject) {
+  const tipId = rawObject.match(/"tipId":(\d+)/)?.[1] || "";
+  const guid = rawObject.match(/"guid":"([^"]+)"/)?.[1] || "";
+  const oneliner = jsonStringValue(rawObject.match(/"oneliner":"((?:\\.|[^"\\])*)"/)?.[1] || "");
+  const descriptionRef = rawObject.match(/"description":"((?:\\.|[^"\\])*)"/)?.[1] || "";
+  const createdDate = rawObject.match(/"created":\{"date":"([^"]+)"/)?.[1] || "";
+  const timeAgo = jsonStringValue(rawObject.match(/"timeAgo":"((?:\\.|[^"\\])*)"/)?.[1] || "");
+  const tournamentName = jsonStringValue(rawObject.match(/"template":\{"id":\d+,"name":"((?:\\.|[^"\\])*)"/)?.[1] || "");
+  const stageName = jsonStringValue(rawObject.match(/"stage":\{"id":\d+,"name":"((?:\\.|[^"\\])*)"/)?.[1] || "");
+  const matchTitle = jsonStringValue(rawObject.match(/"match":\{"title":"((?:\\.|[^"\\])*)"/)?.[1] || "");
+  const betRaw = extractObjectAfter(rawObject, rawObject.indexOf('"bet":'));
+  const userRaw = extractObjectAfter(rawObject, rawObject.indexOf('"user":'));
+  if (!tipId || !oneliner || !userRaw) return null;
+
+  const username = jsonStringValue(userRaw.match(/"username":"((?:\\.|[^"\\])*)"/)?.[1] || "");
+  const userName = jsonStringValue(userRaw.match(/"name":"((?:\\.|[^"\\])*)"/)?.[1] || "") || username;
+  const userGuid = userRaw.match(/"guid":"([^"]+)"/)?.[1] || "";
+  const rating = numberOrNull(userRaw.match(/"rating":(-?\d+(?:\.\d+)?)/)?.[1]);
+  const yieldValue = numberOrNull(userRaw.match(/"yield":(-?\d+(?:\.\d+)?)/)?.[1]);
+  const profit = numberOrNull(userRaw.match(/"profit":(-?\d+(?:\.\d+)?)/)?.[1]);
+  const stake = numberOrNull(betRaw.match(/"stake":(-?\d+(?:\.\d+)?)/)?.[1]);
+  const odds = numberOrNull(betRaw.match(/"odds":(-?\d+(?:\.\d+)?)/)?.[1]);
+  const handicap = numberOrNull(betRaw.match(/"handicap":(-?\d+(?:\.\d+)?)/)?.[1]);
+  const outcomeId = betRaw.match(/"outcomeId":"?(\d+)/)?.[1] || "";
+  const isWorldCup = /world cup/i.test(`${tournamentName} ${stageName} ${rawObject}`);
+
+  return {
+    tipId,
+    guid,
+    oneliner,
+    description: descriptionRef && !descriptionRef.startsWith("$") ? jsonStringValue(descriptionRef) : "",
+    createdAt: createdDate ? `${createdDate.replace(" ", "T").replace(/\.\d+$/, "")}Z` : "",
+    timeAgo,
+    matchTitle,
+    tournamentName,
+    stageName,
+    isWorldCup,
+    bet: {
+      stake,
+      odds,
+      handicap,
+      outcomeId
+    },
+    user: {
+      guid: userGuid,
+      username,
+      name: userName,
+      rating,
+      yield: yieldValue,
+      profit
+    }
+  };
+}
+
+function uniqueBettingExpertTips(tips) {
+  const seen = new Set();
+  const unique = [];
+  for (const tip of tips || []) {
+    const key = `${tip.tipId}:${tip.user?.guid || tip.user?.username || ""}:${tip.oneliner}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(tip);
+  }
+  return unique;
+}
+
+function parseCompactNumber(value) {
+  const cleaned = String(value || "").replace(/,/g, "").trim();
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+function parseBettingExpertWorldCupLeaderboard(html) {
+  const decoded = decodeBettingExpertHtmlText(html)
+    .replace(/<!-- -->/g, "")
+    .replace(/&#x27;/g, "'")
+    .replace(/\s+/g, " ");
+  const start = decoded.indexOf("Top World Cup tipster");
+  if (start < 0) return [];
+  const end = decoded.indexOf("Latest World Cup tips", start);
+  const section = decoded.slice(start, end > start ? end : start + 50000);
+  const plainSection = section
+    .replace(/<script[\s\S]*?<\/script>/g, " ")
+    .replace(/<style[\s\S]*?<\/style>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const rows = [];
+
+  const topTextMatch = plainSection.match(/Top World Cup tipster\s+([\d,.]+)\s+Tips\s+([\d,.]+)%\s+Yield\s+([A-Za-z0-9_.-]+)\s+\+?([\d,.]+)\s+Profit\s+([\d,.]+)%\s+Win rate/i);
+  if (topTextMatch) {
+    rows.push({
+      rank: 1,
+      userName: decodeBettingExpertHtmlText(topTextMatch[3]).trim(),
+      profileUrl: `${BETTINGEXPERT_BASE}/user/profile/${encodeURIComponent(topTextMatch[3])}`,
+      tips: parseCompactNumber(topTextMatch[1]),
+      yield: parseCompactNumber(topTextMatch[2]),
+      profit: parseCompactNumber(topTextMatch[4]),
+      winRate: parseCompactNumber(topTextMatch[5]) != null ? parseCompactNumber(topTextMatch[5]) / 100 : null
+    });
+  }
+
+  const rowRegex = /<span[^>]*>(\d+)<\/span>[\s\S]{0,5000}?<a href="\/user\/profile\/([^"]+)"[\s\S]{0,1200}?<span[^>]*>([^<]+)<\/span>[\s\S]{0,1800}?<span[^>]*>([\d,.]+)<\/span>\s*<span[^>]*>Tips<\/span>[\s\S]{0,800}?<span[^>]*>\+?([\d,.]+)<\/span>\s*<span[^>]*>Profit<\/span>/gi;
+  let match;
+  while ((match = rowRegex.exec(section)) !== null) {
+    const rank = Number(match[1]);
+    const userName = decodeBettingExpertHtmlText(match[3]).trim();
+    if (!rank || !userName || rows.some((row) => row.userName.toLowerCase() === userName.toLowerCase())) continue;
+    rows.push({
+      rank,
+      userName,
+      profileUrl: `${BETTINGEXPERT_BASE}/user/profile/${encodeURIComponent(match[2])}`,
+      tips: parseCompactNumber(match[4]),
+      yield: null,
+      profit: parseCompactNumber(match[5]),
+      winRate: null
+    });
+  }
+
+  return rows
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, BETTINGEXPERT_TIPSTER_LIMIT);
+}
+
+function parseBettingExpertTips(html) {
+  const decoded = decodeBettingExpertHtmlText(html).replace(/\$undefined/g, "null");
+  const tips = [];
+  let cursor = 0;
+  while (cursor < decoded.length) {
+    const tipIndex = decoded.indexOf('"tipId":', cursor);
+    if (tipIndex < 0) break;
+    const objectStart = decoded.lastIndexOf("{", tipIndex);
+    if (objectStart < 0) {
+      cursor = tipIndex + 8;
+      continue;
+    }
+    const rawObject = extractObjectAfter(decoded, objectStart);
+    if (!rawObject) {
+      cursor = tipIndex + 8;
+      continue;
+    }
+    const tip = parseBettingExpertTipObject(rawObject);
+    if (tip?.isWorldCup) tips.push(tip);
+    cursor = objectStart + rawObject.length;
+  }
+  return uniqueBettingExpertTips(tips);
+}
+
+function bettingExpertTipsterScore(tip) {
+  const profit = typeof tip.user?.profit === "number" ? tip.user.profit : 0;
+  const yieldValue = typeof tip.user?.yield === "number" ? tip.user.yield : 0;
+  const rating = typeof tip.user?.rating === "number" ? tip.user.rating : 0;
+  const stake = typeof tip.bet?.stake === "number" ? tip.bet.stake : 0;
+  return (profit / 100000) + (yieldValue / 8) + (rating / 10) + Math.min(stake, 10) / 100;
+}
+
+function normalizeBettingExpertTip(tip, rank) {
+  const leaderboard = tip.leaderboard || null;
+  return {
+    rank: leaderboard?.rank || rank,
+    userName: tip.user?.name || tip.user?.username || "-",
+    userGuid: tip.user?.guid || "",
+    profileUrl: leaderboard?.profileUrl || (tip.user?.username ? `${BETTINGEXPERT_BASE}/user/profile/${encodeURIComponent(tip.user.username)}` : ""),
+    worldCupWinRate: leaderboard?.winRate ?? null,
+    worldCupSample: leaderboard?.tips ?? null,
+    worldCupLeaderboardRank: leaderboard?.rank || null,
+    publicRating: tip.user?.rating,
+    publicYield: leaderboard?.yield ?? tip.user?.yield,
+    publicProfit: leaderboard?.profit ?? tip.user?.profit,
+    rankingScore: roundTo(bettingExpertTipsterScore(tip), 4),
+    pick: tip.oneliner,
+    odds: tip.bet?.odds,
+    stake: tip.bet?.stake,
+    handicap: tip.bet?.handicap,
+    postedAt: tip.createdAt,
+    timeAgo: tip.timeAgo,
+    bookmakerOutcomeId: tip.bet?.outcomeId,
+    description: tip.description,
+    matchTitle: tip.matchTitle
+  };
+}
+
+async function fetchBettingExpertLeaderboard() {
+  const url = `${BETTINGEXPERT_BASE}/football/international/world-cup`;
+  const result = await timedFetchText(url, { timeoutMs: BETTINGEXPERT_FETCH_TIMEOUT_MS });
+  if (!result.ok || result.text.includes('id="__next_error__"')) {
+    return {
+      ok: false,
+      source: "BettingExpert",
+      sourceUrl: url,
+      updatedAt: new Date().toISOString(),
+      error: result.error || "BettingExpert World Cup leaderboard unavailable",
+      rows: []
+    };
+  }
+  const rows = parseBettingExpertWorldCupLeaderboard(result.text);
+  return {
+    ok: rows.length > 0,
+    source: "BettingExpert",
+    sourceUrl: url,
+    updatedAt: new Date().toISOString(),
+    latencyMs: result.latencyMs,
+    rows,
+    rowCount: rows.length,
+    error: rows.length ? undefined : "No public World Cup leaderboard rows parsed"
+  };
+}
+
+async function fetchBettingExpertForMatch(match, leaderboard = null) {
+  const urls = bettingExpertMatchUrls(match);
+  if (!urls.length) {
+    return {
+      ok: false,
+      status: "unavailable",
+      source: "BettingExpert",
+      error: "missing-team-slug",
+      url: "",
+      updatedAt: new Date().toISOString(),
+      topTipsters: []
+    };
+  }
+  const leaderboardRows = Array.isArray(leaderboard?.rows) ? leaderboard.rows : [];
+  const leaderboardByUser = new Map(leaderboardRows.map((row) => [String(row.userName || "").toLowerCase(), row]));
+  let lastError = "";
+  for (const url of urls) {
+    let result = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      result = await timedFetchText(url, { timeoutMs: BETTINGEXPERT_FETCH_TIMEOUT_MS });
+      if (!result.ok) {
+        lastError = result.error || "fetch failed";
+      } else if (result.text.includes('id="__next_error__"')) {
+        lastError = "BettingExpert page returned app error";
+      } else {
+        break;
+      }
+      if (attempt < 2) await wait(250);
+    }
+    if (!result?.ok || result.text.includes('id="__next_error__"')) continue;
+    const tips = parseBettingExpertTips(result.text);
+    const matchedTips = leaderboardRows.length
+      ? tips
+        .map((tip) => ({
+          ...tip,
+          leaderboard: leaderboardByUser.get(String(tip.user?.username || tip.user?.name || "").toLowerCase()) || null
+        }))
+        .filter((tip) => tip.leaderboard)
+      : [];
+    const topTipsters = matchedTips
+      .filter((tip) => tip?.user?.username && tip?.oneliner)
+      .sort((a, b) => (a.leaderboard?.rank || 999) - (b.leaderboard?.rank || 999))
+      .slice(0, BETTINGEXPERT_TIPSTER_LIMIT)
+      .map((tip, index) => normalizeBettingExpertTip(tip, index + 1));
+    return {
+      ok: true,
+      status: leaderboardRows.length ? (topTipsters.length ? "synced" : "no-leaderboard-hit") : "leaderboard-unavailable",
+      source: "BettingExpert",
+      sourceUrl: url,
+      url,
+      updatedAt: new Date().toISOString(),
+      fetchedAt: new Date().toISOString(),
+      latencyMs: result.latencyMs,
+      totalTips: tips.length,
+      leaderboardCount: leaderboardRows.length,
+      matchedTipCount: topTipsters.length,
+      rankingBasis: "Matched only public BettingExpert World Cup leaderboard users against this match page's public tips. If fewer than 20 leaderboard rows are exposed, the public limit is shown instead of inferred.",
+      rankingBasisZh: "只把 BettingExpert 世界杯榜单公开用户与本场公开 tips 匹配；公开榜单不足 20 人时显示真实抓到的人数，不推断。",
+      topTipsters
+    };
+  }
+  return {
+    ok: false,
+    status: "unavailable",
+    source: "BettingExpert",
+    sourceUrl: urls[0],
+    url: urls[0],
+    updatedAt: new Date().toISOString(),
+    error: lastError || "BettingExpert source unavailable",
+    rankingBasis: "BettingExpert source unavailable; no tipster rows were inferred.",
+    rankingBasisZh: "BettingExpert 数据源不可用；未推断任何用户判断。",
+    topTipsters: []
+  };
+}
+
+async function attachBettingExpertSignals(matches, { enabled = true } = {}) {
+  const targetMatches = (matches || []).slice(0, BETTINGEXPERT_MATCH_LIMIT);
+  if (!enabled || !targetMatches.length) {
+    for (const match of matches || []) {
+      match.bettingExpert = {
+        ok: false,
+        status: "disabled",
+        source: "BettingExpert",
+        updatedAt: new Date().toISOString(),
+        topTipsters: []
+      };
+    }
+    return {
+      ok: false,
+      source: "BettingExpert",
+      lastUpdated: new Date().toISOString(),
+      error: enabled ? "no matches" : "disabled",
+      matchedTipCount: 0
+    };
+  }
+  const leaderboard = await fetchBettingExpertLeaderboard();
+  const rows = await mapLimit(targetMatches, 2, (match) => fetchBettingExpertForMatch(match, leaderboard));
+  let matchedTipCount = 0;
+  for (let index = 0; index < targetMatches.length; index += 1) {
+    targetMatches[index].bettingExpert = rows[index];
+    matchedTipCount += rows[index]?.matchedTipCount || 0;
+  }
+  for (const match of (matches || []).slice(BETTINGEXPERT_MATCH_LIMIT)) {
+    match.bettingExpert = {
+      ok: false,
+      status: "skipped-limit",
+      source: "BettingExpert",
+      updatedAt: new Date().toISOString(),
+      error: `skipped after ${BETTINGEXPERT_MATCH_LIMIT} matches to keep dashboard refresh bounded`,
+      topTipsters: []
+    };
+  }
+  const okCount = rows.filter((row) => row?.ok).length;
+  return {
+    ok: okCount > 0,
+    source: "BettingExpert",
+    lastUpdated: new Date().toISOString(),
+    matchedTipCount,
+    matchCount: rows.length,
+    okMatchCount: okCount,
+    leaderboard,
+    leaderboardCount: leaderboard.rowCount || 0,
+    error: okCount ? undefined : (rows.find((row) => row?.error)?.error || "BettingExpert unavailable"),
+    detail: `${okCount}/${rows.length} matches synced · ${leaderboard.rowCount || 0} public World Cup leaderboard users · ${matchedTipCount} matched tips`
+  };
 }
 
 function teamNeedleGroup(event, side) {
@@ -7141,6 +7572,7 @@ async function buildDashboard({
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, trendSourceSchedule.matches || schedule.matches || [], finalResults);
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend);
   attachMarketCharts(matches, polymarket);
+  const bettingExpert = await attachBettingExpertSignals(matches, { enabled: true });
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
   if (!includeElite) {
     eliteTraders = mergeCachedEliteSignals(matches, polymarket, dashboardCache) || eliteTraders;
@@ -7215,6 +7647,13 @@ async function buildDashboard({
         error: eliteTraders.error || eliteTraders.marketPositions?.error,
         detail: eliteTraders.rankingBasis
       },
+      {
+        source: "BettingExpert 用户判断",
+        ok: bettingExpert.ok,
+        lastUpdated: bettingExpert.lastUpdated || "",
+        error: bettingExpert.error,
+        detail: bettingExpert.detail || "按单场页面公开 tips 排序，不伪造缺失胜率。"
+      },
       buildPolymarketSourceSummary(polymarket)
     ],
     teams: local.teams,
@@ -7248,6 +7687,7 @@ async function buildDashboard({
     tournamentTrend,
     schedule,
     matches,
+    bettingExpert,
     eliteTraders,
     polymarket
   };
