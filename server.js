@@ -1763,6 +1763,131 @@ function probabilityRows(match) {
   }));
 }
 
+function teamRankLabel(team, fallbackCode = "") {
+  const ranking = team?.worldRanking || {};
+  if (!ranking.rank) return `${team?.name || fallbackCode || "-"} 排名待补充`;
+  return `${team?.name || fallbackCode || "-"} FIFA 第 ${ranking.rank}`;
+}
+
+function aiPredictionFormEvidence(match, side) {
+  const record = recentRecordForSide(match, side);
+  const summary = record?.summary || {};
+  const team = sideNameForResult(match, side);
+  if (!summary.matches) return `${team} 近况样本未同步。`;
+  return `${team} 近 ${summary.matches} 场 ${summary.wins || 0}胜${summary.draws || 0}平${summary.losses || 0}负，进 ${summary.goalsFor || 0} / 失 ${summary.goalsAgainst || 0}。`;
+}
+
+function aiPredictionWorldCupEvidence(team, name) {
+  const record = team?.worldCupRecord;
+  if (!record || record.ok === false) return `${name} 世界杯正赛历史待补充。`;
+  const pieces = [];
+  if (record.appearances != null) pieces.push(`参赛 ${record.appearances} 次`);
+  if (record.matches != null && record.wins != null && record.draws != null && record.losses != null) {
+    pieces.push(`${record.matches} 场 ${record.wins}胜${record.draws}平${record.losses}负`);
+  }
+  if (record.bestFinish) pieces.push(`最佳 ${record.bestFinish}`);
+  return pieces.length ? `${name} 世界杯历史：${pieces.join("，")}。` : `${name} 世界杯正赛历史已同步。`;
+}
+
+function aiPredictionMarketRead(top, rows) {
+  if (!top || typeof top.marketPrice !== "number") {
+    return "对应胜平负实时价格缺失，盘口只作为概率展示，不给价格判断。";
+  }
+  if (typeof top.edge !== "number") {
+    return `${top.label} 价格 ${formatPercent(top.marketPrice)}，edge 暂不可算。`;
+  }
+  if (top.edge >= 0.035) {
+    return `市场价格支持模型方向：${top.label} 模型 ${formatPercent(top.probability)}，价格 ${formatPercent(top.marketPrice)}，edge ${formatPercent(top.edge)}。`;
+  }
+  if (top.edge > 0) {
+    return `市场略低估模型方向，但优势很薄：${top.label} edge ${formatPercent(top.edge)}。`;
+  }
+  const betterRows = rows.filter((row) => typeof row.edge === "number" && row.edge > 0).sort((a, b) => b.edge - a.edge);
+  if (betterRows.length) {
+    const best = betterRows[0];
+    return `模型最看好 ${top.label}，但当前价格不便宜（edge ${formatPercent(top.edge)}）；相对价格更友好的是 ${best.label}，edge ${formatPercent(best.edge)}。`;
+  }
+  return `模型最看好 ${top.label}，但当前胜平负价格没有明显正 edge。`;
+}
+
+function aiPredictionDataGaps(match) {
+  const gaps = [];
+  const context = match.context || {};
+  if (context.lineups?.status !== "confirmed") gaps.push("官方首发未确认，阵容变化会影响最终概率。");
+  const injuries = match.completeness?.components?.find((item) => item.label === "伤停");
+  if (injuries && injuries.status !== "synced") gaps.push("伤停信息未完全确认。");
+  const h2h = match.headToHead || context.headToHead;
+  if (h2h?.sourceStatus && h2h.sourceStatus !== "synced" && h2h.sourceStatus !== "verified") {
+    gaps.push("近四年交手未结构化为可审计比分，暂不加权。");
+  }
+  const liveMoneyline = (match.recommendations || []).filter((rec) => rec.marketType === "moneyline" && rec.chart?.source === "Polymarket").length;
+  if (!liveMoneyline) gaps.push("胜平负 Polymarket 曲线未完整匹配。");
+  return gaps.slice(0, 5);
+}
+
+function aiPredictionEvidence(match, top, rows) {
+  const evidence = [];
+  const drivers = [];
+  const context = match.context || {};
+  const homeRank = match.homeTeam?.worldRanking?.rank;
+  const awayRank = match.awayTeam?.worldRanking?.rank;
+  evidence.push({
+    label: "长期实力",
+    status: homeRank && awayRank ? "synced" : "partial",
+    detail: `${teamRankLabel(match.homeTeam, match.home)}；${teamRankLabel(match.awayTeam, match.away)}。`
+  });
+  evidence.push({
+    label: "近期战绩",
+    status: match.recentFormRecords?.home?.summary?.matches && match.recentFormRecords?.away?.summary?.matches ? "synced" : "partial",
+    detail: `${aiPredictionFormEvidence(match, "home")} ${aiPredictionFormEvidence(match, "away")}`
+  });
+  evidence.push({
+    label: "世界杯履历",
+    status: match.homeTeam?.worldCupRecord && match.awayTeam?.worldCupRecord ? "synced" : "partial",
+    detail: `${aiPredictionWorldCupEvidence(match.homeTeam, match.homeName)} ${aiPredictionWorldCupEvidence(match.awayTeam, match.awayName)}`
+  });
+  if (match.humanMatchup?.summary) {
+    evidence.push({
+      label: "阵容与人性化对位",
+      status: match.humanMatchup.ok ? "synced" : "partial",
+      detail: match.humanMatchup.summary
+    });
+    const strongInsights = (match.humanMatchup.insights || [])
+      .filter((item) => item.side && item.side !== "even")
+      .slice(0, 2)
+      .map((item) => `${item.label}：${item.zh || item.en}`);
+    drivers.push(...strongInsights);
+  }
+  if (context.weather?.summary) {
+    evidence.push({
+      label: "天气/场地",
+      status: "synced",
+      detail: context.weather.summary
+    });
+  }
+  if (match.tournamentTrend?.sampleSize) {
+    const rates = match.tournamentTrend.rates || {};
+    evidence.push({
+      label: "本届赛会趋势",
+      status: "synced",
+      detail: `样本 ${match.tournamentTrend.sampleSize} 场：BTTS ${formatPercent(rates.btts)}，大 2.5 ${formatPercent(rates.over25)}，平局 ${formatPercent(rates.draw)}。`
+    });
+    if (match.tournamentTrend.notes?.length) drivers.push(`赛会趋势：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
+  }
+  if (context.aiAnalysis?.modelImpacts?.length || match.dynamicModel?.modelImpacts?.length) {
+    const impacts = [...(context.aiAnalysis?.modelImpacts || []), ...(match.dynamicModel?.modelImpacts || [])]
+      .filter((impact) => impact?.label || impact?.reason)
+      .slice(0, 3);
+    drivers.push(...impacts.map((impact) => `${impact.label || "动态调整"}：${impact.reason || ""}`.trim()));
+  }
+  return {
+    evidence: evidence.slice(0, 6),
+    drivers: [...new Set(drivers.filter(Boolean))].slice(0, 5),
+    marketRead: aiPredictionMarketRead(top, rows),
+    dataGaps: aiPredictionDataGaps(match)
+  };
+}
+
 function buildAiPrediction(match) {
   const rows = probabilityRows(match).sort((a, b) => b.probability - a.probability);
   const top = rows[0];
@@ -1798,6 +1923,7 @@ function buildAiPrediction(match) {
     const eliteText = eliteRows.slice(0, 2).map((row) => `${row.name} 有 ${row.count} 个高手持仓，当前约 ${Math.round(row.totalCurrentValue).toLocaleString()} 美元`).join("；");
     reasons.push(`高手持仓信号：${eliteText}。`);
   }
+  const structured = aiPredictionEvidence(match, top, rows);
 
   const lineupConfirmed = context.lineups?.status === "confirmed";
   const confidence = lineupConfirmed && match.completeness?.confidence === "high"
@@ -1830,6 +1956,10 @@ function buildAiPrediction(match) {
       decisionLabel: rec.decision?.label || ""
     })),
     eliteSignals: eliteRows,
+    evidence: structured.evidence,
+    modelDrivers: structured.drivers,
+    marketRead: structured.marketRead,
+    dataGaps: structured.dataGaps,
     reasons: reasons.slice(0, 5),
     riskFlags: riskFlags.slice(0, 5),
     updatedAt: context.aiAnalysis?.updatedAt || context.updatedAt || new Date().toISOString()

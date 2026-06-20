@@ -713,6 +713,42 @@
         line-height: 1.45;
       }
 
+      .prediction-evidence-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .prediction-evidence-card {
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .prediction-evidence-card strong {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+        color: var(--ink);
+        font-size: 12px;
+      }
+
+      .prediction-evidence-card span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .prediction-evidence-status {
+        color: var(--green);
+        font-size: 11px;
+        font-weight: 760;
+      }
+
       .trend-panel {
         margin-top: 12px;
         padding: 12px;
@@ -3724,6 +3760,14 @@
           ? `限制：${prediction.restrictions.join("、")}`
           : "无关键限制，按 edge 和价格纪律判断。";
         const reasons = (prediction.reasons || []).slice(0, 3);
+        const evidence = Array.isArray(prediction.evidence) ? prediction.evidence : [];
+        const drivers = Array.isArray(prediction.modelDrivers) ? prediction.modelDrivers : [];
+        const dataGaps = Array.isArray(prediction.dataGaps) ? prediction.dataGaps : [];
+        const statusText = (status) => ({
+          synced: currentLang === "en" ? "synced" : "已同步",
+          partial: currentLang === "en" ? "partial" : "部分",
+          missing: currentLang === "en" ? "missing" : "缺失"
+        })[status] || (currentLang === "en" ? "review" : "待核验");
         return `
           <section class="confidence-panel">
             <div class="mode-card">
@@ -3744,7 +3788,20 @@
                   </div>
                 `).join("")}
               </div>
-              ${reasons.length ? `<ul class="prediction-reasons">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}
+              ${prediction.marketRead ? `<div class="form-summary">${escapeHtml(prediction.marketRead)}</div>` : ""}
+              ${evidence.length ? `
+                <div class="prediction-evidence-grid">
+                  ${evidence.map((item) => `
+                    <div class="prediction-evidence-card">
+                      <strong>${escapeHtml(item.label || "-")}<em class="prediction-evidence-status">${escapeHtml(statusText(item.status))}</em></strong>
+                      <span>${escapeHtml(item.detail || "")}</span>
+                    </div>
+                  `).join("")}
+                </div>
+              ` : ""}
+              ${drivers.length ? `<ul class="prediction-reasons">${drivers.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}
+              ${dataGaps.length ? `<ul class="prediction-reasons">${dataGaps.slice(0, 4).map((gap) => `<li>${escapeHtml(currentLang === "en" ? "Data gap: " : "数据缺口：")}${escapeHtml(gap)}</li>`).join("")}</ul>` : ""}
+              ${!evidence.length && reasons.length ? `<ul class="prediction-reasons">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}
             </div>
           </section>
         `;
