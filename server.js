@@ -2,7 +2,7 @@ const http = require("http");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
-const { recordDashboardSnapshot, recordMatchResult, ensureHistorySchema, historyDbPath, runSql } = require("./scripts/history-store");
+const { recordDashboardSnapshot, recordMatchResult, recordLiveMatchSnapshot, ensureHistorySchema, historyDbPath, runSql } = require("./scripts/history-store");
 
 const PORT = Number(process.env.PORT || 4173);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || "");
@@ -34,6 +34,9 @@ const OPPORTUNITY_MAX_ITEMS = Number(process.env.OPPORTUNITY_MAX_ITEMS || 8);
 const OPPORTUNITY_OBSERVATION_MAX_ITEMS = Number(process.env.OPPORTUNITY_OBSERVATION_MAX_ITEMS || 10);
 const OPPORTUNITY_REVIEW_LIMIT = Number(process.env.OPPORTUNITY_REVIEW_LIMIT || 40);
 const OPPORTUNITY_REVIEW_SCHEMA_CHECK = process.env.OPPORTUNITY_REVIEW_SCHEMA_CHECK === "1";
+const LIVE_MATCH_FETCH_TIMEOUT_MS = Number(process.env.LIVE_MATCH_FETCH_TIMEOUT_MS || 5500);
+const LIVE_MATCH_PERSIST_ENABLED = process.env.LIVE_MATCH_PERSIST_ENABLED !== "0";
+const ESPN_WORLDCUP_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary";
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
@@ -2615,6 +2618,467 @@ function buildOpportunityPriceCheck(match, rec, request = {}) {
   };
 }
 
+function eventStatusTypeFromSummary(summary) {
+  return summary?.header?.competitions?.[0]?.status?.type || summary?.header?.status?.type || {};
+}
+
+function eventCompetitorsFromSummary(summary) {
+  return summary?.header?.competitions?.[0]?.competitors || [];
+}
+
+function canonicalTeamValue(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function teamMatchNeedles(match, side) {
+  const code = side === "home" ? match.home : match.away;
+  const displayName = side === "home" ? match.homeName : match.awayName;
+  const englishName = side === "home" ? match.homeEnglishName : match.awayEnglishName;
+  return [
+    code,
+    displayName,
+    englishName,
+    TEAM_SEARCH_NAMES[code],
+    TEAM_DISPLAY_NAMES_ZH[code],
+    ...teamNameVariants(code, displayName)
+  ].filter(Boolean).map(canonicalTeamValue).filter(Boolean);
+}
+
+function summaryCompetitorForMatch(summary, match, side) {
+  const competitors = eventCompetitorsFromSummary(summary);
+  const needles = teamMatchNeedles(match, side);
+  return competitors.find((competitor) => {
+    const values = [
+      competitor.team?.abbreviation,
+      competitor.team?.displayName,
+      competitor.team?.name,
+      competitor.team?.shortDisplayName
+    ].map(canonicalTeamValue).filter(Boolean);
+    return values.some((value) => needles.includes(value) || needles.some((needle) => value.includes(needle) || needle.includes(value)));
+  }) || null;
+}
+
+function boxscoreTeamForMatch(summary, match, side) {
+  const teams = summary?.boxscore?.teams || [];
+  const needles = teamMatchNeedles(match, side);
+  return teams.find((team) => {
+    const values = [
+      team.team?.abbreviation,
+      team.team?.displayName,
+      team.team?.name,
+      team.team?.shortDisplayName
+    ].map(canonicalTeamValue).filter(Boolean);
+    return values.some((value) => needles.includes(value) || needles.some((needle) => value.includes(needle) || needle.includes(value)));
+  }) || null;
+}
+
+function statValue(boxTeam, names) {
+  const stats = Array.isArray(boxTeam?.statistics) ? boxTeam.statistics : [];
+  for (const name of names) {
+    const row = stats.find((item) => item.name === name || item.abbreviation === name || item.label === name);
+    if (!row) continue;
+    const value = Number(row.value ?? row.displayValue);
+    if (Number.isFinite(value)) return value;
+    const parsed = Number(String(row.displayValue || "").replace(/[^0-9.-]/g, ""));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function isActualNumber(value) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+}
+
+function normalizeLiveStats(summary, match) {
+  const homeBox = boxscoreTeamForMatch(summary, match, "home");
+  const awayBox = boxscoreTeamForMatch(summary, match, "away");
+  const read = (team) => ({
+    shots: statValue(team, ["totalShots"]),
+    shotsOnTarget: statValue(team, ["shotsOnTarget"]),
+    corners: statValue(team, ["wonCorners"]),
+    possession: statValue(team, ["possessionPct"]),
+    redCards: statValue(team, ["redCards"]),
+    yellowCards: statValue(team, ["yellowCards"]),
+    saves: statValue(team, ["saves"]),
+    fouls: statValue(team, ["foulsCommitted"]),
+    accuratePasses: statValue(team, ["accuratePasses"]),
+    totalPasses: statValue(team, ["totalPasses"])
+  });
+  return {
+    home: read(homeBox),
+    away: read(awayBox),
+    hasTeamStats: Boolean(homeBox && awayBox),
+    sourceStatus: homeBox && awayBox ? "synced" : "score-only"
+  };
+}
+
+function normalizeLiveEvent(summary, match) {
+  const status = eventStatusTypeFromSummary(summary);
+  const homeCompetitor = summaryCompetitorForMatch(summary, match, "home");
+  const awayCompetitor = summaryCompetitorForMatch(summary, match, "away");
+  const homeScore = Number(homeCompetitor?.score);
+  const awayScore = Number(awayCompetitor?.score);
+  return {
+    source: "ESPN FIFA World Cup summary",
+    sourceUrl: `${ESPN_WORLDCUP_SUMMARY}?event=${encodeURIComponent(match.scheduleId || "")}`,
+    status: status.name || status.description || "",
+    statusDetail: status.detail || status.shortDetail || status.description || "",
+    state: status.state || "",
+    completed: Boolean(status.completed) || isFinishedStatus(status.name || status.description || status.state),
+    inProgress: isInProgressStatus(status.name || status.description || status.state),
+    minute: status.shortDetail || status.detail || "",
+    score: {
+      home: Number.isFinite(homeScore) ? homeScore : null,
+      away: Number.isFinite(awayScore) ? awayScore : null
+    },
+    stats: normalizeLiveStats(summary, match),
+    venue: summary?.gameInfo?.venue?.fullName || summary?.header?.competitions?.[0]?.venue?.fullName || match.venue,
+    lastUpdated: new Date().toISOString()
+  };
+}
+
+function elapsedMinuteFromLive(live, match) {
+  if (live && !live.inProgress && !live.completed) return 0;
+  const detail = String(live?.minute || live?.statusDetail || "");
+  const parsed = Number(detail.match(/(\d{1,3})/)?.[1]);
+  if (Number.isFinite(parsed)) return clamp(parsed, 0, 130);
+  if (live?.completed) return 90;
+  const kickoffMs = dateMs(match?.kickoffShanghai || match?.kickoffLocal);
+  if (!kickoffMs) return 0;
+  return clamp(Math.floor((Date.now() - kickoffMs) / 60000), 0, 130);
+}
+
+function hasUsefulLiveStats(stats) {
+  return Boolean(stats?.hasTeamStats)
+    && [stats.home?.shots, stats.away?.shots, stats.home?.shotsOnTarget, stats.away?.shotsOnTarget].some(isActualNumber);
+}
+
+function statDiff(homeValue, awayValue) {
+  if (!isActualNumber(homeValue) || !isActualNumber(awayValue)) return 0;
+  const home = Number(homeValue);
+  const away = Number(awayValue);
+  return home - away;
+}
+
+function liveMomentumScore(live) {
+  const stats = live?.stats || {};
+  if (!hasUsefulLiveStats(stats)) return { home: 0, away: 0, notes: ["现场技术统计未同步，只使用比分时间模型。"] };
+  const shotDiff = statDiff(stats.home.shots, stats.away.shots);
+  const sotDiff = statDiff(stats.home.shotsOnTarget, stats.away.shotsOnTarget);
+  const cornerDiff = statDiff(stats.home.corners, stats.away.corners);
+  const possessionDiff = statDiff(stats.home.possession, stats.away.possession);
+  const redCardDiff = statDiff(stats.home.redCards, stats.away.redCards);
+  const raw = shotDiff * 0.012 + sotDiff * 0.026 + cornerDiff * 0.008 + possessionDiff * 0.0015 - redCardDiff * 0.08;
+  const home = clamp(raw, -0.18, 0.18);
+  const notes = [
+    `射门 ${stats.home.shots ?? "-"}-${stats.away.shots ?? "-"}，射正 ${stats.home.shotsOnTarget ?? "-"}-${stats.away.shotsOnTarget ?? "-"}。`,
+    `角球 ${stats.home.corners ?? "-"}-${stats.away.corners ?? "-"}，控球 ${stats.home.possession ?? "-"}%-${stats.away.possession ?? "-"}%。`,
+    redCardDiff ? `红牌差 ${stats.home.redCards ?? 0}-${stats.away.redCards ?? 0}，模型对少打一方降权。` : ""
+  ].filter(Boolean);
+  return {
+    home,
+    away: -home,
+    notes
+  };
+}
+
+function applyLiveTripletShift(base, shifts) {
+  return normalizeProbabilityTriplet({
+    home: base.home + (shifts.home || 0),
+    draw: base.draw + (shifts.draw || 0),
+    away: base.away + (shifts.away || 0)
+  });
+}
+
+function liveProbabilityModel(match, live) {
+  const base = match.probabilities || { home: 0.33, draw: 0.34, away: 0.33, over25: 0.5, under25: 0.5, btts: 0.5 };
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0, 1);
+  const homeScore = Number(live?.score?.home);
+  const awayScore = Number(live?.score?.away);
+  const hasScore = Number.isFinite(homeScore) && Number.isFinite(awayScore);
+  const goalDiff = hasScore ? homeScore - awayScore : 0;
+  const totalGoals = hasScore ? homeScore + awayScore : 0;
+  const momentum = liveMomentumScore(live);
+  const statsReady = hasUsefulLiveStats(live?.stats);
+  const shifts = { home: 0, draw: 0, away: 0 };
+  const notes = [];
+
+  if (hasScore) {
+    const scoreWeight = clamp((1 - remaining) * 0.62 + Math.min(Math.abs(goalDiff), 3) * 0.09, 0.08, 0.78);
+    if (goalDiff > 0) {
+      shifts.home += scoreWeight;
+      shifts.draw -= scoreWeight * 0.45;
+      shifts.away -= scoreWeight * 0.55;
+      notes.push(`${elapsed || "进行中"}' ${match.homeName} 领先 ${goalDiff} 球，胜平负向领先方修正。`);
+    } else if (goalDiff < 0) {
+      shifts.away += scoreWeight;
+      shifts.draw -= scoreWeight * 0.45;
+      shifts.home -= scoreWeight * 0.55;
+      notes.push(`${elapsed || "进行中"}' ${match.awayName} 领先 ${Math.abs(goalDiff)} 球，胜平负向领先方修正。`);
+    } else if (elapsed >= 55) {
+      const drawBoost = clamp((elapsed - 50) / 45 * 0.2, 0.02, 0.2);
+      shifts.draw += drawBoost;
+      shifts.home -= drawBoost / 2;
+      shifts.away -= drawBoost / 2;
+      notes.push(`${elapsed}' 仍为平局，平局权重上修。`);
+    }
+  }
+
+  shifts.home += momentum.home * clamp(0.55 + remaining * 0.45, 0.45, 1);
+  shifts.away += momentum.away * clamp(0.55 + remaining * 0.45, 0.45, 1);
+  notes.push(...momentum.notes);
+
+  const triplet = applyLiveTripletShift(base, shifts);
+  const tempo = statsReady
+    ? clamp(((Number(live.stats.home.shots) || 0) + (Number(live.stats.away.shots) || 0)) / Math.max(1, elapsed || 1), 0, 0.42)
+    : 0;
+  const sotTempo = statsReady
+    ? clamp(((Number(live.stats.home.shotsOnTarget) || 0) + (Number(live.stats.away.shotsOnTarget) || 0)) / Math.max(1, elapsed || 1), 0, 0.16)
+    : 0;
+  let over25 = typeof base.over25 === "number" ? base.over25 : 0.5;
+  if (hasScore) {
+    if (totalGoals >= 3) over25 = 0.99;
+    else if (totalGoals === 2) over25 = clamp(0.34 + remaining * 0.52 + tempo * 0.55 + sotTempo * 1.3, 0.08, 0.92);
+    else if (totalGoals === 1) over25 = clamp(0.14 + remaining * 0.47 + tempo * 0.5 + sotTempo * 1.1, 0.05, 0.76);
+    else over25 = clamp(remaining * 0.34 + tempo * 0.45 + sotTempo * 1.0, 0.03, 0.58);
+  }
+  let btts = typeof base.btts === "number" ? base.btts : 0.5;
+  if (hasScore) {
+    if (homeScore > 0 && awayScore > 0) btts = 0.99;
+    else {
+      const nilSide = homeScore === 0 ? "home" : "away";
+      const nilStats = live.stats?.[nilSide] || {};
+      const nilSot = Number(nilStats.shotsOnTarget);
+      const nilShots = Number(nilStats.shots);
+      const chaseBoost = Math.abs(goalDiff) >= 1 && remaining > 0.15 ? 0.07 : 0;
+      btts = clamp(0.08 + remaining * 0.42 + (Number.isFinite(nilShots) ? nilShots * 0.012 : 0) + (Number.isFinite(nilSot) ? nilSot * 0.055 : 0) + chaseBoost, 0.02, 0.82);
+      if (statsReady && (nilSot || 0) === 0 && elapsed >= 55) {
+        btts = Math.max(0.02, btts - 0.12);
+        notes.push(`未进球一方 ${elapsed}' 后仍 0 射正，BTTS Yes 降权。`);
+      }
+    }
+  }
+
+  return {
+    ...triplet,
+    over25,
+    under25: 1 - over25,
+    btts,
+    elapsedMinute: elapsed,
+    scoreKnown: hasScore,
+    statsReady,
+    notes: [...new Set(notes)].slice(0, 6)
+  };
+}
+
+function liveProbabilityForRecommendation(rec, liveModel) {
+  if (rec.key === "home") return liveModel.home;
+  if (rec.key === "draw") return liveModel.draw;
+  if (rec.key === "away") return liveModel.away;
+  if (rec.key === "over25") return liveModel.over25;
+  if (rec.key === "under25") return liveModel.under25;
+  if (rec.key === "bttsYes") return liveModel.btts;
+  if (rec.key === "bttsNo") return 1 - liveModel.btts;
+  if (rec.marketType === "handicap") {
+    const base = Number(rec.modelProbability);
+    const teamShift = rec.key.endsWith("-home") ? liveModel.home - (rec._baseHome || 0) : liveModel.away - (rec._baseAway || 0);
+    return clamp((Number.isFinite(base) ? base : 0.5) + teamShift * 0.75, 0.01, 0.99);
+  }
+  return rec.modelProbability;
+}
+
+function liveActionFor(edgeValue, rec, dataQuality) {
+  if (typeof rec.marketPrice !== "number") return { action: "wait", label: "等待价格", canConsider: false };
+  if (dataQuality.status === "post") return { action: "avoid", label: "已完赛复盘", canConsider: false };
+  if (dataQuality.status === "missing" || dataQuality.status === "pre") return { action: "wait", label: "等待现场数据", canConsider: false };
+  if (dataQuality.status === "score-only") return { action: edgeValue >= 0.07 ? "watch" : "wait", label: "比分模型观察", canConsider: false };
+  if (edgeValue >= 0.09) return { action: "watch", label: "可按纪律观察", canConsider: true };
+  if (edgeValue >= 0.055) return { action: "watch", label: "小仓观察", canConsider: true };
+  if (edgeValue <= -0.035) return { action: "avoid", label: "回避", canConsider: false };
+  return { action: "wait", label: "等待更好价格", canConsider: false };
+}
+
+function buildLiveRecommendations(match, live, liveModel, dataQuality) {
+  if (dataQuality.status === "pre" || dataQuality.status === "missing") return [];
+  const baseHome = Number(match.probabilities?.home) || 0;
+  const baseAway = Number(match.probabilities?.away) || 0;
+  return (match.recommendations || [])
+    .map((rec) => {
+      const decoratedRec = { ...rec, _baseHome: baseHome, _baseAway: baseAway };
+      const liveProbability = liveProbabilityForRecommendation(decoratedRec, liveModel);
+      const liveEdge = edge(liveProbability, rec.marketPrice);
+      const maxBuyPrice = fairBuyPrice(liveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
+      const action = liveActionFor(liveEdge, rec, dataQuality);
+      const hasLiveMarket = rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number";
+      const risks = [
+        dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
+        !hasLiveMarket ? "当前盘口不是 Polymarket 实时价，价格建议降级。" : "",
+        live.completed ? "比赛已结束或进入赛后状态，只用于复盘，不建议入场。" : "",
+        rec.reviewDiscipline?.reasons?.[0] || ""
+      ].filter(Boolean);
+      return {
+        key: rec.key,
+        marketType: rec.marketType,
+        marketTypeLabel: rec.marketTypeLabel,
+        name: rec.name,
+        liveProbability,
+        baseProbability: rec.modelProbability,
+        marketPrice: rec.marketPrice,
+        edge: liveEdge,
+        maxBuyPrice,
+        action: live.completed ? "avoid" : action.action,
+        label: live.completed ? "已完赛复盘" : action.label,
+        canConsider: !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        source: rec.chart?.source || "",
+        chart: rec.chart ? {
+          source: rec.chart.source,
+          currentPrice: rec.chart.currentPrice,
+          marketQuestion: rec.chart.marketQuestion,
+          marketSlug: rec.chart.marketSlug
+        } : null,
+        risks
+      };
+    })
+    .filter((rec) => typeof rec.liveProbability === "number" && typeof rec.marketPrice === "number")
+    .sort((a, b) => {
+      const actionScore = Number(b.canConsider) - Number(a.canConsider);
+      if (actionScore) return actionScore;
+      return (b.edge ?? -9) - (a.edge ?? -9);
+    })
+    .slice(0, 8);
+}
+
+function buildLiveDataQuality(live) {
+  if (!live) return { status: "missing", label: "现场源不可用", reasons: ["ESPN summary 未返回。"] };
+  if (live.completed) return { status: "post", label: "已完赛", reasons: ["比赛已结束，实时买点只用于复盘。"] };
+  if (!live.inProgress) return { status: "pre", label: "未开赛", reasons: ["比赛尚未进入 live 状态，实时买点等待开赛后刷新。"] };
+  if (hasUsefulLiveStats(live.stats)) return { status: "synced", label: "现场统计已同步", reasons: ["比分、射门、射正、角球和控球可用。"] };
+  if (live.score?.home != null && live.score?.away != null) return { status: "score-only", label: "仅比分可用", reasons: ["现场技术统计未同步，推荐降级。"] };
+  return { status: "missing", label: "现场数据缺失", reasons: ["比分和技术统计均不可用。"] };
+}
+
+function buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel) {
+  if (dataQuality.status === "pre") {
+    return {
+      action: "wait",
+      title: "等待开赛后实时复核",
+      summary: "比赛尚未进入 live 状态；开赛后会用比分、射门、射正、角球、控球和当前价重新排序盘口。",
+      reasons: dataQuality.reasons || []
+    };
+  }
+  if (dataQuality.status === "missing") {
+    return {
+      action: "wait",
+      title: "等待现场数据",
+      summary: "实时源暂未返回可用比分或技术统计；不显示入场建议。",
+      reasons: dataQuality.reasons || []
+    };
+  }
+  const top = recommendations?.[0];
+  if (!top) {
+    return {
+      action: "wait",
+      title: "等待实时数据",
+      summary: "当前没有可用价格或现场统计，先不做实时买点判断。",
+      reasons: dataQuality.reasons || []
+    };
+  }
+  const priceText = formatCents(top.marketPrice);
+  const maxText = formatCents(top.maxBuyPrice);
+  const action = top.canConsider ? "watch" : top.action || "wait";
+  return {
+    action,
+    title: top.canConsider ? `实时首选观察：${top.name}` : `实时观察：${top.name}`,
+    summary: `${top.name} 当前 ${priceText}，实时模型 ${formatPercent(top.liveProbability)}，edge ${formatPercent(top.edge)}，建议上限 ${maxText}。`,
+    reasons: [
+      ...(liveModel.notes || []).slice(0, 3),
+      ...(top.risks || []).slice(0, 2)
+    ].filter(Boolean).slice(0, 5)
+  };
+}
+
+function dashboardMatchByIdOrSchedule(dashboard, matchId) {
+  const aliases = matchIdAliases(matchId);
+  return (dashboard?.matches || []).find((match) =>
+    aliases.includes(match.id)
+    || aliases.includes(match.scheduleId)
+    || matchIdAliases(match.scheduleId).some((alias) => aliases.includes(alias))
+  ) || null;
+}
+
+async function buildLiveMatchInsight(matchId, { force = false, persist = true } = {}) {
+  let dashboard = await getPersistedLightCache();
+  if (!dashboard?.matches?.length) {
+    dashboard = await buildDashboard({
+      force: false,
+      recordHistory: false,
+      includeElite: false,
+      includeOpenAi: false,
+      light: true,
+      background: true
+    });
+  } else if (force || payloadCacheAgeMs(dashboard) > LIGHT_CACHE_TTL_MS) {
+    scheduleBackgroundLightRefresh();
+  }
+  const match = dashboardMatchByIdOrSchedule(dashboard, matchId);
+  if (!match) {
+    return {
+      ok: false,
+      error: "未找到这场比赛",
+      matchId
+    };
+  }
+  const scheduleId = match.scheduleId || String(match.id || matchId || "").match(/^schedule-(\d+)$/)?.[1] || "";
+  if (!scheduleId) {
+    return {
+      ok: false,
+      error: "这场比赛缺少 ESPN schedule id，无法查询实时 summary。",
+      matchId: match.id
+    };
+  }
+  match.scheduleId = scheduleId;
+  const url = `${ESPN_WORLDCUP_SUMMARY}?event=${encodeURIComponent(scheduleId)}`;
+  const summaryResult = await timedFetchJson(url, { timeoutMs: LIVE_MATCH_FETCH_TIMEOUT_MS });
+  if (!summaryResult.ok) {
+    return {
+      ok: false,
+      matchId: match.id,
+      scheduleId: match.scheduleId,
+      source: "ESPN FIFA World Cup summary",
+      error: translateError(summaryResult.error),
+      capturedAt: new Date().toISOString()
+    };
+  }
+  const live = normalizeLiveEvent(summaryResult.data, match);
+  const dataQuality = buildLiveDataQuality(live);
+  const liveModel = liveProbabilityModel(match, live);
+  const recommendations = buildLiveRecommendations(match, live, liveModel, dataQuality);
+  const payload = {
+    ok: true,
+    matchId: match.id,
+    scheduleId: match.scheduleId,
+    matchName: `${match.homeName} vs ${match.awayName}`,
+    homeName: match.homeName,
+    awayName: match.awayName,
+    kickoffShanghai: match.kickoffShanghai,
+    source: live.source,
+    capturedAt: new Date().toISOString(),
+    dataQuality,
+    live,
+    liveModel,
+    recommendations,
+    recommendationSummary: buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel),
+    disclaimer: "实时买点是研究辅助，不自动下单；数据不足、价格缺失或比赛已结束时必须降级。"
+  };
+  if (persist && LIVE_MATCH_PERSIST_ENABLED) {
+    recordLiveMatchSnapshot(payload).catch((error) => {
+      console.error(`Failed to record live match snapshot: ${error.message}`);
+    });
+  }
+  return payload;
+}
+
 async function checkOpportunityCurrentPrice(params = {}) {
   const matchId = String(params.matchId || "").trim();
   const marketKey = String(params.marketKey || "").trim();
@@ -4214,6 +4678,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   const venue = venueLabel(event.venue);
   const baseMatch = {
     id,
+    scheduleId: event.scheduleId || "",
     autoBaseline: true,
     scheduleStatus: event.status || "STATUS_SCHEDULED",
     scheduleStatusDetail: event.statusDetail || "Scheduled",
@@ -4296,6 +4761,10 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
+  for (const match of visibleModeled) {
+    const scheduleEvent = scheduleByKey.get(matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName));
+    attachScheduleEventToMatch(match, scheduleEvent);
+  }
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
     .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, nowMs))
@@ -4323,6 +4792,18 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   };
 }
 
+function attachScheduleEventToMatch(match, scheduleEvent) {
+  if (!match || !scheduleEvent) return match;
+  match.scheduleId = scheduleEvent.scheduleId || match.scheduleId || "";
+  match.scheduleStatus = scheduleEvent.status || match.scheduleStatus || "";
+  match.scheduleStatusDetail = scheduleEvent.statusDetail || match.scheduleStatusDetail || "";
+  match.scheduleSource = scheduleEvent.source || match.scheduleSource || "";
+  if (Number.isFinite(Number(scheduleEvent.homeScore))) match.scheduleHomeScore = Number(scheduleEvent.homeScore);
+  if (Number.isFinite(Number(scheduleEvent.awayScore))) match.scheduleAwayScore = Number(scheduleEvent.awayScore);
+  match.venueInfo = match.venueInfo || scheduleEvent.venue || {};
+  return match;
+}
+
 function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}, tournamentTrend = null) {
   const homeTeam = attachStaticProfiles(teams[match.home], match.home, worldCupRecords, squadProfiles);
   const awayTeam = attachStaticProfiles(teams[match.away], match.away, worldCupRecords, squadProfiles);
@@ -4334,6 +4815,8 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
     ...mergedMatch,
     homeName: homeTeam.name,
     awayName: awayTeam.name,
+    homeEnglishName: TEAM_SEARCH_NAMES[match.home] || homeTeam.englishName || homeTeam.name,
+    awayEnglishName: TEAM_SEARCH_NAMES[match.away] || awayTeam.englishName || awayTeam.name,
     homeTeam,
     awayTeam,
     headToHead: matchContext.headToHead || mergedMatch.headToHead,
@@ -8446,6 +8929,14 @@ const server = http.createServer(async (req, res) => {
       const force = url.searchParams.get("force") === "1";
       const payload = await buildEliteMonitor({ force });
       jsonResponse(res, 200, payload);
+      return;
+    }
+    if (pathname === "/api/live/match") {
+      const force = url.searchParams.get("force") === "1";
+      const persist = url.searchParams.get("persist") !== "0";
+      const matchId = url.searchParams.get("matchId") || url.searchParams.get("id") || "";
+      const payload = await buildLiveMatchInsight(matchId, { force, persist });
+      jsonResponse(res, payload.ok === false ? 422 : 200, payload);
       return;
     }
     if (pathname === "/api/health") {

@@ -1132,6 +1132,163 @@
         font-weight: 650;
       }
 
+      .live-panel {
+        display: grid;
+        gap: 12px;
+      }
+
+      .live-panel-head,
+      .live-summary-card,
+      .live-market-row,
+      .live-stats-grid {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .live-panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      .live-score {
+        font-size: 22px;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      .live-state {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .live-refresh {
+        min-height: 30px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .live-refresh:disabled {
+        cursor: wait;
+        opacity: 0.62;
+      }
+
+      .live-summary-card {
+        padding: 12px;
+      }
+
+      .live-summary-title {
+        font-size: 16px;
+        font-weight: 850;
+      }
+
+      .live-summary-body {
+        margin-top: 6px;
+        color: var(--ink);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .live-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .live-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 7px;
+        border-radius: 6px;
+        background: #edf0ef;
+        color: #59645f;
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .live-chip.good {
+        background: #e2f3ec;
+        color: var(--green);
+      }
+
+      .live-chip.warn {
+        background: #f7ead1;
+        color: #8a5a0a;
+      }
+
+      .live-chip.bad {
+        background: #fff4f2;
+        color: #a33a33;
+      }
+
+      .live-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0;
+        overflow: hidden;
+      }
+
+      .live-stat {
+        display: grid;
+        gap: 4px;
+        padding: 10px;
+        border-right: 1px solid #edf0ec;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .live-stat:nth-child(4n) {
+        border-right: 0;
+      }
+
+      .live-stat strong {
+        color: var(--ink);
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .live-market-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .live-market-row {
+        display: grid;
+        grid-template-columns: minmax(160px, 1.3fr) repeat(4, minmax(78px, 0.7fr));
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .live-market-row strong {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .live-market-row span {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .live-market-action {
+        justify-self: end;
+      }
+
       .static-grid {
         display: grid;
         grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
@@ -2111,11 +2268,24 @@
         .line-profile-grid,
         .form-grid,
         .bettingexpert-row,
+        .live-stats-grid,
         .lineup-box,
         .framework-grid,
         .elite-summary-grid,
         .completeness-grid {
           grid-template-columns: 1fr;
+        }
+
+        .live-market-row {
+          grid-template-columns: 1fr;
+        }
+
+        .live-panel-head {
+          flex-direction: column;
+        }
+
+        .live-market-action {
+          justify-self: start;
         }
 
         h1 {
@@ -2544,6 +2714,8 @@
       let opportunityReviewLoading = false;
       let opportunityElitesLoading = false;
       const opportunityChecks = new Map();
+      const liveMatchStates = new Map();
+      const liveMatchLoading = new Set();
 
       function translateText(text) {
         if (currentLang !== "en" || !text) return text;
@@ -3995,6 +4167,122 @@
         `;
       }
 
+      function liveDataQualityClass(status) {
+        if (status === "synced") return "good";
+        if (status === "post" || status === "missing") return "bad";
+        return "warn";
+      }
+
+      function liveActionClass(action) {
+        if (action === "watch") return "good";
+        if (action === "avoid") return "bad";
+        return "warn";
+      }
+
+      function fmtLiveStatPair(homeValue, awayValue, suffix = "") {
+        const format = (value) => value === null || value === undefined || Number.isNaN(Number(value))
+          ? "-"
+          : `${Number(value).toFixed(suffix === "%" ? 1 : 0)}${suffix}`;
+        return `${format(homeValue)} / ${format(awayValue)}`;
+      }
+
+      function renderLivePlaceholder(match) {
+        return `
+          <div class="live-panel" data-live-match="${escapeHtml(match.id)}">
+            <div class="live-panel-head">
+              <div>
+                <div class="live-score">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</div>
+                <div class="live-state">${escapeHtml(currentLang === "en" ? "Open this tab to fetch live score, match stats and current prices." : "打开此 Tab 会拉取现场比分、攻防统计和当前盘口。")}</div>
+              </div>
+              <button class="live-refresh" type="button" data-live-refresh="${escapeHtml(match.id)}">${escapeHtml(currentLang === "en" ? "Refresh live" : "刷新现场")}</button>
+            </div>
+            <div class="live-summary-card">
+              <div class="live-summary-title">${escapeHtml(currentLang === "en" ? "Waiting for live check" : "等待实时复核")}</div>
+              <div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No in-play recommendation is shown until the live source returns score, stats and a current market price." : "实时源返回比分、技术统计和当前价之前，不显示入场建议。")}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderLiveInsightPayload(payload, matchId) {
+        if (!payload || payload.loading) {
+          return `
+            <div class="live-panel" data-live-match="${escapeHtml(matchId)}">
+              <div class="live-summary-card"><div class="live-summary-title">${escapeHtml(currentLang === "en" ? "Refreshing live data..." : "正在刷新现场数据...")}</div></div>
+            </div>
+          `;
+        }
+        if (payload.error || payload.ok === false) {
+          return `
+            <div class="live-panel" data-live-match="${escapeHtml(matchId)}">
+              <div class="live-summary-card"><div class="live-summary-title">${escapeHtml(currentLang === "en" ? "Live source unavailable" : "实时源不可用")}</div><div class="live-summary-body">${escapeHtml(payload.error || "-")}</div></div>
+              <button class="live-refresh" type="button" data-live-refresh="${escapeHtml(matchId)}">${escapeHtml(currentLang === "en" ? "Refresh live" : "刷新现场")}</button>
+            </div>
+          `;
+        }
+        const live = payload.live || {};
+        const quality = payload.dataQuality || {};
+        const summary = payload.recommendationSummary || {};
+        const stats = live.stats || {};
+        const score = live.score || {};
+        const recommendations = payload.recommendations || [];
+        const scoreText = `${payload.homeName || ""} ${score.home ?? "-"} - ${score.away ?? "-"} ${payload.awayName || ""}`;
+        const rows = recommendations.length
+          ? recommendations.slice(0, 6).map((rec) => `
+            <div class="live-market-row">
+              <div><strong>${escapeHtml(rec.name || "-")}</strong><span>${escapeHtml(rec.marketTypeLabel || rec.marketType || "")}</span></div>
+              <span>${escapeHtml(currentLang === "en" ? "Live" : "实时")} ${escapeHtml(fmtPct(rec.liveProbability))}</span>
+              <span>${escapeHtml(currentLang === "en" ? "Price" : "当前价")} ${escapeHtml(fmtPrice(rec.marketPrice))}</span>
+              <span>Edge ${escapeHtml(fmtPct(rec.edge))}</span>
+              <span>${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(rec.maxBuyPrice))}</span>
+              <span class="live-chip ${escapeHtml(liveActionClass(rec.action))} live-market-action">${escapeHtml(rec.label || rec.action || "-")}</span>
+            </div>
+          `).join("")
+          : `<div class="live-summary-card"><div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No priced in-play candidate is available." : "当前没有可定价的实时候选盘口。")}</div></div>`;
+        const reasonList = (summary.reasons || []).slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+        return `
+          <div class="live-panel" data-live-match="${escapeHtml(matchId)}">
+            <div class="live-panel-head">
+              <div>
+                <div class="live-score">${escapeHtml(scoreText)}</div>
+                <div class="live-state">${escapeHtml(live.statusDetail || live.status || "-")} · ${escapeHtml(payload.source || "-")} · ${escapeHtml(fmtDateTime(payload.capturedAt))}</div>
+              </div>
+              <button class="live-refresh" type="button" data-live-refresh="${escapeHtml(matchId)}">${escapeHtml(currentLang === "en" ? "Refresh live" : "刷新现场")}</button>
+            </div>
+            <div class="live-summary-card">
+              <div class="live-summary-title">${escapeHtml(summary.title || (currentLang === "en" ? "Live read" : "实时判断"))}</div>
+              <div class="live-summary-body">${escapeHtml(summary.summary || "")}</div>
+              <div class="live-chips">
+                <span class="live-chip ${escapeHtml(liveDataQualityClass(quality.status))}">${escapeHtml(quality.label || quality.status || "-")}</span>
+                <span class="live-chip">${escapeHtml(currentLang === "en" ? "Minute" : "分钟")} ${escapeHtml(liveModelMinute(payload))}</span>
+                <span class="live-chip">${escapeHtml(currentLang === "en" ? "Saved" : "已入库")}</span>
+              </div>
+              ${reasonList ? `<ul class="prediction-reasons">${reasonList}</ul>` : ""}
+            </div>
+            <div class="live-stats-grid">
+              <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Shots" : "射门")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.shots, stats.away?.shots))}</strong></div>
+              <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Shots on target" : "射正")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.shotsOnTarget, stats.away?.shotsOnTarget))}</strong></div>
+              <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Corners" : "角球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.corners, stats.away?.corners))}</strong></div>
+              <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Possession" : "控球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.possession, stats.away?.possession, "%"))}</strong></div>
+            </div>
+            <div class="live-market-list">${rows}</div>
+            <div class="confidence-note">${escapeHtml(payload.disclaimer || "")}</div>
+          </div>
+        `;
+      }
+
+      function liveModelMinute(payload) {
+        const minute = payload?.liveModel?.elapsedMinute;
+        if (payload?.dataQuality?.status === "pre") return "-";
+        return typeof minute === "number" && Number.isFinite(minute) ? `${minute}'` : "-";
+      }
+
+      function renderLiveInsight(match) {
+        const state = liveMatchStates.get(match.id);
+        if (!state) return renderLivePlaceholder(match);
+        return renderLiveInsightPayload(state, match.id);
+      }
+
       function drawSparklines(scope = document) {
         scope.querySelectorAll(".sparkline").forEach((canvas) => {
           let points = [];
@@ -4539,6 +4827,7 @@
 
             <div class="tabs" role="tablist">
               <button class="tab active" data-tab="rec">建议</button>
+              <button class="tab" data-tab="live">实时买点</button>
               <button class="tab" data-tab="intel">比赛情报</button>
               <button class="tab" data-tab="elite">高手</button>
               <button class="tab" data-tab="leaderboard">榜单</button>
@@ -4567,6 +4856,10 @@
                   <tbody>${rows}</tbody>
                 </table>
               </div>
+            </div>
+
+            <div class="tab-content" data-content="live">
+              ${renderLiveInsight(match)}
             </div>
 
             <div class="tab-content" data-content="intel">
@@ -4678,9 +4971,50 @@
               card.querySelectorAll(".tab-content").forEach((content) => {
                 content.classList.toggle("active", content.dataset.content === target);
               });
+              if (target === "live") {
+                const matchId = card.dataset.match;
+                if (matchId && !liveMatchStates.has(matchId)) refreshLiveMatch(matchId);
+              }
             });
           });
         });
+      }
+
+      function wireLivePanels() {
+        document.querySelectorAll("[data-live-refresh]").forEach((button) => {
+          button.addEventListener("click", () => {
+            refreshLiveMatch(button.dataset.liveRefresh, true);
+          });
+        });
+      }
+
+      function updateLivePanel(matchId) {
+        const panel = Array.from(document.querySelectorAll("[data-live-match]")).find((item) => item.dataset.liveMatch === matchId);
+        const container = panel?.closest("[data-content='live']");
+        if (!container) return;
+        const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
+        if (!match) return;
+        container.innerHTML = renderLiveInsight(match);
+        wireLivePanels();
+      }
+
+      async function refreshLiveMatch(matchId, force = false) {
+        if (!matchId || liveMatchLoading.has(matchId)) return;
+        liveMatchLoading.add(matchId);
+        liveMatchStates.set(matchId, { loading: true });
+        updateLivePanel(matchId);
+        try {
+          const params = new URLSearchParams({ matchId });
+          if (force) params.set("force", "1");
+          const response = await fetch(`${basePath()}api/live/match?${params.toString()}`, { cache: "no-store" });
+          const payload = await response.json();
+          liveMatchStates.set(matchId, payload);
+        } catch (error) {
+          liveMatchStates.set(matchId, { ok: false, error: error.message });
+        } finally {
+          liveMatchLoading.delete(matchId);
+          updateLivePanel(matchId);
+        }
       }
 
       function wireOddsTabs() {
@@ -4737,6 +5071,7 @@
         translateRenderedContent(document.body);
         wireMatchTabs();
         wireTabs();
+        wireLivePanels();
         wireOddsTabs();
         wireRecommendationRows();
         drawSparklines(document.getElementById("matches"));

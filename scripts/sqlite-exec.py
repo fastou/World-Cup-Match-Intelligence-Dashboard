@@ -36,6 +36,8 @@ def main():
                             print(json.dumps(row_to_dict(cursor, row) if row else None, ensure_ascii=False))
                         elif operation.get("fetch") == "all":
                             print(json.dumps([row_to_dict(cursor, row) for row in cursor.fetchall()], ensure_ascii=False))
+                        elif operation.get("fetch") == "lastID":
+                            print(json.dumps({"lastID": cursor.lastrowid}, ensure_ascii=False))
             return
         except sqlite3.OperationalError as error:
             if "locked" not in str(error).lower() and "busy" not in str(error).lower():

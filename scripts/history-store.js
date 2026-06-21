@@ -374,6 +374,49 @@ CREATE TABLE IF NOT EXISTS match_results (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS live_match_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id TEXT NOT NULL,
+  schedule_id TEXT,
+  captured_at TEXT NOT NULL,
+  source TEXT,
+  status TEXT,
+  minute TEXT,
+  home_score INTEGER,
+  away_score INTEGER,
+  home_shots INTEGER,
+  away_shots INTEGER,
+  home_sot INTEGER,
+  away_sot INTEGER,
+  home_corners INTEGER,
+  away_corners INTEGER,
+  home_possession REAL,
+  away_possession REAL,
+  data_quality TEXT,
+  recommendation_key TEXT,
+  recommendation_label TEXT,
+  recommendation_action TEXT,
+  recommendation_edge REAL,
+  payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inplay_recommendation_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  live_snapshot_id INTEGER NOT NULL,
+  match_id TEXT NOT NULL,
+  recommendation_key TEXT NOT NULL,
+  market_type TEXT,
+  market_name TEXT,
+  live_probability REAL,
+  market_price REAL,
+  edge REAL,
+  max_buy_price REAL,
+  action TEXT,
+  label TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(live_snapshot_id) REFERENCES live_match_snapshots(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_match_snapshots_match_time ON match_snapshots(match_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_market_snapshots_snapshot ON market_snapshots(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_market_snapshots_match_key ON market_snapshots(match_id, recommendation_key);
@@ -387,6 +430,8 @@ CREATE INDEX IF NOT EXISTS idx_squad_profile_match ON squad_profile_snapshots(ma
 CREATE INDEX IF NOT EXISTS idx_human_matchup_match ON human_matchup_snapshots(match_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_polymarket_holders_market ON polymarket_holder_snapshots(condition_id, token_id);
 CREATE INDEX IF NOT EXISTS idx_results_updated ON match_results(updated_at);
+CREATE INDEX IF NOT EXISTS idx_live_match_snapshots_match_time ON live_match_snapshots(match_id, captured_at);
+CREATE INDEX IF NOT EXISTS idx_inplay_recommendations_match_key ON inplay_recommendation_snapshots(match_id, recommendation_key);
 
 CREATE VIEW IF NOT EXISTS v_moneyline_backtest AS
 SELECT
@@ -954,11 +999,90 @@ async function recordMatchResult(result) {
   return { matchId: result.matchId, updatedAt };
 }
 
+async function recordLiveMatchSnapshot(payload) {
+  if (!payload || !payload.matchId) return null;
+  await ensureHistorySchema();
+  const stats = payload.live?.stats || {};
+  const summary = payload.recommendationSummary || {};
+  const top = Array.isArray(payload.recommendations) ? payload.recommendations[0] : null;
+  const operations = [{
+    sql:
+    `INSERT INTO live_match_snapshots
+     (match_id, schedule_id, captured_at, source, status, minute, home_score, away_score,
+      home_shots, away_shots, home_sot, away_sot, home_corners, away_corners,
+      home_possession, away_possession, data_quality, recommendation_key, recommendation_label,
+      recommendation_action, recommendation_edge, payload_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    params: [
+      payload.matchId,
+      payload.scheduleId || "",
+      payload.capturedAt || new Date().toISOString(),
+      payload.source || payload.live?.source || "",
+      payload.live?.status || "",
+      payload.live?.minute || "",
+      numberOrNull(payload.live?.score?.home),
+      numberOrNull(payload.live?.score?.away),
+      numberOrNull(stats.home?.shots),
+      numberOrNull(stats.away?.shots),
+      numberOrNull(stats.home?.shotsOnTarget),
+      numberOrNull(stats.away?.shotsOnTarget),
+      numberOrNull(stats.home?.corners),
+      numberOrNull(stats.away?.corners),
+      numberOrNull(stats.home?.possession),
+      numberOrNull(stats.away?.possession),
+      payload.dataQuality?.status || "",
+      top?.key || "",
+      top?.name || summary.title || "",
+      top?.action || summary.action || "",
+      numberOrNull(top?.edge),
+      json(payload)
+    ],
+    fetch: "lastID"
+  }];
+  const output = await runOperations(operations);
+  const line = output.trim().split("\n").filter(Boolean).pop();
+  let liveSnapshotId = null;
+  try {
+    liveSnapshotId = line ? JSON.parse(line)?.lastID : null;
+  } catch {
+    liveSnapshotId = null;
+  }
+  if (!liveSnapshotId) return { liveSnapshotId: null };
+
+  const recOps = [];
+  for (const rec of payload.recommendations || []) {
+    recOps.push({
+      sql:
+      `INSERT INTO inplay_recommendation_snapshots
+       (live_snapshot_id, match_id, recommendation_key, market_type, market_name,
+        live_probability, market_price, edge, max_buy_price, action, label, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      params: [
+        liveSnapshotId,
+        payload.matchId,
+        rec.key,
+        rec.marketType,
+        rec.name,
+        numberOrNull(rec.liveProbability),
+        numberOrNull(rec.marketPrice),
+        numberOrNull(rec.edge),
+        numberOrNull(rec.maxBuyPrice),
+        rec.action || "",
+        rec.label || "",
+        json(rec)
+      ]
+    });
+  }
+  if (recOps.length) await runOperations(recOps);
+  return { liveSnapshotId };
+}
+
 module.exports = {
   ensureHistorySchema,
   recordDashboardSnapshot,
   recordContextSnapshot,
   recordMatchResult,
+  recordLiveMatchSnapshot,
   historyDbPath,
   runSql,
   runOperations
