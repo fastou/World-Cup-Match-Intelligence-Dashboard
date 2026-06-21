@@ -2900,21 +2900,50 @@ function parseExactScoreFromRecommendation(rec) {
   };
 }
 
+function parseTotalLineFromRecommendation(rec) {
+  const key = String(rec?.key || "").toLowerCase();
+  if (key === "over25") return { side: "over", line: 2.5 };
+  if (key === "under25") return { side: "under", line: 2.5 };
+  const text = `${rec?.key || ""} ${rec?.name || ""} ${rec?.marketTypeLabel || ""} ${rec?.chart?.marketQuestion || ""} ${rec?.chart?.marketSlug || ""}`.toLowerCase();
+  const match = text.match(/(?:over|under|\bo\b|\bu\b|大于|小于)\s*([0-9]+(?:\.[0-9]+)?)/);
+  if (!match) return null;
+  const marker = match[0].replace(match[1], "");
+  const side = /under|\bu\b|小于/.test(marker) ? "under" : /over|\bo\b|大于/.test(marker) ? "over" : null;
+  const line = Number(match[1]);
+  if (!side || !Number.isFinite(line)) return null;
+  return { side, line };
+}
+
 function impossibleByCurrentScore(rec, live) {
   const homeScore = Number(live?.score?.home);
   const awayScore = Number(live?.score?.away);
   if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
   const totalGoals = homeScore + awayScore;
-  if (rec.key === "under25" && totalGoals >= 3) {
+  const totalLine = parseTotalLineFromRecommendation(rec);
+  if (totalLine?.side === "under" && totalGoals > totalLine.line) {
     return {
       impossible: true,
-      reason: `当前比分 ${homeScore}-${awayScore} 已经超过 2.5 球，小于2.5已不可能。`
+      reason: `当前比分 ${homeScore}-${awayScore} 已经超过 ${totalLine.line} 球，小于${totalLine.line}已不可能。`
+    };
+  }
+  if (totalLine?.side === "over" && totalGoals > totalLine.line) {
+    return {
+      impossible: true,
+      resolved: true,
+      reason: `当前比分 ${homeScore}-${awayScore} 已经超过 ${totalLine.line} 球，大于${totalLine.line}已穿线；这不是新的实时买点，应改看更高进球线或其他盘口。`
     };
   }
   if (rec.key === "bttsNo" && homeScore > 0 && awayScore > 0) {
     return {
       impossible: true,
       reason: `当前比分 ${homeScore}-${awayScore} 两队都已进球，BTTS No 已不可能。`
+    };
+  }
+  if (rec.key === "bttsYes" && homeScore > 0 && awayScore > 0) {
+    return {
+      impossible: true,
+      resolved: true,
+      reason: `当前比分 ${homeScore}-${awayScore} 两队都已进球，BTTS Yes 已满足；这不是新的实时买点。`
     };
   }
   const exact = parseExactScoreFromRecommendation(rec);
@@ -2934,7 +2963,7 @@ function impossibleByCurrentScore(rec, live) {
 }
 
 function liveActionFor(edgeValue, rec, dataQuality, impossible = null) {
-  if (impossible?.impossible) return { action: "avoid", label: "已不可能", canConsider: false };
+  if (impossible?.impossible) return { action: "avoid", label: impossible.resolved ? "已穿线不追" : "已不可能", canConsider: false };
   if (typeof rec.marketPrice !== "number") return { action: "wait", label: "等待价格", canConsider: false };
   if (dataQuality.status === "post") return { action: "avoid", label: "已完赛复盘", canConsider: false };
   if (dataQuality.status === "missing" || dataQuality.status === "pre") return { action: "wait", label: "等待现场数据", canConsider: false };
@@ -2957,8 +2986,10 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
       const effectiveProbability = impossible?.impossible ? 0 : liveProbability;
       const liveEdge = edge(effectiveProbability, rec.marketPrice);
       const maxBuyPrice = impossible?.impossible ? 0 : fairBuyPrice(effectiveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
-      const action = liveActionFor(liveEdge, rec, dataQuality, impossible);
       const hasLiveMarket = rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number";
+      const action = !impossible?.impossible && !hasLiveMarket
+        ? { action: "wait", label: "等待实时盘口", canConsider: false }
+        : liveActionFor(liveEdge, rec, dataQuality, impossible);
       const risks = [
         impossible?.reason || "",
         dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
@@ -3039,9 +3070,16 @@ function buildLiveRecommendationSummary(match, live, recommendations, dataQualit
   const priceText = formatCents(top.marketPrice);
   const maxText = formatCents(top.maxBuyPrice);
   const action = top.canConsider ? "watch" : top.action || "wait";
+  const titlePrefix = top.canConsider
+    ? "实时首选观察"
+    : top.excluded
+      ? top.label
+      : top.action === "wait"
+        ? "等待实时盘口"
+        : "实时观察";
   return {
     action,
-    title: top.canConsider ? `实时首选观察：${top.name}` : `实时观察：${top.name}`,
+    title: `${titlePrefix}：${top.name}`,
     summary: `${top.name} 当前 ${priceText}，实时模型 ${formatPercent(top.liveProbability)}，edge ${formatPercent(top.edge)}，建议上限 ${maxText}。`,
     reasons: [
       ...(liveModel.notes || []).slice(0, 3),
