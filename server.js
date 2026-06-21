@@ -2962,8 +2962,33 @@ function impossibleByCurrentScore(rec, live) {
   return null;
 }
 
+function longTailByCurrentScore(rec, live, liveProbability) {
+  const homeScore = Number(live?.score?.home);
+  const awayScore = Number(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
+  if (rec.marketType !== "moneyline") return null;
+  const elapsed = elapsedMinuteFromLive(live, null);
+  const goalDiff = homeScore - awayScore;
+  const probability = Number(liveProbability);
+  const price = Number(rec.marketPrice);
+  const isTinyProbability = Number.isFinite(probability) && probability < 0.02;
+  const isPennyMarket = Number.isFinite(price) && price <= 0.01;
+  const isLargeLead = Math.abs(goalDiff) >= 3 || (Math.abs(goalDiff) >= 2 && elapsed >= 65);
+  const trailingSide = goalDiff > 0 ? "away" : goalDiff < 0 ? "home" : "";
+  const isTrailingWin = rec.key === trailingSide;
+  const isLateDrawLongTail = rec.key === "draw" && goalDiff !== 0 && isLargeLead;
+  if ((isTrailingWin || isLateDrawLongTail) && isLargeLead && (isTinyProbability || isPennyMarket)) {
+    return {
+      longTail: true,
+      reason: `当前比分 ${homeScore}-${awayScore} 已形成 ${Math.abs(goalDiff)} 球差，${rec.name} 只剩极低概率长尾；不把接近 0¢ 的彩票盘当实时买点。`
+    };
+  }
+  return null;
+}
+
 function liveActionFor(edgeValue, rec, dataQuality, impossible = null) {
   if (impossible?.impossible) return { action: "avoid", label: impossible.resolved ? "已穿线不追" : "已不可能", canConsider: false };
+  if (impossible?.longTail) return { action: "avoid", label: "长尾不追", canConsider: false };
   if (typeof rec.marketPrice !== "number") return { action: "wait", label: "等待价格", canConsider: false };
   if (dataQuality.status === "post") return { action: "avoid", label: "已完赛复盘", canConsider: false };
   if (dataQuality.status === "missing" || dataQuality.status === "pre") return { action: "wait", label: "等待现场数据", canConsider: false };
@@ -2990,15 +3015,16 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
       const decoratedRec = { ...rec, _baseHome: baseHome, _baseAway: baseAway };
       const impossible = impossibleByCurrentScore(rec, live);
       const liveProbability = liveProbabilityForRecommendation(decoratedRec, liveModel);
-      const effectiveProbability = impossible?.impossible ? 0 : liveProbability;
+      const longTail = impossible || longTailByCurrentScore(rec, live, liveProbability);
+      const effectiveProbability = longTail?.impossible ? 0 : liveProbability;
       const liveEdge = edge(effectiveProbability, rec.marketPrice);
-      const maxBuyPrice = impossible?.impossible ? 0 : fairBuyPrice(effectiveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
+      const maxBuyPrice = longTail?.impossible || longTail?.longTail ? 0 : fairBuyPrice(effectiveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
       const hasLiveMarket = rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number";
-      const action = !impossible?.impossible && !hasLiveMarket
+      const action = !longTail?.impossible && !longTail?.longTail && !hasLiveMarket
         ? { action: "wait", label: "等待实时盘口", canConsider: false }
-        : liveActionFor(liveEdge, rec, dataQuality, impossible);
+        : liveActionFor(liveEdge, rec, dataQuality, longTail);
       const risks = [
-        impossible?.reason || "",
+        longTail?.reason || "",
         dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
         !hasLiveMarket ? "当前盘口不是 Polymarket 实时价，价格建议降级。" : "",
         live.completed ? "比赛已结束或进入赛后状态，只用于复盘，不建议入场。" : "",
@@ -3016,11 +3042,12 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         edge: liveEdge,
         maxBuyPrice,
         action: live.completed ? "avoid" : action.action,
-        label: live.completed && !impossible?.impossible ? "已完赛复盘" : action.label,
-        canConsider: !impossible?.impossible && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        label: live.completed && !longTail?.impossible ? "已完赛复盘" : action.label,
+        canConsider: !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
         hasLiveMarket,
-        excluded: Boolean(impossible?.impossible),
-        excludedReason: impossible?.reason || "",
+        excluded: Boolean(longTail?.impossible || longTail?.longTail),
+        excludedReason: longTail?.reason || "",
+        longTail: Boolean(longTail?.longTail),
         source: rec.chart?.source || "",
         chart: rec.chart ? {
           source: rec.chart.source,
@@ -3037,6 +3064,8 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
       if (actionScore) return actionScore;
       const liveMarketScore = Number(b.hasLiveMarket) - Number(a.hasLiveMarket);
       if (liveMarketScore) return liveMarketScore;
+      const excludedScore = Number(a.excluded) - Number(b.excluded);
+      if (excludedScore) return excludedScore;
       return (b.edge ?? -9) - (a.edge ?? -9);
     })
     .slice(0, 8);
