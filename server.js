@@ -2974,6 +2974,13 @@ function liveActionFor(edgeValue, rec, dataQuality, impossible = null) {
   return { action: "wait", label: "等待更好价格", canConsider: false };
 }
 
+function liveReviewRisk(rec, liveEdge) {
+  const reason = rec?.reviewDiscipline?.reasons?.[0] || "";
+  if (!reason) return "";
+  if (/edge|低于\d|主买|价格|盘口/.test(reason)) return "";
+  return reason;
+}
+
 function buildLiveRecommendations(match, live, liveModel, dataQuality) {
   if (dataQuality.status === "pre" || dataQuality.status === "missing") return [];
   const baseHome = Number(match.probabilities?.home) || 0;
@@ -2995,7 +3002,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
         !hasLiveMarket ? "当前盘口不是 Polymarket 实时价，价格建议降级。" : "",
         live.completed ? "比赛已结束或进入赛后状态，只用于复盘，不建议入场。" : "",
-        rec.reviewDiscipline?.reasons?.[0] || ""
+        liveReviewRisk(rec, liveEdge)
       ].filter(Boolean);
       return {
         key: rec.key,
@@ -3011,6 +3018,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         action: live.completed ? "avoid" : action.action,
         label: live.completed && !impossible?.impossible ? "已完赛复盘" : action.label,
         canConsider: !impossible?.impossible && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        hasLiveMarket,
         excluded: Boolean(impossible?.impossible),
         excludedReason: impossible?.reason || "",
         source: rec.chart?.source || "",
@@ -3027,6 +3035,8 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
     .sort((a, b) => {
       const actionScore = Number(b.canConsider) - Number(a.canConsider);
       if (actionScore) return actionScore;
+      const liveMarketScore = Number(b.hasLiveMarket) - Number(a.hasLiveMarket);
+      if (liveMarketScore) return liveMarketScore;
       return (b.edge ?? -9) - (a.edge ?? -9);
     })
     .slice(0, 8);
@@ -3067,23 +3077,42 @@ function buildLiveRecommendationSummary(match, live, recommendations, dataQualit
       reasons: dataQuality.reasons || []
     };
   }
-  const priceText = formatCents(top.marketPrice);
-  const maxText = formatCents(top.maxBuyPrice);
-  const action = top.canConsider ? "watch" : top.action || "wait";
-  const titlePrefix = top.canConsider
+  const actionable = recommendations.find((rec) => rec.canConsider);
+  if (!actionable) {
+    const livePriced = recommendations.filter((rec) => rec.hasLiveMarket && !rec.excluded);
+    const snapshotCount = recommendations.filter((rec) => !rec.hasLiveMarket && !rec.excluded).length;
+    const bestLive = [...livePriced].sort((a, b) => (b.edge ?? -9) - (a.edge ?? -9))[0];
+    const summary = livePriced.length
+      ? `实时盘已匹配 ${livePriced.length} 个，但当前最高 edge ${formatPercent(bestLive?.edge)} 未达到入场条件；${snapshotCount ? "让球/BTTS/大小球仍在等待 Polymarket 实时价。" : "暂不追价。"}`
+      : `当前没有匹配到可用 Polymarket 实时价；${snapshotCount ? "下方本地盘口只作比分模型参考，不作为买点。" : "先等待盘口刷新。"}`;
+    return {
+      action: "wait",
+      title: "当前没有实时买点",
+      summary,
+      reasons: [
+        ...(liveModel.notes || []).slice(0, 3),
+        ...recommendations.flatMap((rec) => rec.risks || []).slice(0, 3)
+      ].filter(Boolean).filter((reason, index, list) => list.indexOf(reason) === index).slice(0, 5)
+    };
+  }
+  const actionableTop = actionable;
+  const priceText = formatCents(actionableTop.marketPrice);
+  const maxText = formatCents(actionableTop.maxBuyPrice);
+  const action = actionableTop.canConsider ? "watch" : actionableTop.action || "wait";
+  const titlePrefix = actionableTop.canConsider
     ? "实时首选观察"
-    : top.excluded
-      ? top.label
-      : top.action === "wait"
+    : actionableTop.excluded
+      ? actionableTop.label
+      : actionableTop.action === "wait"
         ? "等待实时盘口"
         : "实时观察";
   return {
     action,
-    title: `${titlePrefix}：${top.name}`,
-    summary: `${top.name} 当前 ${priceText}，实时模型 ${formatPercent(top.liveProbability)}，edge ${formatPercent(top.edge)}，建议上限 ${maxText}。`,
+    title: `${titlePrefix}：${actionableTop.name}`,
+    summary: `${actionableTop.name} 当前 ${priceText}，实时模型 ${formatPercent(actionableTop.liveProbability)}，edge ${formatPercent(actionableTop.edge)}，建议上限 ${maxText}。`,
     reasons: [
       ...(liveModel.notes || []).slice(0, 3),
-      ...(top.risks || []).slice(0, 2)
+      ...(actionableTop.risks || []).slice(0, 2)
     ].filter(Boolean).slice(0, 5)
   };
 }
