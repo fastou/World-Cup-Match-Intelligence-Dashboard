@@ -4222,6 +4222,7 @@
         }
         const live = payload.live || {};
         const quality = payload.dataQuality || {};
+        const marketRefresh = payload.marketRefresh || {};
         const summary = payload.recommendationSummary || {};
         const stats = live.stats || {};
         const score = live.score || {};
@@ -4254,9 +4255,11 @@
               <div class="live-summary-body">${escapeHtml(summary.summary || "")}</div>
               <div class="live-chips">
                 <span class="live-chip ${escapeHtml(liveDataQualityClass(quality.status))}">${escapeHtml(quality.label || quality.status || "-")}</span>
+                <span class="live-chip ${escapeHtml(marketRefresh.ok ? "good" : marketRefresh.skipped ? "warn" : "bad")}">${escapeHtml(marketRefresh.ok ? (currentLang === "en" ? "Market refreshed" : "盘口已刷新") : marketRefresh.skipped ? (currentLang === "en" ? "Cached market" : "缓存盘口") : (currentLang === "en" ? "Market refresh failed" : "盘口刷新失败"))}</span>
                 <span class="live-chip">${escapeHtml(currentLang === "en" ? "Minute" : "分钟")} ${escapeHtml(liveModelMinute(payload))}</span>
                 <span class="live-chip">${escapeHtml(currentLang === "en" ? "Saved" : "已入库")}</span>
               </div>
+              ${marketRefresh.error || marketRefresh.reason ? `<div class="live-summary-body">${escapeHtml(marketRefresh.error || marketRefresh.reason)}</div>` : ""}
               ${reasonList ? `<ul class="prediction-reasons">${reasonList}</ul>` : ""}
             </div>
             <div class="live-stats-grid">

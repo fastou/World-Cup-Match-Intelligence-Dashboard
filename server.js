@@ -35,6 +35,7 @@ const OPPORTUNITY_OBSERVATION_MAX_ITEMS = Number(process.env.OPPORTUNITY_OBSERVA
 const OPPORTUNITY_REVIEW_LIMIT = Number(process.env.OPPORTUNITY_REVIEW_LIMIT || 40);
 const OPPORTUNITY_REVIEW_SCHEMA_CHECK = process.env.OPPORTUNITY_REVIEW_SCHEMA_CHECK === "1";
 const LIVE_MATCH_FETCH_TIMEOUT_MS = Number(process.env.LIVE_MATCH_FETCH_TIMEOUT_MS || 5500);
+const LIVE_MARKET_REFRESH_TIMEOUT_MS = Number(process.env.LIVE_MARKET_REFRESH_TIMEOUT_MS || 8500);
 const LIVE_MATCH_PERSIST_ENABLED = process.env.LIVE_MATCH_PERSIST_ENABLED !== "0";
 const ESPN_WORLDCUP_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary";
 const PRICE_HISTORY_HOURS = 24;
@@ -2888,7 +2889,52 @@ function liveProbabilityForRecommendation(rec, liveModel) {
   return rec.modelProbability;
 }
 
-function liveActionFor(edgeValue, rec, dataQuality) {
+function parseExactScoreFromRecommendation(rec) {
+  const text = `${rec?.key || ""} ${rec?.name || ""} ${rec?.marketTypeLabel || ""} ${rec?.chart?.marketQuestion || ""} ${rec?.chart?.marketSlug || ""}`.toLowerCase();
+  const match = text.match(/(?:^|[^0-9])(\d{1,2})\s*[-:]\s*(\d{1,2})(?:[^0-9]|$)/);
+  if (!match) return null;
+  if (!/correct|score|比分|球胆|\bcs\b|exact/.test(text)) return null;
+  return {
+    homeGoals: Number(match[1]),
+    awayGoals: Number(match[2])
+  };
+}
+
+function impossibleByCurrentScore(rec, live) {
+  const homeScore = Number(live?.score?.home);
+  const awayScore = Number(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
+  const totalGoals = homeScore + awayScore;
+  if (rec.key === "under25" && totalGoals >= 3) {
+    return {
+      impossible: true,
+      reason: `当前比分 ${homeScore}-${awayScore} 已经超过 2.5 球，小于2.5已不可能。`
+    };
+  }
+  if (rec.key === "bttsNo" && homeScore > 0 && awayScore > 0) {
+    return {
+      impossible: true,
+      reason: `当前比分 ${homeScore}-${awayScore} 两队都已进球，BTTS No 已不可能。`
+    };
+  }
+  const exact = parseExactScoreFromRecommendation(rec);
+  if (exact && (homeScore > exact.homeGoals || awayScore > exact.awayGoals)) {
+    return {
+      impossible: true,
+      reason: `当前比分 ${homeScore}-${awayScore} 已经超过 ${exact.homeGoals}-${exact.awayGoals}，该球胆/正确比分已不可能。`
+    };
+  }
+  if (exact && live?.completed && (homeScore !== exact.homeGoals || awayScore !== exact.awayGoals)) {
+    return {
+      impossible: true,
+      reason: `全场比分 ${homeScore}-${awayScore} 不等于 ${exact.homeGoals}-${exact.awayGoals}，该正确比分未命中。`
+    };
+  }
+  return null;
+}
+
+function liveActionFor(edgeValue, rec, dataQuality, impossible = null) {
+  if (impossible?.impossible) return { action: "avoid", label: "已不可能", canConsider: false };
   if (typeof rec.marketPrice !== "number") return { action: "wait", label: "等待价格", canConsider: false };
   if (dataQuality.status === "post") return { action: "avoid", label: "已完赛复盘", canConsider: false };
   if (dataQuality.status === "missing" || dataQuality.status === "pre") return { action: "wait", label: "等待现场数据", canConsider: false };
@@ -2906,12 +2952,15 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
   return (match.recommendations || [])
     .map((rec) => {
       const decoratedRec = { ...rec, _baseHome: baseHome, _baseAway: baseAway };
+      const impossible = impossibleByCurrentScore(rec, live);
       const liveProbability = liveProbabilityForRecommendation(decoratedRec, liveModel);
-      const liveEdge = edge(liveProbability, rec.marketPrice);
-      const maxBuyPrice = fairBuyPrice(liveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
-      const action = liveActionFor(liveEdge, rec, dataQuality);
+      const effectiveProbability = impossible?.impossible ? 0 : liveProbability;
+      const liveEdge = edge(effectiveProbability, rec.marketPrice);
+      const maxBuyPrice = impossible?.impossible ? 0 : fairBuyPrice(effectiveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
+      const action = liveActionFor(liveEdge, rec, dataQuality, impossible);
       const hasLiveMarket = rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number";
       const risks = [
+        impossible?.reason || "",
         dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
         !hasLiveMarket ? "当前盘口不是 Polymarket 实时价，价格建议降级。" : "",
         live.completed ? "比赛已结束或进入赛后状态，只用于复盘，不建议入场。" : "",
@@ -2922,14 +2971,17 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         marketType: rec.marketType,
         marketTypeLabel: rec.marketTypeLabel,
         name: rec.name,
-        liveProbability,
+        liveProbability: effectiveProbability,
+        rawLiveProbability: liveProbability,
         baseProbability: rec.modelProbability,
         marketPrice: rec.marketPrice,
         edge: liveEdge,
         maxBuyPrice,
         action: live.completed ? "avoid" : action.action,
-        label: live.completed ? "已完赛复盘" : action.label,
-        canConsider: !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        label: live.completed && !impossible?.impossible ? "已完赛复盘" : action.label,
+        canConsider: !impossible?.impossible && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        excluded: Boolean(impossible?.impossible),
+        excludedReason: impossible?.reason || "",
         source: rec.chart?.source || "",
         chart: rec.chart ? {
           source: rec.chart.source,
@@ -3007,6 +3059,60 @@ function dashboardMatchByIdOrSchedule(dashboard, matchId) {
   ) || null;
 }
 
+function scheduleEventFromMatch(match) {
+  if (!match) return null;
+  return {
+    scheduleId: match.scheduleId || String(match.id || "").match(/^schedule-(\d+)$/)?.[1] || "",
+    kickoffUtc: match.kickoffShanghai || match.kickoffLocal || "",
+    status: match.scheduleStatus || "",
+    completed: isFinishedStatus(match.scheduleStatus),
+    home: {
+      code: match.home,
+      name: match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName
+    },
+    away: {
+      code: match.away,
+      name: match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName
+    }
+  };
+}
+
+async function refreshMatchMarketsForLive(match, live, force = false) {
+  const shouldRefresh = live?.inProgress || live?.completed;
+  if (!shouldRefresh) {
+    return {
+      ok: false,
+      skipped: true,
+      source: "cached-dashboard",
+      reason: "比赛未进入实时状态，沿用缓存盘口。"
+    };
+  }
+  const scheduleEvent = scheduleEventFromMatch(match);
+  if (!scheduleEvent?.scheduleId) {
+    return {
+      ok: false,
+      skipped: true,
+      source: "cached-dashboard",
+      reason: "缺少 ESPN schedule id，无法定向刷新盘口。"
+    };
+  }
+  const result = await withTimeout(fetchPolymarket({ matches: [scheduleEvent] }), LIVE_MARKET_REFRESH_TIMEOUT_MS, "live market refresh");
+  if (!result?.ok) {
+    return {
+      ok: false,
+      source: "Polymarket 实时市场 API",
+      error: translateError(result?.error || "实时盘口刷新失败")
+    };
+  }
+  attachMarketCharts([match], result);
+  return {
+    ok: true,
+    source: result.source || "Polymarket 实时市场 API",
+    marketCount: Array.isArray(result.markets) ? result.markets.length : 0,
+    refreshedAt: new Date().toISOString()
+  };
+}
+
 async function buildLiveMatchInsight(matchId, { force = false, persist = true } = {}) {
   let dashboard = await getPersistedLightCache();
   if (!dashboard?.matches?.length) {
@@ -3052,6 +3158,7 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
   }
   const live = normalizeLiveEvent(summaryResult.data, match);
   const dataQuality = buildLiveDataQuality(live);
+  const marketRefresh = await refreshMatchMarketsForLive(match, live, force);
   const liveModel = liveProbabilityModel(match, live);
   const recommendations = buildLiveRecommendations(match, live, liveModel, dataQuality);
   const payload = {
@@ -3065,6 +3172,7 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
     source: live.source,
     capturedAt: new Date().toISOString(),
     dataQuality,
+    marketRefresh,
     live,
     liveModel,
     recommendations,
