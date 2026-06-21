@@ -1289,6 +1289,129 @@
         justify-self: end;
       }
 
+      .market-catalog {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .market-catalog-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .market-catalog-title {
+        font-size: 15px;
+        font-weight: 850;
+      }
+
+      .market-catalog-meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .market-catalog-tabs {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .market-catalog-tab {
+        min-height: 30px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      .market-catalog-tab.active {
+        border-color: rgba(18, 124, 91, 0.42);
+        background: #eaf5f0;
+        color: var(--green);
+      }
+
+      .market-catalog-panel {
+        display: none;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+        overflow: hidden;
+      }
+
+      .market-catalog-panel.active {
+        display: block;
+      }
+
+      .market-catalog-row {
+        display: grid;
+        grid-template-columns: minmax(190px, 1fr) minmax(180px, 1.1fr) minmax(80px, 0.4fr);
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border-bottom: 1px solid #edf0ec;
+      }
+
+      .market-catalog-row:last-child {
+        border-bottom: 0;
+      }
+
+      .market-catalog-question {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      .market-catalog-question strong {
+        color: var(--ink);
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .market-catalog-question span {
+        color: var(--muted);
+        font-size: 11px;
+        word-break: break-word;
+      }
+
+      .market-catalog-outcomes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .market-outcome-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 26px;
+        padding: 0 8px;
+        border-radius: 7px;
+        background: #edf0ef;
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 780;
+      }
+
+      .market-outcome-pill span {
+        color: var(--muted);
+        font-weight: 650;
+      }
+
+      .market-catalog-volume {
+        justify-self: end;
+        color: var(--muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+
       .static-grid {
         display: grid;
         grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
@@ -4523,7 +4646,77 @@
             <div class="odds-board-tabs" role="tablist" aria-label="盘口切换">${tabs}</div>
             <div class="odds-board-meta">${escapeHtml(currentLang === "en" ? "A Live tab has matched Polymarket history. A Local tab means Polymarket has not returned that single-match market yet." : "标签里的“实时”表示该类盘口已匹配 Polymarket 历史曲线；“本地”表示 Polymarket 当前未返回对应单场盘口。")}</div>
             ${panels}
+            ${renderMarketCatalog(match.marketCatalog)}
           </section>
+        `;
+      }
+
+      function marketCatalogCategoryLabel(group) {
+        return currentLang === "en" ? (group.labelEn || group.label || group.key) : (group.label || group.key);
+      }
+
+      function formatMarketVolume(value) {
+        const n = Number(value || 0);
+        if (!Number.isFinite(n) || n <= 0) return "-";
+        if (n >= 1000000) return `$${(n / 1000000).toFixed(2)}M`;
+        if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
+        return `$${n.toFixed(0)}`;
+      }
+
+      function renderMarketCatalog(catalog) {
+        const categories = catalog?.categories || [];
+        if (!categories.length) {
+          return `
+            <div class="market-catalog">
+              <div class="market-catalog-head">
+                <div>
+                  <div class="market-catalog-title">${escapeHtml(currentLang === "en" ? "Additional Polymarket Markets" : "更多 Polymarket 盘口")}</div>
+                  <div class="market-catalog-meta">${escapeHtml(currentLang === "en" ? "No derivative markets were returned for this match." : "这场暂未返回球胆、半场、球队总进球等衍生盘口。")}</div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+        const preferred = ["correctScore", "halves", "teamTotals", "totals", "spreads", "btts", "moneyline", "other"];
+        const ordered = [...categories].sort((a, b) => preferred.indexOf(a.key) - preferred.indexOf(b.key));
+        const activeIndex = Math.max(0, ordered.findIndex((group) => ["correctScore", "halves"].includes(group.key)));
+        const tabs = ordered.map((group, index) => `
+          <button class="market-catalog-tab ${index === activeIndex ? "active" : ""}" data-market-catalog-tab="${escapeHtml(group.key)}" type="button">
+            ${escapeHtml(marketCatalogCategoryLabel(group))} · ${escapeHtml(group.count || group.markets.length)}
+          </button>
+        `).join("");
+        const panels = ordered.map((group, index) => `
+          <div class="market-catalog-panel ${index === activeIndex ? "active" : ""}" data-market-catalog-panel="${escapeHtml(group.key)}">
+            ${group.markets.slice(0, 18).map((market) => `
+              <div class="market-catalog-row">
+                <div class="market-catalog-question">
+                  <strong>${escapeHtml(market.question || market.slug || "-")}</strong>
+                  <span>${escapeHtml(market.sportsMarketType || market.slug || "")}</span>
+                </div>
+                <div class="market-catalog-outcomes">
+                  ${(market.outcomes || []).map((outcome) => `
+                    <span class="market-outcome-pill">${escapeHtml(outcome.label || "-")} <span>${fmtPrice(outcome.price)}</span></span>
+                  `).join("")}
+                </div>
+                <div class="market-catalog-volume">${escapeHtml(formatMarketVolume(market.volume))}</div>
+              </div>
+            `).join("") || `<div class="market-catalog-row"><div class="market-catalog-question"><strong>${escapeHtml(currentLang === "en" ? "Not returned for this match" : "这场暂未返回该类盘口")}</strong><span>${escapeHtml(currentLang === "en" ? "Polymarket may not open every derivative market for every match." : "Polymarket 不一定每场都开球胆、半场或其他衍生盘；这里不做伪造。")}</span></div><div class="market-catalog-outcomes"></div><div class="market-catalog-volume">-</div></div>`}
+          </div>
+        `).join("");
+        return `
+          <div class="market-catalog">
+            <div class="market-catalog-head">
+              <div>
+                <div class="market-catalog-title">${escapeHtml(currentLang === "en" ? "Additional Polymarket Markets" : "更多 Polymarket 盘口")}</div>
+                <div class="market-catalog-meta">${escapeHtml(currentLang === "en"
+                  ? "Browse derivative markets such as correct score, halves, team totals, alternate totals, and alternate spreads. These are shown as market data, not model buy recommendations."
+                  : "展示球胆/正确比分、半场、球队进球数、更多大小球和更多让球线。这里只是盘口数据，不等于模型买入建议。")}</div>
+              </div>
+              <div class="market-catalog-meta">${escapeHtml(catalog?.source || "Polymarket")} · ${escapeHtml(catalog?.marketCount || 0)} ${escapeHtml(currentLang === "en" ? "markets" : "个盘口")}</div>
+            </div>
+            <div class="market-catalog-tabs">${tabs}</div>
+            ${panels}
+          </div>
         `;
       }
 
@@ -4893,6 +5086,7 @@
             </div>
 
             <div class="tab-content" data-content="market">
+              ${renderMarketCatalog(match.marketCatalog)}
               <ul class="info-list">
                 ${match.autoBaseline ? '<li><strong>基线状态</strong><span>已纳入三天赛程窗口，并用保守球队评分生成基础概率；缺少真实盘口或动态情报时，只显示观察，不给价格建议。</span></li>' : ""}
                 ${match.scheduleStatusDetail || match.scheduleStatus ? `<li><strong>比赛状态</strong><span>${escapeHtml(match.scheduleStatusDetail || match.scheduleStatus)}</span></li>` : ""}
@@ -4999,6 +5193,7 @@
         if (!match) return;
         container.innerHTML = renderLiveInsight(match);
         wireLivePanels();
+        wireOddsTabs();
       }
 
       async function refreshLiveMatch(matchId, force = false) {
@@ -5030,6 +5225,17 @@
                 panel.classList.toggle("active", panel.dataset.oddsPanel === target);
               });
               drawBigCharts(board);
+            });
+          });
+        });
+        document.querySelectorAll(".market-catalog").forEach((catalog) => {
+          catalog.querySelectorAll(".market-catalog-tab").forEach((tab) => {
+            tab.addEventListener("click", () => {
+              const target = tab.dataset.marketCatalogTab;
+              catalog.querySelectorAll(".market-catalog-tab").forEach((item) => item.classList.toggle("active", item === tab));
+              catalog.querySelectorAll(".market-catalog-panel").forEach((panel) => {
+                panel.classList.toggle("active", panel.dataset.marketCatalogPanel === target);
+              });
             });
           });
         });

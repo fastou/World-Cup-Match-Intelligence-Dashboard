@@ -40,10 +40,10 @@ const LIVE_MATCH_PERSIST_ENABLED = process.env.LIVE_MATCH_PERSIST_ENABLED !== "0
 const ESPN_WORLDCUP_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary";
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
-const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 140);
+const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 360);
 const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || Math.max(360, POLYMARKET_MARKET_LIMIT * 2));
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
-const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 10;
+const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 80;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
@@ -3243,6 +3243,7 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
     live,
     liveModel,
     recommendations,
+    marketCatalog: match.marketCatalog,
     recommendationSummary: buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel),
     disclaimer: "实时买点是研究辅助，不自动下单；数据不足、价格缺失或比赛已结束时必须降级。"
   };
@@ -5017,6 +5018,7 @@ function attachMarketCharts(matches, polymarket) {
   const tokenCatalog = buildTokenCatalog(polymarket);
   const now = Math.floor(Date.now() / 1000);
   for (const match of matches) {
+    match.marketCatalog = buildMatchMarketCatalog(match, polymarket);
     for (const recommendation of match.recommendations) {
       const token = findChartToken(match, recommendation, tokenCatalog);
       if (token) {
@@ -5056,6 +5058,130 @@ function attachMarketCharts(matches, polymarket) {
       applyReviewDiscipline(recommendation, match);
     }
   }
+}
+
+function marketCatalogCategory(market) {
+  const type = String(market?.sportsMarketType || "").toLowerCase();
+  const text = `${market?.question || ""} ${market?.slug || ""}`.toLowerCase();
+  if (/correct[-_\s]?score|exact[-_\s]?score|scorecast|比分|球胆/.test(text) || type.includes("correct_score")) {
+    return { key: "correctScore", label: "球胆 / 正确比分", labelEn: "Correct Score" };
+  }
+  if (type.includes("first_half") || type.includes("second_half") || /\b1st half\b|\b2nd half\b|first-half|second-half|halftime|half-time/.test(text)) {
+    return { key: "halves", label: "半场 / 上下半场", labelEn: "Halves" };
+  }
+  if (type.includes("team_total") || text.includes("team-total")) {
+    return { key: "teamTotals", label: "球队进球数", labelEn: "Team Totals" };
+  }
+  if (type.includes("both_teams_to_score") || text.includes("btts") || text.includes("both teams to score")) {
+    return { key: "btts", label: "双方进球", labelEn: "BTTS" };
+  }
+  if (type.includes("spread") || text.includes("spread-") || text.includes("spread:")) {
+    return { key: "spreads", label: "让球 / 分差", labelEn: "Spreads" };
+  }
+  if (type.includes("total") || text.includes("-total-") || text.includes("o/u")) {
+    return { key: "totals", label: "总进球", labelEn: "Totals" };
+  }
+  if (type.includes("moneyline") || /\bwin\b/.test(text) || text.includes("end in a draw")) {
+    return { key: "moneyline", label: "胜平负", labelEn: "Result" };
+  }
+  return { key: "other", label: "其他盘口", labelEn: "Other" };
+}
+
+function marketCatalogSortScore(item) {
+  const order = {
+    moneyline: 0,
+    spreads: 1,
+    totals: 2,
+    teamTotals: 3,
+    btts: 4,
+    halves: 5,
+    correctScore: 6,
+    other: 7
+  };
+  return (order[item.category] ?? 9) * 1000000000 - Number(item.volume || 0);
+}
+
+function buildMatchMarketCatalog(match, polymarket) {
+  const markets = Array.isArray(polymarket?.markets) ? polymarket.markets : [];
+  const homeAliases = teamNameVariants(match.home, match.homeName);
+  const awayAliases = teamNameVariants(match.away, match.awayName);
+  const expectedCategories = [
+    { key: "correctScore", label: "球胆 / 正确比分", labelEn: "Correct Score" },
+    { key: "halves", label: "半场 / 上下半场", labelEn: "Halves" },
+    { key: "teamTotals", label: "球队进球数", labelEn: "Team Totals" },
+    { key: "totals", label: "总进球", labelEn: "Totals" },
+    { key: "spreads", label: "让球 / 分差", labelEn: "Spreads" },
+    { key: "btts", label: "双方进球", labelEn: "BTTS" },
+    { key: "moneyline", label: "胜平负", labelEn: "Result" },
+    { key: "other", label: "其他盘口", labelEn: "Other" }
+  ];
+  const items = markets
+    .filter((market) => {
+      const text = `${market.question || ""} ${market.slug || ""} ${market.eventTitle || ""} ${market.eventSlug || ""}`.toLowerCase();
+      return homeAliases.some((alias) => textContainsAlias(text, String(alias || "").toLowerCase().trim()))
+        && awayAliases.some((alias) => textContainsAlias(text, String(alias || "").toLowerCase().trim()));
+    })
+    .map((market) => {
+      const category = marketCatalogCategory(market);
+      const outcomes = (market.tokens || []).map((token) => ({
+        label: token.label || "",
+        price: token.currentPrice,
+        tokenId: token.tokenId || "",
+        historyPoints: Array.isArray(token.history) ? token.history.length : 0
+      }));
+      return {
+        marketId: market.id || "",
+        conditionId: market.conditionId || "",
+        question: market.question || "",
+        slug: market.slug || "",
+        eventSlug: market.eventSlug || "",
+        sportsMarketType: market.sportsMarketType || "",
+        category: category.key,
+        categoryLabel: category.label,
+        categoryLabelEn: category.labelEn,
+        volume: Number(market.volume || 0),
+        liquidity: Number(market.liquidity || 0),
+        outcomes,
+        hasHistory: outcomes.some((outcome) => outcome.historyPoints >= 2),
+        source: "Polymarket"
+      };
+    })
+    .sort((a, b) => marketCatalogSortScore(a) - marketCatalogSortScore(b));
+  const byCategory = {};
+  for (const item of items) {
+    if (!byCategory[item.category]) {
+      byCategory[item.category] = {
+        key: item.category,
+        label: item.categoryLabel,
+        labelEn: item.categoryLabelEn,
+        count: 0,
+        markets: []
+      };
+    }
+    byCategory[item.category].count += 1;
+    byCategory[item.category].markets.push(item);
+  }
+  const categories = expectedCategories.map((expected) => {
+    const group = byCategory[expected.key] || {
+      key: expected.key,
+      label: expected.label,
+      labelEn: expected.labelEn,
+      count: 0,
+      markets: []
+    };
+    return {
+      ...group,
+      missing: !group.markets.length,
+      markets: (group.markets || []).slice(0, 24)
+    };
+  }).filter((group) => group.key !== "other" || group.markets.length);
+  return {
+    source: polymarket?.source || "Polymarket 实时市场 API",
+    ok: Boolean(polymarket?.ok),
+    updatedAt: new Date().toISOString(),
+    marketCount: items.length,
+    categories
+  };
 }
 
 function localHistoryForRecommendation(match, recommendation) {
@@ -6798,12 +6924,30 @@ function buildPolymarketEventSlugSearches(schedule = null) {
             ]
           });
           searches.push({
+            label: `${eventTeamSearchName(event, "home")} vs ${eventTeamSearchName(event, "away")} more markets (${dateKey})`,
+            slug: `fifwc-${homeCode}-${awayCode}-${dateKey}-more-markets`,
+            teamNeedles: [
+              eventTeamSearchName(event, "home").toLowerCase(),
+              eventTeamSearchName(event, "away").toLowerCase()
+            ],
+            moreMarkets: true
+          });
+          searches.push({
             label: `${eventTeamSearchName(event, "away")} vs ${eventTeamSearchName(event, "home")} (${dateKey})`,
             slug: `fifwc-${awayCode}-${homeCode}-${dateKey}`,
             teamNeedles: [
               eventTeamSearchName(event, "away").toLowerCase(),
               eventTeamSearchName(event, "home").toLowerCase()
             ]
+          });
+          searches.push({
+            label: `${eventTeamSearchName(event, "away")} vs ${eventTeamSearchName(event, "home")} more markets (${dateKey})`,
+            slug: `fifwc-${awayCode}-${homeCode}-${dateKey}-more-markets`,
+            teamNeedles: [
+              eventTeamSearchName(event, "away").toLowerCase(),
+              eventTeamSearchName(event, "home").toLowerCase()
+            ],
+            moreMarkets: true
           });
         }
       }
@@ -6855,9 +6999,10 @@ async function fetchPolymarket(schedule = null) {
 
   const searches = buildPolymarketSearches(schedule);
   const eventSlugSearches = buildPolymarketEventSlugSearches(schedule);
+  const sportsPageSearches = eventSlugSearches.filter((search) => !search.moreMarkets);
   const [eventSlugResults, sportsPageResults, searchResults] = await Promise.all([
     Promise.all(eventSlugSearches.map((search) => fetchPolymarketEventSlug(search))),
-    Promise.all(eventSlugSearches.map((search) => fetchPolymarketSportsPageMarkets(search))),
+    Promise.all(sportsPageSearches.map((search) => fetchPolymarketSportsPageMarkets(search))),
     Promise.all(searches.map((search) => fetchPolymarketSearch(search)))
   ]);
   const prioritizedResults = [
@@ -6974,7 +7119,7 @@ function extractSportsPageMarkets(html, eventSlug) {
   const text = String(html || "");
   if (!text || !eventSlug) return [];
   const marketObjects = [];
-  const slugPattern = new RegExp(`\\\"slug\\\":\\\"${escapeRegExp(eventSlug)}(?:\\\"|-(?:draw|[a-z0-9]{2,4}|total-2pt5|spread-(?:home|away)-1pt5)\\\")`, "g");
+  const slugPattern = new RegExp(`\\\"slug\\\":\\\"${escapeRegExp(eventSlug)}(?:\\\"|-[^\\\"]+\\\")`, "g");
   for (const match of text.matchAll(slugPattern)) {
     const start = findEmbeddedMarketStart(text, match.index || 0);
     if (start < 0) continue;
@@ -7056,10 +7201,7 @@ function parseEmbeddedMarketObject(text) {
 
 function isSupportedSportsPageMarketSlug(slug) {
   const value = String(slug || "");
-  return /^fifwc-[a-z0-9-]+-\d{4}-\d{2}-\d{2}(?:-(?:draw|[a-z0-9]{2,4}))?$/.test(value)
-    || value.includes("-total-2pt5")
-    || value.includes("-spread-home-1pt5")
-    || value.includes("-spread-away-1pt5");
+  return /^fifwc-[a-z0-9-]+-\d{4}-\d{2}-\d{2}(?:-[a-z0-9-]+)?$/.test(value);
 }
 
 function escapeRegExp(value) {
@@ -7323,6 +7465,7 @@ function normalizePolymarketMarket(market) {
     slug: market.slug,
     eventTitle: market.eventTitle,
     eventSlug: market.eventSlug,
+    sportsMarketType: market.sportsMarketType || market.marketType || "",
     volume: Number(market.volume || 0),
     liquidity: Number(market.liquidity || 0),
     tokens
