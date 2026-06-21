@@ -1656,6 +1656,24 @@ function componentStatus(label, status, detail = "") {
   return { label, status, detail };
 }
 
+function criticalDataReason(item) {
+  if (!item || item.status === "synced") return "";
+  if (item.label === "阵容") {
+    if (item.status === "stale") return "媒体预计阵容已同步，官方首发未确认";
+    if (item.status === "queried") return "已查询阵容源，但未抓到可核验首发";
+    return "阵容源缺失";
+  }
+  if (item.label === "伤停") {
+    if (item.status === "queried" || item.status === "stale") return "伤停已查询但缺少官方确认";
+    return "伤停源缺失";
+  }
+  if (item.label === "Polymarket曲线") {
+    if (item.status === "stale") return "Polymarket曲线过期";
+    return "Polymarket曲线缺失";
+  }
+  return `${item.label}${item.status === "missing" ? "缺失" : item.status === "queried" ? "已查询但未确认" : "未完全确认"}`;
+}
+
 function buildCompleteness(match, polymarket) {
   const context = match.context || {};
   const lineups = context.lineups || {};
@@ -1687,7 +1705,8 @@ function buildCompleteness(match, polymarket) {
   const score = components.reduce((sum, item) => sum + scoreByStatus[item.status], 0) / components.length;
   const missingCritical = components
     .filter((item) => ["阵容", "伤停", "Polymarket曲线"].includes(item.label) && item.status !== "synced")
-    .map((item) => `${item.label}${item.status === "missing" ? "缺失" : item.status === "queried" ? "已查询但未确认" : "未完全确认"}`);
+    .map(criticalDataReason)
+    .filter(Boolean);
   const mode = lineups.status === "confirmed" && score >= 0.78
     ? "post_lineup"
     : score >= 0.66 && lineupStatus !== "missing"
@@ -1695,7 +1714,7 @@ function buildCompleteness(match, polymarket) {
       : "baseline";
   const modeLabel = {
     baseline: "基线预测，仅供观察",
-    dynamic: "动态预测，首发未完全确认",
+    dynamic: lineups.status === "projected" ? "动态预测，媒体预计阵容" : "动态预测，官方首发未确认",
     post_lineup: "首发后预测"
   }[mode];
   const confidence = score >= 0.78 ? "high" : score >= 0.55 ? "medium" : "low";
@@ -1817,7 +1836,11 @@ function aiPredictionMarketRead(top, rows) {
 function aiPredictionDataGaps(match) {
   const gaps = [];
   const context = match.context || {};
-  if (context.lineups?.status !== "confirmed") gaps.push("官方首发未确认，阵容变化会影响最终概率。");
+  if (context.lineups?.status !== "confirmed") {
+    gaps.push(context.lineups?.status === "projected"
+      ? "已有媒体预计阵容，但官方首发未确认，阵容变化会影响最终概率。"
+      : "未抓到可核验首发，阵容变化会影响最终概率。");
+  }
   const injuries = match.completeness?.components?.find((item) => item.label === "伤停");
   if (injuries && injuries.status !== "synced") gaps.push("伤停信息未完全确认。");
   const h2h = match.headToHead || context.headToHead;

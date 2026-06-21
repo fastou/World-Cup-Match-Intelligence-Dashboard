@@ -90,6 +90,7 @@ Use these prediction modes:
 Downgrade output when inputs are incomplete:
 
 - Missing lineups or injuries: no strong confidence or aggressive action label.
+- Lineup gate reasons must distinguish projected lineups, queried-but-unverified lineups, and missing lineup sources. Do not collapse those states into a vague "lineup not fully confirmed" message.
 - Missing odds or Polymarket curves: no price guidance.
 - Auto-baseline fixtures: only low-confidence AI context and observation labels until static teams, real odds, Polymarket curves, and dynamic context are available.
 - Stale news, weather, or AI synthesis: show the stale reason and update time.
