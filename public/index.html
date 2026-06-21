@@ -5022,17 +5022,17 @@
             ${renderOddsBoard(match)}
 
             <div class="tabs" role="tablist">
-              <button class="tab active" data-tab="rec">建议</button>
-              <button class="tab" data-tab="live">实时买点</button>
-              <button class="tab" data-tab="intel">比赛情报</button>
+              <button class="tab active" data-tab="live">实时买点</button>
+              <button class="tab" data-tab="rec">建议</button>
+              <button class="tab" data-tab="static">比赛情报</button>
               <button class="tab" data-tab="elite">高手</button>
               <button class="tab" data-tab="leaderboard">榜单</button>
-              <button class="tab" data-tab="static">静态</button>
+              <button class="tab" data-tab="intel">静态</button>
               <button class="tab" data-tab="dynamic">动态</button>
               <button class="tab" data-tab="market">盘口</button>
             </div>
 
-            <div class="tab-content active" data-content="rec">
+            <div class="tab-content" data-content="rec">
               <div class="recommendations">
                 <table>
                   <thead>
@@ -5054,7 +5054,7 @@
               </div>
             </div>
 
-            <div class="tab-content" data-content="live">
+            <div class="tab-content active" data-content="live">
               ${renderLiveInsight(match)}
             </div>
 
@@ -5155,6 +5155,7 @@
               panel.classList.toggle("active", panel.dataset.matchPanel === id);
             });
             drawBigCharts(root);
+            refreshVisibleLiveMatch();
           });
         });
       }
@@ -5194,6 +5195,13 @@
         container.innerHTML = renderLiveInsight(match);
         wireLivePanels();
         wireOddsTabs();
+      }
+
+      function refreshVisibleLiveMatch() {
+        const activePanel = document.querySelector(".match-panel.active");
+        const card = activePanel?.querySelector(".match-card[data-match]");
+        const matchId = card?.dataset.match;
+        if (matchId && !liveMatchStates.has(matchId)) refreshLiveMatch(matchId);
       }
 
       async function refreshLiveMatch(matchId, force = false) {
@@ -5285,6 +5293,7 @@
         wireRecommendationRows();
         drawSparklines(document.getElementById("matches"));
         drawBigCharts(document.getElementById("matches"));
+        refreshVisibleLiveMatch();
       }
 
       async function loadDashboard(force = false) {
