@@ -766,6 +766,277 @@ function recalculateScoreSummaries(probabilities) {
   };
 }
 
+function logit(value) {
+  const p = clamp(Number(value) || 0.5, 0.01, 0.99);
+  return Math.log(p / (1 - p));
+}
+
+function logistic(value) {
+  return 1 / (1 + Math.exp(-value));
+}
+
+function recentFormSummary(match, side) {
+  const record = recentRecordForSide(match, side);
+  return record?.summary || {};
+}
+
+function recentFormStrength(summary) {
+  const matches = Number(summary.matches || 0);
+  if (!matches) return null;
+  const wins = Number(summary.wins || 0);
+  const draws = Number(summary.draws || 0);
+  const goalsFor = Number(summary.goalsFor || 0);
+  const goalsAgainst = Number(summary.goalsAgainst || 0);
+  const pointsRate = (wins * 3 + draws) / (matches * 3);
+  const goalDiffPerMatch = (goalsFor - goalsAgainst) / matches;
+  const attackPerMatch = goalsFor / matches;
+  const defensePerMatch = goalsAgainst / matches;
+  return {
+    matches,
+    pointsRate,
+    goalDiffPerMatch,
+    attackPerMatch,
+    defensePerMatch
+  };
+}
+
+function worldCupRecordStrength(record) {
+  if (!record || record.ok === false || !record.matches) return null;
+  const matches = Number(record.matches || 0);
+  const wins = Number(record.wins || 0);
+  const draws = Number(record.draws || 0);
+  const goalsFor = Number(record.goalsFor || 0);
+  const goalsAgainst = Number(record.goalsAgainst || 0);
+  return {
+    matches,
+    pointsRate: matches ? (wins * 3 + draws) / (matches * 3) : 0.35,
+    goalDiffPerMatch: matches ? (goalsFor - goalsAgainst) / matches : 0
+  };
+}
+
+function marketMoneylineTriplet(match) {
+  const recs = new Map((match.recommendations || []).filter((rec) => rec.marketType === "moneyline").map((rec) => [rec.key, rec]));
+  const values = {
+    home: recs.get("home")?.chart?.currentPrice ?? recs.get("home")?.marketPrice ?? match.manualMarkets?.moneyline?.home,
+    draw: recs.get("draw")?.chart?.currentPrice ?? recs.get("draw")?.marketPrice ?? match.manualMarkets?.moneyline?.draw,
+    away: recs.get("away")?.chart?.currentPrice ?? recs.get("away")?.marketPrice ?? match.manualMarkets?.moneyline?.away
+  };
+  if (!["home", "draw", "away"].every((key) => typeof values[key] === "number" && values[key] > 0)) return null;
+  return normalizeProbabilityTriplet(values);
+}
+
+function blendProbabilityTriplet(model, market, marketWeight = 0.18) {
+  if (!market) return normalizeProbabilityTriplet(model);
+  const blended = {};
+  for (const key of ["home", "draw", "away"]) {
+    blended[key] = logistic(logit(model[key]) * (1 - marketWeight) + logit(market[key]) * marketWeight);
+  }
+  return normalizeProbabilityTriplet(blended);
+}
+
+function scaleScoreDistribution(probabilities, targetTriplet) {
+  const baseTriplet = normalizeProbabilityTriplet(probabilities);
+  const weights = {
+    home: targetTriplet.home / baseTriplet.home,
+    draw: targetTriplet.draw / baseTriplet.draw,
+    away: targetTriplet.away / baseTriplet.away
+  };
+  const scores = (probabilities.topScoresFull || []).map((score) => {
+    const bucket = score.homeGoals > score.awayGoals ? "home" : score.homeGoals === score.awayGoals ? "draw" : "away";
+    return {
+      ...score,
+      probability: score.probability * weights[bucket]
+    };
+  });
+  const total = scores.reduce((sum, score) => sum + score.probability, 0) || 1;
+  const normalizedScores = scores.map((score) => ({ ...score, probability: score.probability / total }));
+  const summary = normalizedScores.reduce((acc, score) => {
+    if (score.homeGoals > score.awayGoals) acc.home += score.probability;
+    else if (score.homeGoals === score.awayGoals) acc.draw += score.probability;
+    else acc.away += score.probability;
+    if (score.homeGoals + score.awayGoals < 3) acc.under25 += score.probability;
+    if (score.homeGoals > 0 && score.awayGoals > 0) acc.rawBtts += score.probability;
+    return acc;
+  }, { home: 0, draw: 0, away: 0, under25: 0, rawBtts: 0 });
+  return recalculateScoreSummaries({
+    ...probabilities,
+    ...normalizeProbabilityTriplet(summary),
+    under25: summary.under25,
+    over25: 1 - summary.under25,
+    rawBtts: summary.rawBtts,
+    btts: calibratedBttsProbability(summary.rawBtts, probabilities.lambdaHome || 1.1, probabilities.lambdaAway || 1.1),
+    topScoresFull: normalizedScores
+  });
+}
+
+function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration = false } = {}) {
+  const dynamic = match.dynamicModel || applyDynamicAdjustments(match);
+  const sourceAdjusted = dynamic.preGoldmanAdjusted || dynamic.adjusted || {};
+  const baseHome = Number(sourceAdjusted.lambdaHome || match.model?.lambdaHome || 1.1);
+  const baseAway = Number(sourceAdjusted.lambdaAway || match.model?.lambdaAway || 1.1);
+  const drivers = [];
+  let lambdaHome = baseHome;
+  let lambdaAway = baseAway;
+
+  const homeRank = rankingNumber(match.home, fifaRankings) || match.homeTeam?.worldRanking?.rank;
+  const awayRank = rankingNumber(match.away, fifaRankings) || match.awayTeam?.worldRanking?.rank;
+  if (homeRank && awayRank) {
+    const rankAdvantage = clamp((awayRank - homeRank) / 120, -0.55, 0.55);
+    const homeDelta = rankAdvantage * 0.22;
+    const awayDelta = -rankAdvantage * 0.18;
+    lambdaHome += homeDelta;
+    lambdaAway += awayDelta;
+    drivers.push({
+      label: "Elo/排名强度",
+      homeXgDelta: roundTo(homeDelta, 3),
+      awayXgDelta: roundTo(awayDelta, 3),
+      reason: `${match.homeName} FIFA 第 ${homeRank}，${match.awayName} FIFA 第 ${awayRank}，按长期强弱差做低权重 xG 修正。`
+    });
+  }
+
+  const homeForm = recentFormStrength(recentFormSummary(match, "home"));
+  const awayForm = recentFormStrength(recentFormSummary(match, "away"));
+  if (homeForm && awayForm) {
+    const sampleWeight = clamp(Math.min(homeForm.matches, awayForm.matches) / 5, 0.35, 1);
+    const homeFormDelta = clamp(((homeForm.goalDiffPerMatch - awayForm.goalDiffPerMatch) * 0.055 + (homeForm.pointsRate - awayForm.pointsRate) * 0.12) * sampleWeight, -0.14, 0.14);
+    const awayFormDelta = -homeFormDelta * 0.78;
+    const homeAttackDelta = clamp((homeForm.attackPerMatch - 1.35) * 0.035 * sampleWeight, -0.05, 0.06);
+    const awayAttackDelta = clamp((awayForm.attackPerMatch - 1.25) * 0.035 * sampleWeight, -0.05, 0.06);
+    lambdaHome += homeFormDelta + homeAttackDelta;
+    lambdaAway += awayFormDelta + awayAttackDelta;
+    drivers.push({
+      label: "近期状态",
+      homeXgDelta: roundTo(homeFormDelta + homeAttackDelta, 3),
+      awayXgDelta: roundTo(awayFormDelta + awayAttackDelta, 3),
+      reason: `${match.homeName} 近 ${homeForm.matches} 场进攻 ${homeForm.attackPerMatch.toFixed(2)}/场，${match.awayName} ${awayForm.attackPerMatch.toFixed(2)}/场；按近况做小幅修正。`
+    });
+  }
+
+  const homeRecord = worldCupRecordStrength(match.homeTeam?.worldCupRecord);
+  const awayRecord = worldCupRecordStrength(match.awayTeam?.worldCupRecord);
+  if (homeRecord && awayRecord) {
+    const sampleWeight = clamp(Math.min(homeRecord.matches, awayRecord.matches) / 20, 0.2, 0.75);
+    const recordDelta = clamp(((homeRecord.pointsRate - awayRecord.pointsRate) * 0.08 + (homeRecord.goalDiffPerMatch - awayRecord.goalDiffPerMatch) * 0.025) * sampleWeight, -0.07, 0.07);
+    lambdaHome += recordDelta;
+    lambdaAway -= recordDelta * 0.75;
+    drivers.push({
+      label: "世界杯履历",
+      homeXgDelta: roundTo(recordDelta, 3),
+      awayXgDelta: roundTo(-recordDelta * 0.75, 3),
+      reason: "世界杯正赛历史只作低权重复核，避免老数据过度影响当前阵容。"
+    });
+  }
+
+  if (match.humanMatchup?.insights?.length) {
+    let homeHumanDelta = 0;
+    let awayHumanDelta = 0;
+    for (const insight of match.humanMatchup.insights.slice(0, 5)) {
+      const weight = insight.label === "锋线" || insight.label === "中场" ? 0.025 : 0.015;
+      if (insight.side === "home") homeHumanDelta += weight;
+      if (insight.side === "away") awayHumanDelta += weight;
+    }
+    if (homeHumanDelta || awayHumanDelta) {
+      lambdaHome += homeHumanDelta;
+      lambdaAway += awayHumanDelta;
+      drivers.push({
+        label: "阵容结构画像",
+        homeXgDelta: roundTo(homeHumanDelta, 3),
+        awayXgDelta: roundTo(awayHumanDelta, 3),
+        reason: "身高、年龄、国家队经验、俱乐部层级等静态画像只做小幅先验修正。"
+      });
+    }
+  }
+
+  const trend = match.tournamentTrend;
+  if (trend?.applied) {
+    const overDelta = clamp((trend.deltas?.over25 || 0) * 0.55, -0.035, 0.035);
+    const bttsDelta = clamp((trend.deltas?.btts || 0) * 0.45, -0.03, 0.035);
+    const totalDelta = overDelta + Math.max(0, bttsDelta);
+    if (totalDelta) {
+      lambdaHome += totalDelta * 0.55;
+      lambdaAway += totalDelta * 0.45;
+      drivers.push({
+        label: "赛会趋势",
+        homeXgDelta: roundTo(totalDelta * 0.55, 3),
+        awayXgDelta: roundTo(totalDelta * 0.45, 3),
+        reason: (trend.notes || []).slice(0, 2).join(" ") || "按本届进球节奏做低权重修正。"
+      });
+    }
+  }
+
+  lambdaHome = roundTo(clamp(lambdaHome, 0.18, 4.8), 3);
+  lambdaAway = roundTo(clamp(lambdaAway, 0.18, 4.8), 3);
+  let probabilities = scoreModel(lambdaHome, lambdaAway);
+  probabilities.lambdaHome = lambdaHome;
+  probabilities.lambdaAway = lambdaAway;
+  const preMarket = normalizeProbabilityTriplet(probabilities);
+  const canUseMarketCalibration = useMarketCalibration && match.manualMarkets?.sourceType !== "auto-baseline";
+  const market = canUseMarketCalibration ? marketMoneylineTriplet(match) : null;
+  let calibration = {
+    applied: false,
+    marketWeight: 0,
+    source: "独立模型，未使用盘口校准"
+  };
+  if (market) {
+    const marketWeight = match.manualMarkets?.sourceType === "auto-baseline" ? 0.08 : 0.18;
+    const blended = blendProbabilityTriplet(preMarket, market, marketWeight);
+    probabilities = scaleScoreDistribution(probabilities, blended);
+    probabilities.lambdaHome = lambdaHome;
+    probabilities.lambdaAway = lambdaAway;
+    calibration = {
+      applied: true,
+      marketWeight,
+      source: "胜平负盘口/Polymarket 轻校准",
+      market,
+      before: preMarket,
+      after: normalizeProbabilityTriplet(probabilities)
+    };
+    drivers.push({
+      label: "盘口轻校准",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: `参考公开价格 ${formatPercent(market.home)}/${formatPercent(market.draw)}/${formatPercent(market.away)}，只做 ${Math.round(marketWeight * 100)}% 权重校准，不让盘口替代模型。`
+    });
+  }
+
+  return {
+    name: "Elo-xG Poisson 概率模型",
+    style: "Goldman-style public methodology, not Goldman Sachs official model",
+    version: "2026.06.24",
+    base: {
+      lambdaHome: baseHome,
+      lambdaAway: baseAway
+    },
+    adjusted: {
+      lambdaHome,
+      lambdaAway
+    },
+    calibration,
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || driver.label === "盘口轻校准").slice(0, 7),
+    probabilities
+  };
+}
+
+function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
+  const modelV2 = buildGoldmanStyleModel(match, fifaRankings, options);
+  match.modelV2 = modelV2;
+  match.probabilities = modelV2.probabilities;
+  match.dynamicModel = match.dynamicModel || {};
+  if (!match.dynamicModel.preGoldmanAdjusted) {
+    match.dynamicModel.preGoldmanAdjusted = { ...(match.dynamicModel.adjusted || {}) };
+  }
+  match.dynamicModel.adjusted = { ...modelV2.adjusted };
+  match.dynamicModel.goldmanStyle = {
+    name: modelV2.name,
+    style: modelV2.style,
+    version: modelV2.version,
+    calibration: modelV2.calibration,
+    drivers: modelV2.drivers,
+    topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
+  };
+  return match;
+}
+
 function confederationForTeam(code) {
   return TEAM_CONFEDERATIONS[String(code || "").toUpperCase()] || "OTHER";
 }
@@ -1833,6 +2104,32 @@ function aiPredictionMarketRead(top, rows) {
   return `模型最看好 ${top.label}，但当前胜平负价格没有明显正 edge。`;
 }
 
+function scoreListText(scores = [], limit = 3) {
+  return scores.slice(0, limit).map((score) => `${score.score} ${formatPercent(score.probability)}`).join(" / ");
+}
+
+function aiPredictionModelSummary(match) {
+  const model = match.modelV2 || match.dynamicModel?.goldmanStyle;
+  const probabilities = match.probabilities || {};
+  if (!model) return "";
+  const lambda = model.adjusted || match.dynamicModel?.adjusted || {};
+  const topScores = probabilities.topScores || model.topScores || [];
+  const pieces = [
+    `${match.homeName} xG ${Number(lambda.lambdaHome || 0).toFixed(2)}，${match.awayName} xG ${Number(lambda.lambdaAway || 0).toFixed(2)}`,
+    topScores.length ? `最可能比分：${scoreListText(topScores, 3)}` : "",
+    `大2.5 ${formatPercent(probabilities.over25)} / BTTS ${formatPercent(probabilities.btts)}`
+  ].filter(Boolean);
+  return pieces.join("；") + "。";
+}
+
+function aiPredictionCalibrationSummary(match) {
+  const calibration = match.modelV2?.calibration || match.dynamicModel?.goldmanStyle?.calibration;
+  if (!calibration?.applied) return "模型概率未用盘口替代；当前为独立 xG/Poisson 输出。";
+  const before = calibration.before || {};
+  const after = calibration.after || {};
+  return `盘口轻校准 ${Math.round((calibration.marketWeight || 0) * 100)}%：胜平负从 ${formatPercent(before.home)}/${formatPercent(before.draw)}/${formatPercent(before.away)} 调整到 ${formatPercent(after.home)}/${formatPercent(after.draw)}/${formatPercent(after.away)}。`;
+}
+
 function aiPredictionDataGaps(match) {
   const gaps = [];
   const context = match.context || {};
@@ -1901,6 +2198,15 @@ function aiPredictionEvidence(match, top, rows) {
     });
     if (match.tournamentTrend.notes?.length) drivers.push(`赛会趋势：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
   }
+  if (match.modelV2?.drivers?.length) {
+    evidence.push({
+      label: "概率模型",
+      status: "synced",
+      detail: `${match.modelV2.name}：${aiPredictionModelSummary(match)}`
+    });
+    drivers.push(...match.modelV2.drivers.slice(0, 4).map((driver) => `${driver.label}：${driver.reason}`));
+    drivers.push(aiPredictionCalibrationSummary(match));
+  }
   if (context.aiAnalysis?.modelImpacts?.length || match.dynamicModel?.modelImpacts?.length) {
     const impacts = [...(context.aiAnalysis?.modelImpacts || []), ...(match.dynamicModel?.modelImpacts || [])]
       .filter((impact) => impact?.label || impact?.reason)
@@ -1936,7 +2242,10 @@ function buildAiPrediction(match) {
   const riskFlags = Array.isArray(context.riskFlags) ? context.riskFlags : [];
   const reasons = [];
 
-  reasons.push(`动态模型给出 ${top.label} ${(top.probability * 100).toFixed(1)}%，领先 ${runnerUp.label} ${((top.probability - runnerUp.probability) * 100).toFixed(1)} 个百分点。`);
+  reasons.push(`Elo-xG Poisson 模型给出 ${top.label} ${(top.probability * 100).toFixed(1)}%，领先 ${runnerUp.label} ${((top.probability - runnerUp.probability) * 100).toFixed(1)} 个百分点。`);
+  const modelSummary = aiPredictionModelSummary(match);
+  if (modelSummary) reasons.push(modelSummary);
+  reasons.push(aiPredictionCalibrationSummary(match));
   if (topRecommendation && typeof topRecommendation.edge === "number") {
     reasons.push(`对应盘口 edge 为 ${(topRecommendation.edge * 100).toFixed(1)}%，当前动作：${topRecommendation.decision?.label || "观察"}。`);
   }
@@ -4977,6 +5286,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
   applyTournamentTrendToMatch(baseMatch, tournamentTrend, fifaRankings);
+  applyGoldmanStyleModel(baseMatch, fifaRankings, { useMarketCalibration: false });
   baseMatch.manualMarkets = autoBaselineManualMarkets(baseMatch, baseMatch.probabilities);
   baseMatch.recommendations = [];
   baseMatch.completeness = buildCompleteness(baseMatch, polymarket);
@@ -5054,6 +5364,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
   };
   enriched.humanMatchup = buildHumanMatchup(enriched, fifaRankings);
   applyTournamentTrendToMatch(enriched, tournamentTrend, fifaRankings);
+  applyGoldmanStyleModel(enriched, fifaRankings, { useMarketCalibration: false });
   const withInitialRecommendations = {
     ...enriched,
     recommendations: []
@@ -5062,7 +5373,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
   withInitialRecommendations.tradingGate = buildTradingGate(withInitialRecommendations.completeness);
   return {
     ...withInitialRecommendations,
-    recommendations: buildRecommendations(withInitialRecommendations, probabilities)
+    recommendations: buildRecommendations(withInitialRecommendations, withInitialRecommendations.probabilities)
   };
 }
 
@@ -5071,6 +5382,37 @@ function attachMarketCharts(matches, polymarket) {
   const now = Math.floor(Date.now() / 1000);
   for (const match of matches) {
     match.marketCatalog = buildMatchMarketCatalog(match, polymarket);
+    for (const recommendation of match.recommendations) {
+      const token = findChartToken(match, recommendation, tokenCatalog);
+      if (token) {
+        recommendation.chart = {
+          source: "Polymarket",
+          marketId: token.marketId,
+          conditionId: token.conditionId,
+          tokenId: token.tokenId,
+          marketQuestion: token.marketQuestion,
+          marketSlug: token.marketSlug,
+          eventSlug: token.eventSlug,
+          label: token.label,
+          currentPrice: token.currentPrice,
+          history: token.history || []
+        };
+      } else {
+        const localHistory = localHistoryForRecommendation(match, recommendation);
+        recommendation.chart = {
+          source: "本地盘口快照",
+          marketQuestion: "本地盘口基线",
+          label: recommendation.name,
+          currentPrice: recommendation.marketPrice,
+          history: localHistory.length >= 2 ? localHistory : [],
+          status: localHistory.length >= 2 ? "local-history" : "price-only"
+        };
+      }
+    }
+    match.completeness = buildCompleteness(match, polymarket);
+    match.tradingGate = buildTradingGate(match.completeness);
+    applyGoldmanStyleModel(match, {}, { useMarketCalibration: true });
+    match.recommendations = buildRecommendations(match, match.probabilities);
     for (const recommendation of match.recommendations) {
       const token = findChartToken(match, recommendation, tokenCatalog);
       if (token) {

@@ -18,6 +18,8 @@ const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
 const RECENT_FORM_LIMIT = Number(process.env.RECENT_FORM_LIMIT || 5);
+const SOURCE_SYNC_CONCURRENCY = Number(process.env.SOURCE_SYNC_CONCURRENCY || 3);
+const SOURCE_REQUEST_SPACING_MS = Number(process.env.SOURCE_REQUEST_SPACING_MS || 250);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const ESPN_ALL_SOCCER_TEAM_SCHEDULE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams";
 
@@ -232,7 +234,12 @@ const ARTICLE_DOMAINS = [
   "goal.com",
   "cbssports.com",
   "reuters.com",
-  "apnews.com"
+  "apnews.com",
+  "standard.co.uk",
+  "independent.co.uk",
+  "yahoo.com",
+  "aol.com",
+  "365scores.com"
 ];
 
 const DIRECT_MATCH_SOURCES = {
@@ -276,6 +283,20 @@ const weatherCache = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return results;
 }
 
 async function readEnvFile() {
@@ -665,6 +686,44 @@ function extractSearchLinks(text, limit = 4) {
   return links;
 }
 
+function extractArticleLinks(text, limit = 6) {
+  const links = [];
+  const patterns = [
+    /\]\((https?:\/\/[^)]+)\)/g,
+    /href="([^"]+)"/gi,
+    /(https?:\/\/[^\s)"'<]+)\b/g
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const url = normalizeDuckDuckGoUrl(match[1]);
+      if (!url || !/^https?:\/\//i.test(url)) continue;
+      const lower = url.toLowerCase();
+      if (!ARTICLE_DOMAINS.some((domain) => lower.includes(domain))) continue;
+      if (!/(lineup|line-up|predicted|team-news|injury|preview|xi|阵容)/i.test(url)) continue;
+      if (links.includes(url)) continue;
+      links.push(url);
+      if (links.length >= limit) return links;
+    }
+  }
+
+  return links;
+}
+
+function uniqueUrls(urls, limit) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of urls) {
+    const url = normalizeDuckDuckGoUrl(raw);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (limit && out.length >= limit) break;
+  }
+  return out;
+}
+
 function readableProxyUrl(url) {
   return `https://r.jina.ai/http://${url.replace(/^https?:\/\//i, "")}`;
 }
@@ -773,6 +832,8 @@ function hasConfirmedLineupText(text) {
     "official lineup",
     "official line-up",
     "starting xi confirmed",
+    "starting xis",
+    "today's starting xis",
     "官方首发"
   ].some((needle) => lower.includes(needle));
 }
@@ -835,14 +896,98 @@ function cleanLineupSection(section) {
     .slice(0, 520);
 }
 
+function stopLineupIndex(after) {
+  const lower = String(after || "").toLowerCase();
+  const stops = [
+    /\n\s*(?:\*\*)?(?:[a-z][a-z\s.'()-]{1,45})\s+(?:xi|starting xi|predicted xi|possible starting lineup|projected lineup|predicted lineup)(?:\*\*)?\s*:/i,
+    /\n\s*more about\b/i,
+    /\n\s*read more\b/i,
+    /\n\s*related articles\b/i,
+    /\n\s*featured betting offer\b/i,
+    /\n\s*we say\b/i,
+    /\n\s*title:/i,
+    /\n\s*warning:/i,
+    /\n\s*###\s+/i,
+    /\n\s*##\s+/i
+  ];
+  let end = after.length;
+  for (const stop of stops) {
+    const match = stop.exec(lower);
+    if (match && match.index > 12) end = Math.min(end, match.index);
+  }
+  return end;
+}
+
+function cleanupPlayerName(value) {
+  return String(value || "")
+    .replace(/\[[^\]]+\]\([^)]*\)/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\([^)]*(?:injury|suspension|doubt|captain|goalkeeper|defender|midfielder|forward)[^)]*\)/gi, " ")
+    .replace(/\b(?:gk|df|mf|fw|substitutes?|subs?|coach|manager|captain)\b:?/gi, " ")
+    .replace(/^[\s*#\-–—:]+|[\s*#\-–—:.]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function playerListFromText(value) {
+  const cleaned = String(value || "")
+    .replace(/\*\*/g, "")
+    .replace(/\r/g, "\n")
+    .replace(/\s+\|\s+/g, ", ")
+    .replace(/\s+(?:and|&)\s+/gi, ", ");
+  return cleaned
+    .split(/[,;、\n]+/)
+    .map(cleanupPlayerName)
+    .filter((item) => item && item.length <= 42)
+    .filter((item) => !/^(?:more about|read more|prediction|team news|injury|lineup|line-up|formation)$/i.test(item))
+    .slice(0, 11);
+}
+
+function extractLabeledLineup(sourceText, labels) {
+  const text = String(sourceText || "").replace(/\r/g, "\n");
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:`, "i");
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const after = text.slice(match.index + match[0].length);
+    const section = after.slice(0, stopLineupIndex(after));
+    const players = playerListFromText(section);
+    if (players.length >= 7) {
+      return {
+        note: cleanLineupSection(`${label}: ${players.join(", ")}`),
+        xi: players
+      };
+    }
+  }
+  return null;
+}
+
 function extractTeamLineupNote(sourceText, teamName, teamCode) {
   const englishName = TEAM_SEARCH_NAMES[teamCode] || teamName;
+  const labeled = extractLabeledLineup(sourceText, [
+    `${englishName} XI`,
+    `${teamName} XI`,
+    `${englishName} starting XI`,
+    `${teamName} starting XI`,
+    `${englishName} predicted XI`,
+    `${teamName} predicted XI`,
+    `${englishName} possible starting lineup`,
+    `${englishName} projected lineup`,
+    `${englishName} predicted lineup`,
+    `${teamName} possible starting lineup`,
+    `${teamName} projected lineup`,
+    `${teamName} predicted lineup`
+  ]);
+  if (labeled) return labeled.note;
   const clean = String(sourceText || "").replace(/\s+/g, " ");
   const patterns = [
     `${englishName} possible starting lineup:`,
     `${englishName} projected lineup:`,
     `${englishName} predicted lineup:`,
+    `${englishName} probable lineup:`,
     `${englishName} predicted xi:`,
+    `${englishName} xi:`,
     `${teamName} possible starting lineup:`
   ];
   const lower = clean.toLowerCase();
@@ -883,12 +1028,7 @@ function extractTeamLineupNote(sourceText, teamName, teamCode) {
 function playerListFromNote(note) {
   const after = String(note || "").split(":").slice(1).join(":");
   if (!after) return [];
-  return after
-    .split(/[;,]/)
-    .map((item) => item.trim())
-    .map((item) => item.replace(/\b(Mexico|South Africa|South Korea|Czech Republic|Czechia)\b.*$/i, "").trim())
-    .filter(Boolean)
-    .slice(0, 11);
+  return playerListFromText(after);
 }
 
 function summarizeNews(snippets, fallback) {
@@ -1339,6 +1479,8 @@ function searchQueries(match) {
   const awayEn = match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName;
   return [
     `${homeEn} vs ${awayEn} World Cup preview team news lineups injuries`,
+    `${homeEn} XI vs ${awayEn} predicted lineup confirmed team news injury latest World Cup`,
+    `${awayEn} XI vs ${homeEn} predicted lineup confirmed team news injury latest World Cup`,
     `${homeEn} ${awayEn} predicted lineups injury news World Cup`,
     `${homeEn} ${awayEn} head to head recent form`,
     `${homeEn} ${awayEn} H2H results last meetings football`,
@@ -1348,12 +1490,15 @@ function searchQueries(match) {
 
 async function fetchSearchPreview(match) {
   const direct = await fetchDirectSources(match);
-  const searches = await Promise.all(searchQueries(match).map(async (queryText) => {
+  const queries = searchQueries(match);
+  const searches = [];
+  for (const queryText of queries) {
+    if (searches.length) await sleep(SOURCE_REQUEST_SPACING_MS);
     const query = encodeURIComponent(queryText);
     const url = `https://r.jina.ai/http://duckduckgo.com/html/?q=${query}`;
     const result = await withTimeout(timedFetchText(url), FETCH_TIMEOUT_MS + 1500, "search preview");
-    return { ...result, queryText };
-  }));
+    searches.push({ ...result, queryText });
+  }
 
   const okSearches = searches.filter((result) => result.ok);
   const combinedText = okSearches.map((result) => result.text).join("\n");
@@ -1367,8 +1512,24 @@ async function fetchSearchPreview(match) {
     };
   }
 
-  const links = extractSearchLinks(combinedText, 4);
-  const articles = await Promise.all(links.map(fetchReadableArticle));
+  const links = extractSearchLinks(combinedText, 8);
+  const firstArticles = [];
+  for (const link of links.slice(0, 6)) {
+    if (firstArticles.length) await sleep(SOURCE_REQUEST_SPACING_MS);
+    firstArticles.push(await fetchReadableArticle(link));
+  }
+  const firstArticleText = firstArticles.filter((article) => article.ok).map((article) => article.text).join("\n");
+  const expandedLinks = uniqueUrls([
+    ...links,
+    ...extractArticleLinks(`${direct.text || ""}\n${combinedText}\n${firstArticleText}`, 10)
+  ], 12);
+  const extraLinks = expandedLinks.filter((url) => !links.includes(url)).slice(0, 4);
+  const extraArticles = [];
+  for (const link of extraLinks) {
+    if (extraArticles.length) await sleep(SOURCE_REQUEST_SPACING_MS);
+    extraArticles.push(await fetchReadableArticle(link));
+  }
+  const articles = [...firstArticles, ...extraArticles];
   const okArticles = articles.filter((article) => article.ok);
   const articleText = okArticles.map((article) => article.text).join("\n");
   const text = `${direct.text || ""}\n${combinedText}\n${articleText}`;
@@ -1379,7 +1540,7 @@ async function fetchSearchPreview(match) {
     direct,
     searches,
     articles,
-    articleLinks: links,
+    articleLinks: expandedLinks,
     snippets: extractRelevantSentences(text, [
       match.homeName,
       match.awayName,
@@ -1717,15 +1878,24 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
   const snippets = preview.ok ? preview.snippets || [] : [];
   const sourceText = preview.text || "";
   const directSourceNames = (preview.direct?.results || []).filter((result) => result.ok).map((result) => result.name);
-  const confirmedLineup = hasConfirmedLineupText(sourceText);
-  const projectedLineup = !confirmedLineup && (hasProjectedLineupText(sourceText) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.lineupStatus === "projected" && effectiveAiAnalysis.lineupConfidence !== "low"));
-  const hasLineupSearchLead = snippets.some((snippet) => /projected|probable|predicted|预计|lineup/i.test(snippet)) || projectedLineup;
+  const confirmedLineupText = hasConfirmedLineupText(sourceText);
+  const projectedLineupText = hasProjectedLineupText(sourceText);
+  const hasLineupSearchLead = snippets.some((snippet) => /projected|probable|predicted|预计|lineup/i.test(snippet)) || projectedLineupText;
   const injurySnippets = snippets.filter(isStrongInjurySnippet);
   const teamNewsSnippets = snippets.filter((snippet) => isUsableTeamNewsSnippet(snippet) && !isStrongInjurySnippet(snippet));
   const directInjurySection = extractSection(sourceText, ["no key injuries to report", "injury and suspension", "injury news", "team news"], 850);
   const directTeamNewsSection = extractSection(sourceText, ["team news", "possible starting lineup", "projected lineup", "predicted xi"], 850);
   const homeLineupNote = extractTeamLineupNote(sourceText, match.homeName, match.home);
   const awayLineupNote = extractTeamLineupNote(sourceText, match.awayName, match.away);
+  const homeXi = playerListFromNote(homeLineupNote);
+  const awayXi = playerListFromNote(awayLineupNote);
+  const hasBothXi = homeXi.length >= 7 && awayXi.length >= 7;
+  const confirmedLineup = confirmedLineupText && hasBothXi;
+  const projectedLineup = !confirmedLineup && (
+    hasBothXi
+    || projectedLineupText
+    || (effectiveAiAnalysis.ok && effectiveAiAnalysis.lineupStatus === "projected" && effectiveAiAnalysis.lineupConfidence !== "low")
+  );
   const injurySummary = baselineInjurySummary(preview, effectiveAiAnalysis, injurySnippets, directInjurySection);
   const teamNewsSummary = directTeamNewsSection || baselineTeamNewsSummary(match, preview, effectiveAiAnalysis, teamNewsSnippets);
   const fallbackRecentForm = {
@@ -1764,12 +1934,12 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
         : "官方首发未同步，预计阵容不可作为强信号依据",
     home: {
       formation: previous.lineups?.home?.formation || "待确认",
-      xi: playerListFromNote(homeLineupNote),
+      xi: homeXi,
       notes: homeLineupNote || baselineLineupNote(match, "home", effectiveAiAnalysis, previous.lineups?.home?.notes)
     },
     away: {
       formation: previous.lineups?.away?.formation || "待确认",
-      xi: playerListFromNote(awayLineupNote),
+      xi: awayXi,
       notes: awayLineupNote || baselineLineupNote(match, "away", effectiveAiAnalysis, previous.lineups?.away?.notes)
     }
   };
@@ -1860,7 +2030,7 @@ async function main() {
   }, RUN_TIMEOUT_MS);
 
   const syncPlan = await buildSyncMatches(dashboard);
-  const matchEntries = await Promise.all(syncPlan.matches.map((match) => withTimeout((async () => {
+  const matchEntries = await mapLimit(syncPlan.matches, SOURCE_SYNC_CONCURRENCY, (match) => withTimeout((async () => {
     const [preview, weather] = await Promise.all([
       fetchSearchPreview(match),
       fetchWeather(match)
@@ -1883,7 +2053,7 @@ async function main() {
         }
       }
     }];
-  })));
+  }));
   const matches = Object.fromEntries(matchEntries);
 
   const payload = {

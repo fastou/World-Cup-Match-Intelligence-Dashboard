@@ -653,6 +653,37 @@
         margin-bottom: 10px;
       }
 
+      .prediction-model-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin: 10px 0;
+      }
+
+      .prediction-model-metric {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid #d9e7df;
+        border-radius: 8px;
+        background: #f7fbf8;
+      }
+
+      .prediction-model-metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.25;
+      }
+
+      .prediction-model-metric strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--ink);
+        font-size: 15px;
+        line-height: 1.25;
+        font-variant-numeric: tabular-nums;
+      }
+
       .prediction-prob-card {
         min-width: 0;
         padding: 9px;
@@ -2390,6 +2421,7 @@
         .matchup-insight-grid,
         .line-profile-grid,
         .form-grid,
+        .prediction-model-strip,
         .bettingexpert-row,
         .live-stats-grid,
         .lineup-box,
@@ -2920,6 +2952,11 @@
       const fmtPrice = (value) => {
         if (typeof value !== "number") return "-";
         return value.toFixed(2);
+      };
+
+      const fmtNumber = (value, digits = 1) => {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        return value.toFixed(digits);
       };
 
       const fmtEdge = (value) => {
@@ -4040,6 +4077,22 @@
 
       function renderAiPrediction(match) {
         const prediction = match.aiPrediction || {};
+        const model = match.modelV2 || match.dynamicModel?.goldmanStyle || {};
+        const modelAdjusted = model.adjusted || match.dynamicModel?.adjusted || {};
+        const topScores = match.probabilities?.topScores || model.topScores || [];
+        const topScoreText = topScores.length
+          ? topScores.slice(0, 3).map((score) => `${score.score} ${fmtPct(score.probability)}`).join(" / ")
+          : "-";
+        const modelName = model.name || (currentLang === "en" ? "Elo-xG Poisson model" : "Elo-xG Poisson 概率模型");
+        const modelStyle = model.style
+          ? (currentLang === "en" ? model.style : model.style.replace("Goldman-style public methodology, not Goldman Sachs official model", "高盛式公开方法，不是高盛官方模型"))
+          : "";
+        const calibration = model.calibration || {};
+        const calibrationText = calibration.applied
+          ? (currentLang === "en"
+            ? `Market calibration ${Math.round((calibration.marketWeight || 0) * 100)}%`
+            : `盘口轻校准 ${Math.round((calibration.marketWeight || 0) * 100)}%`)
+          : (currentLang === "en" ? "Independent model" : "独立模型");
         const highClass = prediction.confidence === "high" ? "high" : prediction.confidence === "low" ? "low" : "";
         const rows = prediction.rows || [
           { key: "home", label: `${homeName(match)}胜`, probability: match.probabilities.home },
@@ -4069,10 +4122,29 @@
               <span class="mode-label ${highClass}">AI综合预测</span>
               <div class="prediction-result">${escapeHtml(prediction.label || "等待预测")}</div>
               <div class="prediction-prob">AI ${fmtPct(prediction.probability)}</div>
+              <div class="confidence-note">${escapeHtml(modelName)}${modelStyle ? ` · ${escapeHtml(modelStyle)}` : ""}</div>
               <div class="confidence-note">${escapeHtml(selectedMarket)} · ${escapeHtml(selectedEdge)}${escapeHtml(selectedSource)}</div>
               <div class="confidence-note">${confidenceLabel(prediction.confidence)} · ${escapeHtml(prediction.tradeLabel || "观察")} · ${escapeHtml(restrictionText)}</div>
             </div>
             <div>
+              <div class="prediction-model-strip">
+                <div class="prediction-model-metric">
+                  <span>${escapeHtml(currentLang === "en" ? "Model xG" : "模型 xG")}</span>
+                  <strong>${escapeHtml(fmtNumber(modelAdjusted.lambdaHome, 2))} - ${escapeHtml(fmtNumber(modelAdjusted.lambdaAway, 2))}</strong>
+                </div>
+                <div class="prediction-model-metric">
+                  <span>${escapeHtml(currentLang === "en" ? "Top scores" : "主比分")}</span>
+                  <strong>${escapeHtml(topScoreText)}</strong>
+                </div>
+                <div class="prediction-model-metric">
+                  <span>${escapeHtml(currentLang === "en" ? "Goals" : "进球倾向")}</span>
+                  <strong>${escapeHtml(currentLang === "en" ? `O2.5 ${fmtPct(match.probabilities?.over25)} / BTTS ${fmtPct(match.probabilities?.btts)}` : `大2.5 ${fmtPct(match.probabilities?.over25)} / 双进 ${fmtPct(match.probabilities?.btts)}`)}</strong>
+                </div>
+                <div class="prediction-model-metric">
+                  <span>${escapeHtml(currentLang === "en" ? "Calibration" : "校准")}</span>
+                  <strong>${escapeHtml(calibrationText)}</strong>
+                </div>
+              </div>
               <div class="prediction-grid">
                 ${rows.map((row) => `
                   <div class="prediction-prob-card">
