@@ -51,6 +51,18 @@ const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const ESPN_WORLDCUP_CORE = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world";
 const ESPN_WORLDCUP_GROUP_COUNT = Number(process.env.ESPN_WORLDCUP_GROUP_COUNT || 12);
+const FIFA_WORLD_CUP_SCHEDULE_URL = "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums";
+const KNOCKOUT_PATH_DIFFICULTY_GAP_THRESHOLD = 0.07;
+const ROUND_OF_32_TOP_TWO_PATHS = {
+  C: {
+    winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
+    runnerUp: { opponentGroup: "F", opponentRank: 1, matchNo: 75, labelZh: "C组第二 vs F组第一", labelEn: "Group C runner-up vs Group F winner" }
+  },
+  F: {
+    winner: { opponentGroup: "C", opponentRank: 2, matchNo: 75, labelZh: "F组第一 vs C组第二", labelEn: "Group F winner vs Group C runner-up" },
+    runnerUp: { opponentGroup: "C", opponentRank: 1, matchNo: 76, labelZh: "F组第二 vs C组第一", labelEn: "Group F runner-up vs Group C winner" }
+  }
+};
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
 const BETTINGEXPERT_BASE = "https://www.bettingexpert.com";
@@ -5370,7 +5382,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     context: mergedContext
   };
   baseMatch.humanMatchup = buildHumanMatchup(baseMatch, fifaRankings);
-  baseMatch.groupSituation = buildGroupSituation(baseMatch, groupStandings);
+  baseMatch.groupSituation = buildGroupSituation(baseMatch, groupStandings, fifaRankings);
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
   applyTournamentTrendToMatch(baseMatch, tournamentTrend, fifaRankings);
@@ -5451,7 +5463,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
     dynamicModel
   };
   enriched.humanMatchup = buildHumanMatchup(enriched, fifaRankings);
-  enriched.groupSituation = buildGroupSituation(enriched, groupStandings);
+  enriched.groupSituation = buildGroupSituation(enriched, groupStandings, fifaRankings);
   applyTournamentTrendToMatch(enriched, tournamentTrend, fifaRankings);
   applyGoldmanStyleModel(enriched, fifaRankings, { useMarketCalibration: false });
   const withInitialRecommendations = {
@@ -8035,6 +8047,85 @@ function classifyTeamGroupSituation(team, groupTeams) {
   };
 }
 
+function pathOpponentForRank(groupKey, rank, standings) {
+  const paths = ROUND_OF_32_TOP_TWO_PATHS[groupKey] || null;
+  const path = rank === 1 ? paths?.winner : rank === 2 ? paths?.runnerUp : null;
+  if (!path) return null;
+  const opponentGroup = standings?.groups?.find((group) => group.groupLabel === `Group ${path.opponentGroup}` || group.groupLabelZh === `${path.opponentGroup}组`);
+  const opponent = opponentGroup?.teams?.find((team) => team.rank === path.opponentRank) || null;
+  return {
+    ...path,
+    opponentGroupLabel: opponentGroup?.groupLabel || `Group ${path.opponentGroup}`,
+    opponentGroupLabelZh: opponentGroup?.groupLabelZh || `${path.opponentGroup}组`,
+    opponent: opponent ? {
+      code: opponent.code,
+      name: opponent.name,
+      nameZh: opponent.nameZh,
+      rank: opponent.rank,
+      points: opponent.points,
+      goalDifference: opponent.goalDifference
+    } : null
+  };
+}
+
+function projectedPathDifficulty(path, fifaRankings) {
+  const rank = rankingNumber(path?.opponent?.code, fifaRankings);
+  if (!rank) return 0.5;
+  return clamp((85 - rank) / 80, 0.08, 1);
+}
+
+function applyKnockoutPathMotivation(team, groupTeams, standings, fifaRankings) {
+  if (!team?.ok || !team.isFinalGroupRound || team.rank > 2) return team;
+  const groupKey = groupLetter(team.groupId);
+  const winnerPath = pathOpponentForRank(groupKey, 1, standings);
+  const runnerUpPath = pathOpponentForRank(groupKey, 2, standings);
+  if (!winnerPath || !runnerUpPath) return team;
+  const winnerDifficulty = projectedPathDifficulty(winnerPath, fifaRankings);
+  const runnerUpDifficulty = projectedPathDifficulty(runnerUpPath, fifaRankings);
+  const difficultyGap = runnerUpDifficulty - winnerDifficulty;
+  const leader = sortStandingTeams(groupTeams || [])[0];
+  const canWinGroup = team.rank === 1 || (leader && team.points >= leader.points - 3);
+  if (!canWinGroup || difficultyGap < KNOCKOUT_PATH_DIFFICULTY_GAP_THRESHOLD) {
+    return {
+      ...team,
+      knockoutPath: {
+        winnerPath,
+        runnerUpPath,
+        difficultyGap: roundTo(difficultyGap, 3),
+        sourceUrl: FIFA_WORLD_CUP_SCHEDULE_URL,
+        note: "",
+        noteEn: ""
+      }
+    };
+  }
+  const winnerOpponent = winnerPath.opponent?.nameZh || `${winnerPath.opponentGroupLabelZh}第${winnerPath.opponentRank}`;
+  const runnerUpOpponent = runnerUpPath.opponent?.nameZh || `${runnerUpPath.opponentGroupLabelZh}第${runnerUpPath.opponentRank}`;
+  const winnerOpponentEn = winnerPath.opponent?.name || `${winnerPath.opponentGroupLabel} rank ${winnerPath.opponentRank}`;
+  const runnerUpOpponentEn = runnerUpPath.opponent?.name || `${runnerUpPath.opponentGroupLabel} rank ${runnerUpPath.opponentRank}`;
+  const note = `${team.groupLabelZh}第一路径是 ${winnerPath.labelZh}（当前可能对 ${winnerOpponent}），第二路径是 ${runnerUpPath.labelZh}（当前可能对 ${runnerUpOpponent}）；争第一的路径价值明显，不能只按“平局够出线”处理。`;
+  const noteEn = `${team.groupLabel} winner path is ${winnerPath.labelEn} (currently ${winnerOpponentEn}), while runner-up path is ${runnerUpPath.labelEn} (currently ${runnerUpOpponentEn}); top-spot path value is meaningful, so a draw should not be treated as enough motivation-wise.`;
+  return {
+    ...team,
+    status: team.status === "draw_useful" ? "top_spot_chase" : team.status,
+    statusLabel: team.statusLabel === "平局有价值，赢球更稳" ? "争第一要赢，平局只保出线" : team.statusLabel,
+    statusLabelEn: team.statusLabelEn === "Draw has value, win is safer" ? "Win needed for top spot; draw mainly protects qualification" : team.statusLabelEn,
+    urgency: team.urgency === "low" ? "medium" : "high",
+    mustChase: true,
+    needsTopSpotWin: true,
+    likelyManageTempo: false,
+    knockoutPath: {
+      winnerPath,
+      runnerUpPath,
+      difficultyGap: roundTo(difficultyGap, 3),
+      sourceUrl: FIFA_WORLD_CUP_SCHEDULE_URL,
+      note,
+      noteEn
+    },
+    notes: [note, ...(team.notes || [])].slice(0, 4),
+    notesEn: [noteEn, ...(team.notesEn || [])].slice(0, 4)
+  };
+}
+
 function groupSituationImpact(home, away) {
   const ownImpact = (team) => {
     let own = 0;
@@ -8049,6 +8140,10 @@ function groupSituationImpact(home, away) {
       own -= 0.025;
       opponent -= 0.008;
     }
+    if (team?.needsTopSpotWin) {
+      own += 0.045;
+      opponent += 0.012;
+    }
     if (team?.likelyRotate) own -= 0.03;
     if (team?.likelyManageTempo && !team?.needsWin) own -= 0.015;
     return { own, opponent };
@@ -8061,7 +8156,7 @@ function groupSituationImpact(home, away) {
   };
 }
 
-function buildGroupSituation(match, standings) {
+function buildGroupSituation(match, standings, fifaRankings = {}) {
   const homeStanding = standings?.byCode?.[match.home];
   const awayStanding = standings?.byCode?.[match.away];
   if (!standings?.ok || !homeStanding || !awayStanding || homeStanding.groupId !== awayStanding.groupId) {
@@ -8077,12 +8172,29 @@ function buildGroupSituation(match, standings) {
   }
   const group = standings.groups?.find((item) => item.groupId === homeStanding.groupId);
   const groupTeams = group?.teams || [];
-  const home = classifyTeamGroupSituation(homeStanding, groupTeams);
-  const away = classifyTeamGroupSituation(awayStanding, groupTeams);
+  const homeBase = classifyTeamGroupSituation(homeStanding, groupTeams);
+  const awayBase = classifyTeamGroupSituation(awayStanding, groupTeams);
+  const home = applyKnockoutPathMotivation(homeBase, groupTeams, standings, fifaRankings);
+  const away = applyKnockoutPathMotivation(awayBase, groupTeams, standings, fifaRankings);
   const finalRound = Boolean(home.isFinalGroupRound || away.isFinalGroupRound);
   const matchNotes = [];
   const matchNotesEn = [];
-  if (home.needsWin && away.needsWin) {
+  if (home.needsTopSpotWin && away.needsTopSpotWin) {
+    matchNotes.push("双方都存在争小组第一/优化淘汰赛路径的动机，不能简单按“平局够出线”降速处理。");
+    matchNotesEn.push("Both sides have top-spot or bracket-path incentives, so this should not be reduced to a draw-is-enough setup.");
+  } else if (home.needsTopSpotWin && away.needsWin) {
+    matchNotes.push(`${home.nameZh} 为争第一/避开更难路径仍要主动争胜，${away.nameZh} 也有抢分压力，比赛开放度上升。`);
+    matchNotesEn.push(`${home.name} still needs to chase first place or a better bracket path, while ${away.name} also needs points; openness increases.`);
+  } else if (away.needsTopSpotWin && home.needsWin) {
+    matchNotes.push(`${away.nameZh} 为争第一/避开更难路径仍要主动争胜，${home.nameZh} 也有抢分压力，比赛开放度上升。`);
+    matchNotesEn.push(`${away.name} still needs to chase first place or a better bracket path, while ${home.name} also needs points; openness increases.`);
+  } else if (home.needsTopSpotWin) {
+    matchNotes.push(`${home.nameZh} 平局有出线价值，但争小组第一/优化淘汰赛路径需要赢球，控节奏动机下调。`);
+    matchNotesEn.push(`${home.name} can value a draw for qualification, but needs a win for top spot or bracket path; tempo-control incentive is reduced.`);
+  } else if (away.needsTopSpotWin) {
+    matchNotes.push(`${away.nameZh} 平局有出线价值，但争小组第一/优化淘汰赛路径需要赢球，控节奏动机下调。`);
+    matchNotesEn.push(`${away.name} can value a draw for qualification, but needs a win for top spot or bracket path; tempo-control incentive is reduced.`);
+  } else if (home.needsWin && away.needsWin) {
     matchNotes.push("双方都有抢分压力，落后方压上会提高比赛开放度，但也要防守门员/效率导致 BTTS 落空。");
     matchNotesEn.push("Both teams need points, which can open the match, though finishing and goalkeeper variance still matter.");
   } else if (home.needsWin && away.canAcceptDraw) {
@@ -8099,6 +8211,11 @@ function buildGroupSituation(match, standings) {
     matchNotes.push("存在净胜球压力：若早早领先，强势方不会必然降速，可能继续追第二球/第三球。");
     matchNotesEn.push("Goal-difference pressure exists; an early leader may keep chasing a second or third goal.");
   }
+  for (const team of [home, away]) {
+    if (!team.knockoutPath?.note) continue;
+    matchNotes.push(team.knockoutPath.note);
+    matchNotesEn.push(team.knockoutPath.noteEn);
+  }
   const impact = groupSituationImpact(home, away);
   const summary = `${home.nameZh} ${home.points}分第${home.rank}（净胜${signedNumber(home.goalDifference)}）：${home.statusLabel}；${away.nameZh} ${away.points}分第${away.rank}（净胜${signedNumber(away.goalDifference)}）：${away.statusLabel}。`;
   const summaryEn = `${home.name} ${home.points} pts rank ${home.rank} (GD ${signedNumber(home.goalDifference)}): ${home.statusLabelEn}; ${away.name} ${away.points} pts rank ${away.rank} (GD ${signedNumber(away.goalDifference)}): ${away.statusLabelEn}.`;
@@ -8109,6 +8226,7 @@ function buildGroupSituation(match, standings) {
     updatedAt: standings.lastUpdated,
     qualificationRule: standings.qualificationRule,
     qualificationRuleZh: standings.qualificationRuleZh,
+    pathRuleSourceUrl: FIFA_WORLD_CUP_SCHEDULE_URL,
     groupId: homeStanding.groupId,
     groupLabel: homeStanding.groupLabel,
     groupLabelZh: homeStanding.groupLabelZh,
@@ -8129,8 +8247,8 @@ function buildGroupSituation(match, standings) {
       goalsAgainst: team.goalsAgainst,
       goalDifference: team.goalDifference
     })),
-    matchNotes: matchNotes.slice(0, 3),
-    matchNotesEn: matchNotesEn.slice(0, 3),
+    matchNotes: matchNotes.slice(0, 4),
+    matchNotesEn: matchNotesEn.slice(0, 4),
     modelImpacts: [
       {
         label: "小组出线形势",

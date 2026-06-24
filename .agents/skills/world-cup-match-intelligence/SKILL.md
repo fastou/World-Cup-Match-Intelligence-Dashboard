@@ -14,7 +14,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
 - Comprehensive match forecasts should use a transparent xG-to-score-distribution layer: long-term strength/Elo-style baseline, recent form, World Cup record, dynamic context, tournament trend, Poisson score grid, and only a light market calibration. Do not present this as an official Goldman Sachs model unless using an official source; label it as Goldman-style public methodology when relevant.
 - Include a tournament-trend layer when current-tournament results exist: compute it from deduplicated final scores, keep the sample size visible, and apply only small weighted adjustments so early-tournament signals do not overfit.
-- In final group-stage rounds, include group qualification situation and motivation: current points, rank, goal difference, whether a team needs a win, whether goal difference matters, whether a draw has value, and whether tempo control or rotation risk rises. Apply only small, explainable xG adjustments.
+- In final group-stage rounds, include group qualification situation and motivation: current points, rank, goal difference, whether a team needs a win, whether goal difference matters, whether a draw has value, knockout-path value for finishing first vs second, and whether tempo control or rotation risk rises. Apply only small, explainable xG adjustments.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -170,7 +170,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - static world rankings, team recent form, and head-to-head context
 - squad physical/line-profile context and AI human-read notes
 - tournament-trend sample, signals, and per-match adjustment notes
-- group qualification situation, motivation notes, and any small xG adjustment applied from points-table pressure
+- group qualification situation, knockout-path motivation notes, and any small xG adjustment applied from points-table pressure or top-spot path value
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.
