@@ -4465,15 +4465,18 @@
 
       function renderPolymarket(polymarket) {
         const root = document.getElementById("polymarket");
-        if (!polymarket.ok) {
-          root.innerHTML = `<div class="error">Polymarket 实时源不可用：${escapeHtml(polymarket.error || "未知错误")}。本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。</div>`;
+        if (!polymarket || !polymarket.ok) {
+          root.innerHTML = `<div class="error">Polymarket 实时源不可用：${escapeHtml(polymarket?.error || "未知错误")}。本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。</div>`;
           return;
         }
-        if (!polymarket.markets.length) {
-          root.innerHTML = '<div class="empty">没有匹配到世界杯活跃市场。</div>';
+        const markets = Array.isArray(polymarket.markets) ? polymarket.markets : [];
+        if (!markets.length) {
+          root.innerHTML = `<div class="empty">${escapeHtml(currentLang === "en"
+            ? "Market catalog is compacted in light mode. Open each match card for live curves, holders and derivative markets."
+            : "当前为轻量模式：单场实时曲线、持仓和衍生盘口请在每场比赛卡片内查看。")}</div>`;
           return;
         }
-        root.innerHTML = `<div class="market-list">${polymarket.markets.map((market) => {
+        root.innerHTML = `<div class="market-list">${markets.map((market) => {
           const tokenRows = (market.tokens || []).map((token) => `
             <div class="token-row">
               <div class="token-name" title="${escapeHtml(token.label)}">${escapeHtml(token.label)}</div>

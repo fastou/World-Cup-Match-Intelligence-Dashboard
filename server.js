@@ -9732,8 +9732,13 @@ async function getPersistedLightCache() {
   if (lightDashboardCache) return lightDashboardCache;
   const cached = await readOptionalJson(LIVE_CACHE_PATH, null);
   if (!cached?.matches?.length) return null;
-  lightDashboardCache = cached;
-  lightDashboardCacheAt = Date.parse(cached.meta?.generatedAt || "") || Date.now();
+  lightDashboardCache = compactDashboardPayloadForLight(cached);
+  lightDashboardCacheAt = Date.parse(lightDashboardCache.meta?.generatedAt || "") || Date.now();
+  if (cached?.meta?.compactPayload !== true) {
+    writeJsonAtomic(LIVE_CACHE_PATH, lightDashboardCache).catch((error) => {
+      console.error(`Failed to compact persisted live dashboard cache: ${error.message}`);
+    });
+  }
   return lightDashboardCache;
 }
 
@@ -9779,6 +9784,233 @@ function buildPolymarketSourceSummary(polymarket) {
       fidelityMinutes: polymarket.historySource.fidelityMinutes
     } : undefined,
     error: polymarket?.error
+  };
+}
+
+function compactArray(value, limit) {
+  return Array.isArray(value) ? value.slice(0, limit) : [];
+}
+
+function compactPriceHistory(history, limit = 96) {
+  if (!Array.isArray(history)) return [];
+  return history.slice(Math.max(0, history.length - limit)).map((point) => {
+    if (Array.isArray(point)) return point.slice(0, 2);
+    if (!point || typeof point !== "object") return point;
+    return {
+      t: point.t ?? point.time ?? point.timestamp,
+      p: point.p ?? point.price ?? point.value
+    };
+  });
+}
+
+function compactHolder(holder = {}) {
+  return {
+    holderRank: holder.holderRank,
+    userName: holder.userName,
+    proxyWallet: holder.proxyWallet,
+    profileUrl: holder.profileUrl,
+    outcome: holder.outcome,
+    size: holder.size,
+    avgPrice: holder.avgPrice,
+    currPrice: holder.currPrice,
+    currentValue: holder.currentValue,
+    totalBought: holder.totalBought,
+    isElite: holder.isElite,
+    worldCupRank: holder.worldCupRank,
+    traderRank: holder.traderRank,
+    worldCupWinRateEstimate: holder.worldCupWinRateEstimate,
+    winRateEstimate: holder.winRateEstimate,
+    worldCupPnl: holder.worldCupPnl,
+    worldCupSettledPositions: holder.worldCupSettledPositions,
+    traderStyleLabel: holder.traderStyleLabel
+  };
+}
+
+function compactTraderSignal(signal = {}) {
+  return {
+    userName: signal.userName,
+    proxyWallet: signal.proxyWallet,
+    profileUrl: signal.profileUrl,
+    outcome: signal.outcome,
+    size: signal.size,
+    avgPrice: signal.avgPrice,
+    currPrice: signal.currPrice,
+    currentValue: signal.currentValue,
+    totalBought: signal.totalBought,
+    recentBuy: signal.recentBuy || null,
+    worldCupRank: signal.worldCupRank,
+    traderRank: signal.traderRank,
+    worldCupWinRateEstimate: signal.worldCupWinRateEstimate,
+    winRateEstimate: signal.winRateEstimate,
+    worldCupPnl: signal.worldCupPnl,
+    worldCupSettledPositions: signal.worldCupSettledPositions,
+    traderStyleLabel: signal.traderStyleLabel
+  };
+}
+
+function compactChart(chart = null) {
+  if (!chart) return null;
+  return {
+    source: chart.source,
+    marketId: chart.marketId,
+    conditionId: chart.conditionId,
+    tokenId: chart.tokenId,
+    marketQuestion: chart.marketQuestion,
+    label: chart.label,
+    currentPrice: chart.currentPrice,
+    topHolders: compactArray(chart.topHolders, 20).map(compactHolder),
+    history: compactPriceHistory(chart.history)
+  };
+}
+
+function compactRecommendation(rec = {}) {
+  return {
+    ...rec,
+    chart: compactChart(rec.chart),
+    topHolders: compactArray(rec.topHolders, 25).map(compactHolder),
+    eliteSignals: compactArray(rec.eliteSignals, 12).map(compactTraderSignal),
+    watchlistSignals: compactArray(rec.watchlistSignals, 12).map(compactTraderSignal)
+  };
+}
+
+function compactMarketCatalog(catalog = null) {
+  if (!catalog) return catalog;
+  return {
+    source: catalog.source,
+    ok: catalog.ok,
+    updatedAt: catalog.updatedAt,
+    marketCount: catalog.marketCount,
+    categories: (catalog.categories || []).map((category) => ({
+      key: category.key,
+      label: category.label,
+      labelEn: category.labelEn,
+      count: category.count,
+      markets: compactArray(category.markets, 18).map((market) => ({
+        question: market.question,
+        slug: market.slug,
+        sportsMarketType: market.sportsMarketType,
+        volume: market.volume,
+        liquidity: market.liquidity,
+        outcomes: compactArray(market.outcomes, 6).map((outcome) => ({
+          label: outcome.label,
+          price: outcome.price
+        }))
+      }))
+    }))
+  };
+}
+
+function compactMatch(match = {}) {
+  return {
+    ...match,
+    recommendations: (match.recommendations || []).map(compactRecommendation),
+    marketCatalog: compactMarketCatalog(match.marketCatalog),
+    eliteSummary: match.eliteSummary ? {
+      ...match.eliteSummary,
+      activePositions: compactArray(match.eliteSummary.activePositions, 20).map(compactTraderSignal)
+    } : match.eliteSummary
+  };
+}
+
+function compactEliteTrader(trader = {}) {
+  return {
+    soccerRank: trader.soccerRank,
+    worldCupRank: trader.worldCupRank,
+    userName: trader.userName,
+    proxyWallet: trader.proxyWallet,
+    profileUrl: trader.profileUrl,
+    verifiedBadge: trader.verifiedBadge,
+    worldCupWinRateEstimate: trader.worldCupWinRateEstimate,
+    winRateEstimate: trader.winRateEstimate,
+    worldCupPnl: trader.worldCupPnl,
+    worldCupVolume: trader.worldCupVolume,
+    worldCupSettledPositions: trader.worldCupSettledPositions,
+    worldCupWins: trader.worldCupWins,
+    worldCupLosses: trader.worldCupLosses,
+    worldCupPushes: trader.worldCupPushes,
+    worldCupEliteTier: trader.worldCupEliteTier,
+    worldCupEliteLabel: trader.worldCupEliteLabel,
+    worldCupEliteReason: trader.worldCupEliteReason,
+    worldCupHistoryStatus: trader.worldCupHistoryStatus,
+    traderStyle: trader.traderStyle,
+    traderStyleLabel: trader.traderStyleLabel,
+    traderStyleReason: trader.traderStyleReason,
+    directionalPurity: trader.directionalPurity,
+    activePositions: compactArray(trader.activePositions, 20).map(compactTraderSignal),
+    sampleTitles: compactArray(trader.sampleTitles, 5),
+    settledSamples: compactArray(trader.settledSamples, 5)
+  };
+}
+
+function compactEliteTraders(eliteTraders = null) {
+  if (!eliteTraders) return eliteTraders;
+  return {
+    ...eliteTraders,
+    traders: compactArray(eliteTraders.traders, 10).map(compactEliteTrader),
+    watchlist: compactArray(eliteTraders.watchlist, 10).map(compactEliteTrader),
+    candidates: compactArray(eliteTraders.candidates, 20).map(compactEliteTrader),
+    marketPositions: eliteTraders.marketPositions ? {
+      ...eliteTraders.marketPositions,
+      tokensWithElitePositions: compactArray(eliteTraders.marketPositions.tokensWithElitePositions, 20)
+    } : eliteTraders.marketPositions
+  };
+}
+
+function compactBettingExpert(bettingExpert = null) {
+  if (!bettingExpert) return bettingExpert;
+  return {
+    ...bettingExpert,
+    leaderboard: compactArray(bettingExpert.leaderboard, 20),
+    matches: compactArray(bettingExpert.matches, 24)
+  };
+}
+
+function compactDashboardPayloadForLight(payload = null) {
+  if (!payload) return payload;
+  return {
+    ...payload,
+    meta: {
+      ...(payload.meta || {}),
+      lightMode: true,
+      compactPayload: true
+    },
+    schedule: payload.schedule ? {
+      source: payload.schedule.source,
+      ok: payload.schedule.ok,
+      lastUpdated: payload.schedule.lastUpdated,
+      error: payload.schedule.error,
+      windowDays: payload.schedule.windowDays,
+      matchCount: Array.isArray(payload.schedule.matches) ? payload.schedule.matches.length : payload.schedule.matchCount
+    } : payload.schedule,
+    groupStandings: payload.groupStandings ? {
+      ...payload.groupStandings,
+      groups: compactArray(payload.groupStandings.groups, 12).map((group) => ({
+        id: group.id,
+        name: group.name,
+        nameZh: group.nameZh,
+        teams: compactArray(group.teams, 4).map((team) => ({
+          code: team.code,
+          name: team.name,
+          nameZh: team.nameZh,
+          rank: team.rank,
+          points: team.points,
+          played: team.played,
+          wins: team.wins,
+          draws: team.draws,
+          losses: team.losses,
+          goalsFor: team.goalsFor,
+          goalsAgainst: team.goalsAgainst,
+          goalDifference: team.goalDifference
+        }))
+      }))
+    } : payload.groupStandings,
+    matches: (payload.matches || []).map(compactMatch),
+    bettingExpert: compactBettingExpert(payload.bettingExpert),
+    eliteTraders: compactEliteTraders(payload.eliteTraders),
+    polymarket: payload.polymarket ? {
+      ...buildPolymarketSourceSummary(payload.polymarket),
+      markets: []
+    } : payload.polymarket
   };
 }
 
@@ -10056,13 +10288,14 @@ async function buildDashboard({
   };
 
   if (light) {
-    const previousLightCache = lightDashboardCache || await readOptionalJson(LIVE_CACHE_PATH, null);
-    if (shouldKeepExistingLightCache(payload, previousLightCache)) {
+    const nextLightPayload = compactDashboardPayloadForLight(payload);
+    const previousLightCache = lightDashboardCache || compactDashboardPayloadForLight(await readOptionalJson(LIVE_CACHE_PATH, null));
+    if (shouldKeepExistingLightCache(nextLightPayload, previousLightCache)) {
       payload.meta.cacheQualityHold = {
         keptPrevious: true,
         reason: "polymarket-chart-drop",
         previousLiveCharts: livePolymarketChartCount(previousLightCache),
-        nextLiveCharts: livePolymarketChartCount(payload),
+        nextLiveCharts: livePolymarketChartCount(nextLightPayload),
         previousGeneratedAt: previousLightCache.meta?.generatedAt || ""
       };
       lightDashboardCache = {
@@ -10075,9 +10308,9 @@ async function buildDashboard({
       };
       lightDashboardCacheAt = Date.parse(previousLightCache.meta?.generatedAt || "") || Date.now();
     } else {
-      lightDashboardCache = payload;
+      lightDashboardCache = nextLightPayload;
       lightDashboardCacheAt = Date.now();
-      writeJsonAtomic(LIVE_CACHE_PATH, payload).catch((error) => {
+      writeJsonAtomic(LIVE_CACHE_PATH, nextLightPayload).catch((error) => {
         console.error(`Failed to persist live dashboard cache: ${error.message}`);
       });
     }
@@ -10089,7 +10322,7 @@ async function buildDashboard({
     dashboardCache = payload;
     dashboardCacheAt = completedAt;
     if (!lightDashboardCache || lightDashboardCacheAt <= now) {
-      lightDashboardCache = payload;
+      lightDashboardCache = compactDashboardPayloadForLight(payload);
       lightDashboardCacheAt = completedAt;
     }
   }
@@ -10098,7 +10331,7 @@ async function buildDashboard({
       console.error(`Failed to record dashboard history: ${error.message}`);
     });
   }
-  return payload;
+  return light ? lightDashboardCache : payload;
 }
 
 async function serveStatic(req, res) {
