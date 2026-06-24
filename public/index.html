@@ -684,6 +684,99 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .prediction-situation {
+        margin: 0 0 10px;
+        padding: 10px;
+        border: 1px solid #cfe0d7;
+        border-radius: 8px;
+        background: #f5faf7;
+      }
+
+      .prediction-situation-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .prediction-situation-title {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 820;
+        line-height: 1.3;
+      }
+
+      .prediction-situation-subtitle {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .prediction-situation-badge {
+        flex: 0 0 auto;
+        padding: 4px 7px;
+        border-radius: 999px;
+        background: #e1f1ea;
+        color: var(--green);
+        font-size: 11px;
+        font-weight: 780;
+        white-space: nowrap;
+      }
+
+      .situation-team-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .situation-team-card {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .situation-team-card strong {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .situation-team-card span {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .situation-team-card em {
+        display: inline-block;
+        margin-top: 6px;
+        padding: 3px 6px;
+        border-radius: 999px;
+        background: #eef5f0;
+        color: var(--green);
+        font-size: 11px;
+        font-style: normal;
+        font-weight: 780;
+      }
+
+      .situation-notes {
+        display: grid;
+        gap: 5px;
+        margin: 8px 0 0;
+        padding-left: 16px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
       .prediction-prob-card {
         min-width: 0;
         padding: 9px;
@@ -2422,6 +2515,7 @@
         .line-profile-grid,
         .form-grid,
         .prediction-model-strip,
+        .situation-team-grid,
         .bettingexpert-row,
         .live-stats-grid,
         .lineup-box,
@@ -4075,6 +4169,68 @@
         `).join("");
       }
 
+      function renderGroupSituation(match) {
+        const situation = match.groupSituation || {};
+        if (!situation.ok) return "";
+        const isEn = currentLang === "en";
+        const groupLabel = isEn ? situation.groupLabel : situation.groupLabelZh;
+        const rule = isEn ? situation.qualificationRule : situation.qualificationRuleZh;
+        const summary = isEn ? situation.summaryEn : situation.summary;
+        const notes = isEn ? (situation.matchNotesEn || []) : (situation.matchNotes || []);
+        const teamCard = (team, fallbackName) => {
+          if (!team) return "";
+          const name = isEn ? (team.name || fallbackName) : (team.nameZh || fallbackName);
+          const status = isEn ? (team.statusLabelEn || team.statusLabel) : team.statusLabel;
+          const teamNotes = isEn ? (team.notesEn || []) : (team.notes || []);
+          const gd = typeof team.goalDifference === "number" && team.goalDifference > 0 ? `+${team.goalDifference}` : `${team.goalDifference ?? "-"}`;
+          const recordLabel = isEn ? "W-D-L" : "胜平负";
+          const tableLine = isEn
+            ? `Rank ${team.rank ?? "-"} · ${team.points ?? "-"} pts · GD ${gd} · ${recordLabel} ${team.record || "-"}`
+            : `第 ${team.rank ?? "-"} · ${team.points ?? "-"} 分 · 净胜 ${gd} · ${recordLabel} ${team.record || "-"}`;
+          const chaseBits = [
+            team.needsWin ? (isEn ? "needs win" : "需要赢球") : "",
+            team.needsBigWin ? (isEn ? "needs GD" : "需要净胜球") : "",
+            team.canAcceptDraw ? (isEn ? "draw useful" : "平局有价值") : "",
+            team.likelyManageTempo ? (isEn ? "tempo control risk" : "控节奏风险") : ""
+          ].filter(Boolean).join(" · ");
+          return `
+            <div class="situation-team-card">
+              <strong>${escapeHtml(name)}</strong>
+              <span>${escapeHtml(tableLine)}</span>
+              <em>${escapeHtml(status || "-")}</em>
+              ${chaseBits ? `<span>${escapeHtml(chaseBits)}</span>` : ""}
+              ${teamNotes.slice(0, 1).map((note) => `<span>${escapeHtml(note)}</span>`).join("")}
+            </div>
+          `;
+        };
+        const impact = (situation.modelImpacts || [])[0] || {};
+        const impactText = typeof impact.homeXgDelta === "number" || typeof impact.awayXgDelta === "number"
+          ? (isEn
+            ? `Model adjustment: ${homeName(match)} xG ${impact.homeXgDelta > 0 ? "+" : ""}${fmtNumber(impact.homeXgDelta, 3)}, ${awayName(match)} xG ${impact.awayXgDelta > 0 ? "+" : ""}${fmtNumber(impact.awayXgDelta, 3)}.`
+            : `模型修正：${homeName(match)} xG ${impact.homeXgDelta > 0 ? "+" : ""}${fmtNumber(impact.homeXgDelta, 3)}，${awayName(match)} xG ${impact.awayXgDelta > 0 ? "+" : ""}${fmtNumber(impact.awayXgDelta, 3)}。`)
+          : "";
+        return `
+          <div class="prediction-situation">
+            <div class="prediction-situation-head">
+              <div>
+                <strong class="prediction-situation-title">${escapeHtml(isEn ? "Group situation and motivation" : "小组形势与战意备注")}</strong>
+                <div class="prediction-situation-subtitle">${escapeHtml(summary || "")}</div>
+              </div>
+              <span class="prediction-situation-badge">${escapeHtml(groupLabel || (isEn ? "Group" : "小组"))}${situation.finalRound ? ` · ${escapeHtml(isEn ? "final round" : "第三轮")}` : ""}</span>
+            </div>
+            <div class="situation-team-grid">
+              ${teamCard(situation.home, homeName(match))}
+              ${teamCard(situation.away, awayName(match))}
+            </div>
+            <ul class="situation-notes">
+              ${rule ? `<li>${escapeHtml(rule)}</li>` : ""}
+              ${impactText ? `<li>${escapeHtml(impactText)}</li>` : ""}
+              ${notes.slice(0, 2).map((note) => `<li>${escapeHtml(note)}</li>`).join("")}
+            </ul>
+          </div>
+        `;
+      }
+
       function renderAiPrediction(match) {
         const prediction = match.aiPrediction || {};
         const model = match.modelV2 || match.dynamicModel?.goldmanStyle || {};
@@ -4145,6 +4301,7 @@
                   <strong>${escapeHtml(calibrationText)}</strong>
                 </div>
               </div>
+              ${renderGroupSituation(match)}
               <div class="prediction-grid">
                 ${rows.map((row) => `
                   <div class="prediction-prob-card">

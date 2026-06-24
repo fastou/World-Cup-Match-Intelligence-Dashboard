@@ -106,6 +106,11 @@ CREATE TABLE IF NOT EXISTS match_snapshots (
   elite_active_traders INTEGER,
   elite_current_value REAL,
   elite_total_bought REAL,
+  group_situation_summary TEXT,
+  group_situation_home_status TEXT,
+  group_situation_away_status TEXT,
+  group_situation_home_xg_delta REAL,
+  group_situation_away_xg_delta REAL,
   payload_json TEXT NOT NULL,
   FOREIGN KEY(run_id) REFERENCES dashboard_runs(run_id)
 );
@@ -470,6 +475,11 @@ WHERE mk.market_type = 'moneyline';
   await ensureColumn("match_snapshots", "ai_trade_action", "TEXT");
   await ensureColumn("match_snapshots", "ai_trade_primary", "TEXT");
   await ensureColumn("match_snapshots", "ai_trade_summary", "TEXT");
+  await ensureColumn("match_snapshots", "group_situation_summary", "TEXT");
+  await ensureColumn("match_snapshots", "group_situation_home_status", "TEXT");
+  await ensureColumn("match_snapshots", "group_situation_away_status", "TEXT");
+  await ensureColumn("match_snapshots", "group_situation_home_xg_delta", "REAL");
+  await ensureColumn("match_snapshots", "group_situation_away_xg_delta", "REAL");
 }
 
 function json(value) {
@@ -518,6 +528,8 @@ async function recordDashboardSnapshot(payload, options = {}) {
     });
 
     const snapshotId = `${id}:${match.id}`;
+    const groupSituation = match.groupSituation || {};
+    const groupImpact = (groupSituation.modelImpacts || [])[0] || {};
     operations.push({
       sql: "DELETE FROM market_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
@@ -551,8 +563,10 @@ async function recordDashboardSnapshot(payload, options = {}) {
        (snapshot_id, run_id, match_id, captured_at, prediction_label, prediction_key, prediction_probability,
         prediction_confidence, trade_label, ai_trade_action, ai_trade_primary, ai_trade_summary,
         completeness_mode, completeness_score, lambda_home, lambda_away,
-        elite_active_positions, elite_active_traders, elite_current_value, elite_total_bought, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        elite_active_positions, elite_active_traders, elite_current_value, elite_total_bought,
+        group_situation_summary, group_situation_home_status, group_situation_away_status,
+        group_situation_home_xg_delta, group_situation_away_xg_delta, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       params: [
         snapshotId,
         id,
@@ -574,6 +588,11 @@ async function recordDashboardSnapshot(payload, options = {}) {
         numberOrNull(match.eliteSummary?.activeTraders),
         numberOrNull(match.eliteSummary?.totalCurrentValue),
         numberOrNull(match.eliteSummary?.totalBought),
+        textOrNull(groupSituation.summary),
+        textOrNull(groupSituation.home?.status),
+        textOrNull(groupSituation.away?.status),
+        numberOrNull(groupImpact.homeXgDelta),
+        numberOrNull(groupImpact.awayXgDelta),
         json(match)
       ]
     });

@@ -49,6 +49,8 @@ const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
 const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
+const ESPN_WORLDCUP_CORE = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world";
+const ESPN_WORLDCUP_GROUP_COUNT = Number(process.env.ESPN_WORLDCUP_GROUP_COUNT || 12);
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const POLYMARKET_GAMMA_API_BASE = "https://gamma-api.polymarket.com";
 const BETTINGEXPERT_BASE = "https://www.bettingexpert.com";
@@ -202,6 +204,60 @@ const TEAM_SEARCH_NAMES = {
   COL: "Colombia",
   UZB: "Uzbekistan"
 };
+
+const ESPN_TEAM_IDS = {
+  ARG: "202",
+  MEX: "203",
+  CAN: "206",
+  COL: "208",
+  ECU: "209",
+  PAR: "210",
+  URU: "212",
+  ESP: "164",
+  ENG: "448",
+  NED: "449",
+  CZE: "450",
+  KOR: "451",
+  BIH: "452",
+  BEL: "459",
+  TUR: "465",
+  SWE: "466",
+  RSA: "467",
+  IRN: "469",
+  AUT: "474",
+  SUI: "475",
+  CRO: "477",
+  FRA: "478",
+  GER: "481",
+  POR: "482",
+  SCO: "580",
+  JPN: "627",
+  AUS: "628",
+  SEN: "654",
+  KSA: "655",
+  TUN: "659",
+  USA: "660",
+  BRA: "205",
+  ALG: "624",
+  MAR: "2869",
+  CPV: "2597",
+  EGY: "2620",
+  HAI: "2654",
+  PAN: "2659",
+  NZL: "2666",
+  COD: "2850",
+  JOR: "2917",
+  IRQ: "4375",
+  QAT: "4398",
+  CIV: "4789",
+  GHA: "4469",
+  CUW: "11678",
+  UZB: "2570"
+};
+
+const ESPN_TEAM_ID_TO_CODE = Object.fromEntries(
+  Object.entries(ESPN_TEAM_IDS).map(([code, id]) => [String(id), code])
+);
 
 const TEAM_DISPLAY_NAMES_ZH = {
   MEX: "墨西哥",
@@ -960,6 +1016,27 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
         homeXgDelta: roundTo(totalDelta * 0.55, 3),
         awayXgDelta: roundTo(totalDelta * 0.45, 3),
         reason: (trend.notes || []).slice(0, 2).join(" ") || "按本届进球节奏做低权重修正。"
+      });
+    }
+  }
+
+  if (match.groupSituation?.ok && match.groupSituation.modelImpacts?.length) {
+    let homeGroupDelta = 0;
+    let awayGroupDelta = 0;
+    for (const impact of match.groupSituation.modelImpacts) {
+      homeGroupDelta += Number(impact.homeXgDelta) || 0;
+      awayGroupDelta += Number(impact.awayXgDelta) || 0;
+    }
+    homeGroupDelta = clamp(homeGroupDelta, -0.08, 0.12);
+    awayGroupDelta = clamp(awayGroupDelta, -0.08, 0.12);
+    if (homeGroupDelta || awayGroupDelta) {
+      lambdaHome += homeGroupDelta;
+      lambdaAway += awayGroupDelta;
+      drivers.push({
+        label: "小组出线形势",
+        homeXgDelta: roundTo(homeGroupDelta, 3),
+        awayXgDelta: roundTo(awayGroupDelta, 3),
+        reason: `${match.groupSituation.summary} ${(match.groupSituation.matchNotes || []).slice(0, 1).join(" ")}`
       });
     }
   }
@@ -2198,6 +2275,16 @@ function aiPredictionEvidence(match, top, rows) {
     });
     if (match.tournamentTrend.notes?.length) drivers.push(`赛会趋势：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
   }
+  if (match.groupSituation?.ok) {
+    evidence.push({
+      label: "小组形势",
+      status: "synced",
+      detail: match.groupSituation.summary
+    });
+    if (match.groupSituation.matchNotes?.length) {
+      drivers.push(`小组形势：${match.groupSituation.matchNotes.slice(0, 2).join(" ")}`);
+    }
+  }
   if (match.modelV2?.drivers?.length) {
     evidence.push({
       label: "概率模型",
@@ -2214,7 +2301,7 @@ function aiPredictionEvidence(match, top, rows) {
     drivers.push(...impacts.map((impact) => `${impact.label || "动态调整"}：${impact.reason || ""}`.trim()));
   }
   return {
-    evidence: evidence.slice(0, 6),
+    evidence: evidence.slice(0, 8),
     drivers: [...new Set(drivers.filter(Boolean))].slice(0, 5),
     marketRead: aiPredictionMarketRead(top, rows),
     dataGaps: aiPredictionDataGaps(match)
@@ -2254,6 +2341,9 @@ function buildAiPrediction(match) {
   }
   if (match.tournamentTrend?.applied && match.tournamentTrend.notes?.length) {
     reasons.push(`赛会趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
+  }
+  if (match.groupSituation?.ok) {
+    reasons.push(`小组形势：${match.groupSituation.summary} ${(match.groupSituation.matchNotes || []).slice(0, 1).join(" ")}`);
   }
   if (eliteRows.length) {
     const eliteText = eliteRows.slice(0, 2).map((row) => `${row.name} 有 ${row.count} 个高手持仓，当前约 ${Math.round(row.totalCurrentValue).toLocaleString()} 美元`).join("；");
@@ -5197,7 +5287,7 @@ function h2hFromOverride(event, h2hOverrides, fifaRankings) {
   };
 }
 
-function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, nowMs = Date.now()) {
+function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs = Date.now()) {
   const kickoffMs = dateMs(event.kickoffUtc);
   if (!kickoffMs || !shouldKeepScheduledMatch(event.kickoffUtc, event, nowMs)) return null;
   if (event.completed || isFinishedStatus(event.status)) return null;
@@ -5283,6 +5373,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     context: mergedContext
   };
   baseMatch.humanMatchup = buildHumanMatchup(baseMatch, fifaRankings);
+  baseMatch.groupSituation = buildGroupSituation(baseMatch, groupStandings);
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
   applyTournamentTrendToMatch(baseMatch, tournamentTrend, fifaRankings);
@@ -5295,7 +5386,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
@@ -5305,7 +5396,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   }
   const modeledKeys = new Set(visibleModeled.map((match) => matchScheduleKey(TEAM_SEARCH_NAMES[match.home] || match.homeName, TEAM_SEARCH_NAMES[match.away] || match.awayName)));
   const autoBaseline = (schedule.matches || [])
-    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, nowMs))
+    .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs))
     .filter(Boolean);
   const combined = [...visibleModeled, ...autoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
@@ -5342,7 +5433,7 @@ function attachScheduleEventToMatch(match, scheduleEvent) {
   return match;
 }
 
-function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}, tournamentTrend = null) {
+function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}, tournamentTrend = null, groupStandings = null) {
   const homeTeam = attachStaticProfiles(teams[match.home], match.home, worldCupRecords, squadProfiles);
   const awayTeam = attachStaticProfiles(teams[match.away], match.away, worldCupRecords, squadProfiles);
   const matchContext = contextForMatch(context, match.id);
@@ -5363,6 +5454,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
     dynamicModel
   };
   enriched.humanMatchup = buildHumanMatchup(enriched, fifaRankings);
+  enriched.groupSituation = buildGroupSituation(enriched, groupStandings);
   applyTournamentTrendToMatch(enriched, tournamentTrend, fifaRankings);
   applyGoldmanStyleModel(enriched, fifaRankings, { useMarketCalibration: false });
   const withInitialRecommendations = {
@@ -7678,6 +7770,381 @@ async function fetchTournamentTrendSchedule(now = new Date()) {
   return fetchScheduleRange(start, end, "ESPN FIFA World Cup scoreboard · tournament trend range");
 }
 
+function espnTeamIdFromRef(ref) {
+  const match = String(ref || "").match(/\/teams\/(\d+)/);
+  return match ? match[1] : "";
+}
+
+function standingStat(stats, name, fallback = 0) {
+  const stat = (Array.isArray(stats) ? stats : []).find((item) => item.name === name || item.abbreviation === name);
+  const value = Number(stat?.value ?? stat?.displayValue);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function groupLetter(groupNumber) {
+  const index = Number(groupNumber);
+  return Number.isFinite(index) && index >= 1 && index <= 26 ? String.fromCharCode(64 + index) : String(groupNumber || "");
+}
+
+function parseStandingRow(row, groupNumber) {
+  const record = (row.records || []).find((item) => item.type === "total" || item.name === "overall") || row.records?.[0] || {};
+  const stats = Array.isArray(record.stats) ? record.stats : [];
+  const teamId = espnTeamIdFromRef(row.team?.$ref);
+  const code = ESPN_TEAM_ID_TO_CODE[teamId] || "";
+  if (!code) return null;
+  const wins = standingStat(stats, "wins");
+  const draws = standingStat(stats, "ties");
+  const losses = standingStat(stats, "losses");
+  const points = standingStat(stats, "points", wins * 3 + draws);
+  const played = standingStat(stats, "gamesPlayed", wins + draws + losses);
+  const goalsFor = standingStat(stats, "pointsFor");
+  const goalsAgainst = standingStat(stats, "pointsAgainst");
+  const goalDifference = standingStat(stats, "pointDifferential", goalsFor - goalsAgainst);
+  return {
+    groupId: String(groupNumber),
+    groupLabel: `Group ${groupLetter(groupNumber)}`,
+    groupLabelZh: `${groupLetter(groupNumber)}组`,
+    teamId,
+    code,
+    name: TEAM_SEARCH_NAMES[code] || code,
+    nameZh: TEAM_DISPLAY_NAMES_ZH[code] || TEAM_SEARCH_NAMES[code] || code,
+    played,
+    wins,
+    draws,
+    losses,
+    points,
+    goalsFor,
+    goalsAgainst,
+    goalDifference,
+    advanced: standingStat(stats, "advanced") > 0,
+    rank: null
+  };
+}
+
+function sortStandingTeams(teams) {
+  return [...teams].sort((a, b) =>
+    (b.points - a.points)
+    || (b.goalDifference - a.goalDifference)
+    || (b.goalsFor - a.goalsFor)
+    || (a.goalsAgainst - b.goalsAgainst)
+    || String(a.code).localeCompare(String(b.code))
+  );
+}
+
+async function fetchWorldCupStandings() {
+  const startedAt = Date.now();
+  const groupNumbers = Array.from({ length: ESPN_WORLDCUP_GROUP_COUNT }, (_, index) => index + 1);
+  const results = await mapLimit(groupNumbers, 4, async (groupNumber) => {
+    const url = `${ESPN_WORLDCUP_CORE}/seasons/2026/types/1/groups/${groupNumber}/standings/0?lang=en&region=us`;
+    const result = await timedFetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS });
+    if (!result.ok) {
+      return {
+        ok: false,
+        groupId: String(groupNumber),
+        groupLabel: `Group ${groupLetter(groupNumber)}`,
+        groupLabelZh: `${groupLetter(groupNumber)}组`,
+        url,
+        error: translateError(result.error)
+      };
+    }
+    const parsed = (result.data?.standings || [])
+      .map((row) => parseStandingRow(row, groupNumber))
+      .filter(Boolean);
+    const teams = sortStandingTeams(parsed).map((team, index) => ({ ...team, rank: index + 1 }));
+    return {
+      ok: teams.length >= 2,
+      groupId: String(groupNumber),
+      groupLabel: `Group ${groupLetter(groupNumber)}`,
+      groupLabelZh: `${groupLetter(groupNumber)}组`,
+      url,
+      teams,
+      error: teams.length >= 2 ? "" : "standings empty"
+    };
+  });
+  const groups = results.filter((group) => group.ok);
+  const byCode = {};
+  for (const group of groups) {
+    for (const team of group.teams || []) {
+      byCode[team.code] = {
+        ...team,
+        groupTeams: group.teams.map((item) => item.code)
+      };
+    }
+  }
+  return {
+    ok: groups.length > 0,
+    source: "ESPN FIFA World Cup core standings",
+    url: `${ESPN_WORLDCUP_CORE}/seasons/2026/types/1/groups/{1-${ESPN_WORLDCUP_GROUP_COUNT}}/standings/0`,
+    lastUpdated: new Date().toISOString(),
+    latencyMs: Date.now() - startedAt,
+    qualificationRule: "2026 FIFA World Cup group stage: top two in each group plus the eight best third-placed teams advance.",
+    qualificationRuleZh: "2026 世界杯小组赛按小组前二，以及 8 个成绩最好的第三名晋级估算。",
+    groups,
+    byCode,
+    errors: results.filter((group) => !group.ok).map((group) => `${group.groupLabel}: ${group.error}`).slice(0, 4),
+    error: groups.length ? "" : "ESPN standings unavailable"
+  };
+}
+
+function signedNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return number > 0 ? `+${number}` : String(number);
+}
+
+function classifyTeamGroupSituation(team, groupTeams) {
+  if (!team) {
+    return {
+      ok: false,
+      status: "missing",
+      statusLabel: "小组表未匹配",
+      statusLabelEn: "Standings not matched",
+      urgency: "unknown",
+      notes: ["未在 ESPN 小组积分表中匹配到该队，暂不做出线动机修正。"],
+      notesEn: ["This team was not matched in ESPN group standings; motivation adjustment is disabled."]
+    };
+  }
+  const sorted = sortStandingTeams(groupTeams || []);
+  const second = sorted[1] || null;
+  const third = sorted[2] || null;
+  const isFinalGroupRound = Number(team.played) >= 2 || sorted.every((item) => Number(item.played) >= 2);
+  const notes = [];
+  const notesEn = [];
+  let status = "developing";
+  let statusLabel = "形势未完全定型";
+  let statusLabelEn = "Situation still developing";
+  let urgency = "medium";
+  let mustChase = false;
+  let needsWin = false;
+  let needsBigWin = false;
+  let canAcceptDraw = false;
+  let likelyManageTempo = false;
+  let likelyRotate = false;
+
+  if (!isFinalGroupRound) {
+    notes.push("还不是典型第三轮形势，积分压力只做低权重复核。");
+    notesEn.push("Not a typical final group-round situation yet; points pressure is treated as a low-weight input.");
+  } else if (team.advanced || team.points >= 6) {
+    status = "control_or_rotate";
+    statusLabel = "高概率出线，可控节奏";
+    statusLabelEn = "Likely through, can manage tempo";
+    urgency = team.rank === 1 ? "low" : "medium";
+    canAcceptDraw = true;
+    likelyManageTempo = true;
+    likelyRotate = team.rank === 1 && second && team.points - second.points >= 3;
+    notes.push(`${team.points} 分且净胜球 ${signedNumber(team.goalDifference)}，出线主动权很大；目标更偏保名次/争第一，领先后可能控节奏。`);
+    notesEn.push(`${team.points} points and ${signedNumber(team.goalDifference)} GD; qualification control is strong, with tempo management possible after leading.`);
+  } else if (team.points >= 4) {
+    status = team.rank <= 2 ? "draw_useful" : "win_for_direct";
+    statusLabel = team.rank <= 2 ? "平局有价值，赢球更稳" : "争前二需要赢";
+    statusLabelEn = team.rank <= 2 ? "Draw has value, win is safer" : "Win needed for direct control";
+    urgency = team.rank <= 2 ? "medium" : "high";
+    canAcceptDraw = true;
+    needsWin = team.rank >= 3;
+    mustChase = team.rank >= 3;
+    notes.push(team.rank <= 2
+      ? "4 分通常已经接近晋级线，平局有现实价值；若要争小组第一仍需要主动抢分。"
+      : "虽然有 4 分，但暂不在前二，赢球能把出线主动权拿回来，平局更依赖第三名比较。");
+    notesEn.push(team.rank <= 2
+      ? "Four points usually sit close to the advancement line; a draw has real value, while a win helps chase first place."
+      : "Four points but outside the top two; a win restores direct control, a draw leans on third-place comparisons.");
+  } else if (team.points === 3) {
+    status = team.rank <= 2 && team.goalDifference >= 0 ? "protect_or_win" : "must_get_result";
+    statusLabel = team.rank <= 2 && team.goalDifference >= 0 ? "至少不败，赢球更稳" : "必须抢分";
+    statusLabelEn = team.rank <= 2 && team.goalDifference >= 0 ? "Avoid defeat, win is safer" : "Must chase points";
+    urgency = "high";
+    canAcceptDraw = team.rank <= 2 && team.goalDifference >= 0;
+    needsWin = team.rank >= 3 || team.goalDifference < 0;
+    mustChase = needsWin;
+    notes.push(team.rank <= 2 && team.goalDifference >= 0
+      ? "3 分暂在有利位置，但平局仍可能受同组和最佳第三比较影响，领先后更可能保守。"
+      : "3 分但排名/净胜球压力较大，末轮需要主动抢分，落后时会被迫压上。");
+    notesEn.push(team.rank <= 2 && team.goalDifference >= 0
+      ? "Three points in a useful position, but a draw can still depend on group and best-third comparisons."
+      : "Three points with ranking or GD pressure; this side likely needs to chase and may open up if trailing.");
+  } else if (team.points === 2) {
+    status = "must_win";
+    statusLabel = "基本必须赢";
+    statusLabelEn = "Essentially must win";
+    urgency = "very-high";
+    mustChase = true;
+    needsWin = true;
+    notes.push("2 分进入末轮，平局大多只能看别人脸色；赢球才更接近确定晋级。");
+    notesEn.push("Two points entering the final round; a draw usually needs help elsewhere, while a win gives real control.");
+  } else {
+    status = "must_win_big";
+    statusLabel = "必须赢，可能还要净胜球";
+    statusLabelEn = "Must win, may need goal difference";
+    urgency = "very-high";
+    mustChase = true;
+    needsWin = true;
+    needsBigWin = true;
+    notes.push(`${team.points} 分且净胜球 ${signedNumber(team.goalDifference)}，出线希望取决于赢球和净胜球，比赛会更像背水一战。`);
+    notesEn.push(`${team.points} points and ${signedNumber(team.goalDifference)} GD; advancement likely requires a win and goal-difference help.`);
+  }
+
+  if (isFinalGroupRound && second && team.rank >= 3) {
+    const pointGapToSecond = second.points - team.points;
+    const gdGapToSecond = second.goalDifference - team.goalDifference;
+    if (pointGapToSecond >= 3 && gdGapToSecond >= 2) {
+      needsBigWin = true;
+      notes.push(`距离前二有 ${pointGapToSecond} 分、净胜球差 ${gdGapToSecond}，单纯小胜可能不够，需要关注净胜球。`);
+      notesEn.push(`Gap to second is ${pointGapToSecond} points and ${gdGapToSecond} GD; a narrow win may not be enough.`);
+    } else if (team.rank === 3 && third && team.code === third.code) {
+      notes.push("暂列第三，需要同时看本组前二和各组第三名横向比较。");
+      notesEn.push("Currently third; must consider both direct group ranking and best-third comparisons.");
+    }
+  }
+
+  if (isFinalGroupRound && team.rank <= 2 && third) {
+    const cushion = team.points - third.points;
+    if (cushion >= 2) {
+      notes.push(`领先第三名 ${cushion} 分，保守拿分的动机上升。`);
+      notesEn.push(`${cushion}-point cushion over third place; conservative game management becomes more likely.`);
+    }
+  }
+
+  return {
+    ok: true,
+    code: team.code,
+    name: team.name,
+    nameZh: team.nameZh,
+    groupId: team.groupId,
+    groupLabel: team.groupLabel,
+    groupLabelZh: team.groupLabelZh,
+    rank: team.rank,
+    played: team.played,
+    points: team.points,
+    wins: team.wins,
+    draws: team.draws,
+    losses: team.losses,
+    goalsFor: team.goalsFor,
+    goalsAgainst: team.goalsAgainst,
+    goalDifference: team.goalDifference,
+    record: `${team.wins}-${team.draws}-${team.losses}`,
+    status,
+    statusLabel,
+    statusLabelEn,
+    urgency,
+    mustChase,
+    needsWin,
+    needsBigWin,
+    canAcceptDraw,
+    likelyManageTempo,
+    likelyRotate,
+    isFinalGroupRound,
+    notes: notes.slice(0, 4),
+    notesEn: notesEn.slice(0, 4)
+  };
+}
+
+function groupSituationImpact(home, away) {
+  const ownImpact = (team) => {
+    let own = 0;
+    let opponent = 0;
+    if (team?.needsBigWin) {
+      own += 0.075;
+      opponent += 0.03;
+    } else if (team?.needsWin) {
+      own += 0.045;
+      opponent += 0.018;
+    } else if (team?.canAcceptDraw && team?.rank <= 2) {
+      own -= 0.025;
+      opponent -= 0.008;
+    }
+    if (team?.likelyRotate) own -= 0.03;
+    if (team?.likelyManageTempo && !team?.needsWin) own -= 0.015;
+    return { own, opponent };
+  };
+  const homeImpact = ownImpact(home);
+  const awayImpact = ownImpact(away);
+  return {
+    homeXgDelta: roundTo(clamp(homeImpact.own + awayImpact.opponent, -0.08, 0.12), 3),
+    awayXgDelta: roundTo(clamp(awayImpact.own + homeImpact.opponent, -0.08, 0.12), 3)
+  };
+}
+
+function buildGroupSituation(match, standings) {
+  const homeStanding = standings?.byCode?.[match.home];
+  const awayStanding = standings?.byCode?.[match.away];
+  if (!standings?.ok || !homeStanding || !awayStanding || homeStanding.groupId !== awayStanding.groupId) {
+    return {
+      ok: false,
+      source: standings?.source || "ESPN FIFA World Cup core standings",
+      updatedAt: standings?.lastUpdated || new Date().toISOString(),
+      status: "unmatched",
+      summary: "未匹配到同组积分表，出线动机暂不参与模型。",
+      summaryEn: "Group standings were not matched for both teams; qualification motivation is not used.",
+      error: standings?.error || "team group standings unmatched"
+    };
+  }
+  const group = standings.groups?.find((item) => item.groupId === homeStanding.groupId);
+  const groupTeams = group?.teams || [];
+  const home = classifyTeamGroupSituation(homeStanding, groupTeams);
+  const away = classifyTeamGroupSituation(awayStanding, groupTeams);
+  const finalRound = Boolean(home.isFinalGroupRound || away.isFinalGroupRound);
+  const matchNotes = [];
+  const matchNotesEn = [];
+  if (home.needsWin && away.needsWin) {
+    matchNotes.push("双方都有抢分压力，落后方压上会提高比赛开放度，但也要防守门员/效率导致 BTTS 落空。");
+    matchNotesEn.push("Both teams need points, which can open the match, though finishing and goalkeeper variance still matter.");
+  } else if (home.needsWin && away.canAcceptDraw) {
+    matchNotes.push(`${home.nameZh} 更需要主动抢，${away.nameZh} 平局也有价值，节奏可能呈现一方压上、一方反击。`);
+    matchNotesEn.push(`${home.name} has more urgency, while ${away.name} can value a draw; expect chase-versus-counter dynamics.`);
+  } else if (away.needsWin && home.canAcceptDraw) {
+    matchNotes.push(`${away.nameZh} 更需要主动抢，${home.nameZh} 平局也有价值，领先方可能更早控节奏。`);
+    matchNotesEn.push(`${away.name} has more urgency, while ${home.name} can value a draw; the leading side may manage tempo earlier.`);
+  } else if (home.canAcceptDraw && away.canAcceptDraw) {
+    matchNotes.push("两队都能接受不败结果时，平局/小比分路径权重上升，谨慎追高大球。");
+    matchNotesEn.push("When both can accept avoiding defeat, draw and lower-score paths gain weight.");
+  }
+  if (home.needsBigWin || away.needsBigWin) {
+    matchNotes.push("存在净胜球压力：若早早领先，强势方不会必然降速，可能继续追第二球/第三球。");
+    matchNotesEn.push("Goal-difference pressure exists; an early leader may keep chasing a second or third goal.");
+  }
+  const impact = groupSituationImpact(home, away);
+  const summary = `${home.nameZh} ${home.points}分第${home.rank}（净胜${signedNumber(home.goalDifference)}）：${home.statusLabel}；${away.nameZh} ${away.points}分第${away.rank}（净胜${signedNumber(away.goalDifference)}）：${away.statusLabel}。`;
+  const summaryEn = `${home.name} ${home.points} pts rank ${home.rank} (GD ${signedNumber(home.goalDifference)}): ${home.statusLabelEn}; ${away.name} ${away.points} pts rank ${away.rank} (GD ${signedNumber(away.goalDifference)}): ${away.statusLabelEn}.`;
+  return {
+    ok: true,
+    source: standings.source,
+    sourceUrl: group?.url || standings.url,
+    updatedAt: standings.lastUpdated,
+    qualificationRule: standings.qualificationRule,
+    qualificationRuleZh: standings.qualificationRuleZh,
+    groupId: homeStanding.groupId,
+    groupLabel: homeStanding.groupLabel,
+    groupLabelZh: homeStanding.groupLabelZh,
+    finalRound,
+    summary,
+    summaryEn,
+    home,
+    away,
+    groupTable: groupTeams.map((team) => ({
+      code: team.code,
+      name: team.name,
+      nameZh: team.nameZh,
+      rank: team.rank,
+      played: team.played,
+      points: team.points,
+      record: `${team.wins}-${team.draws}-${team.losses}`,
+      goalsFor: team.goalsFor,
+      goalsAgainst: team.goalsAgainst,
+      goalDifference: team.goalDifference
+    })),
+    matchNotes: matchNotes.slice(0, 3),
+    matchNotesEn: matchNotesEn.slice(0, 3),
+    modelImpacts: [
+      {
+        label: "小组出线形势",
+        homeXgDelta: impact.homeXgDelta,
+        awayXgDelta: impact.awayXgDelta,
+        reason: matchNotes[0] || summary
+      }
+    ].filter((item) => item.homeXgDelta || item.awayXgDelta || matchNotes.length)
+  };
+}
+
 async function fetchPolymarketSearch(search) {
   const query = encodeURIComponent(search.q);
   const url = `${POLYMARKET_GAMMA_API_BASE}/public-search?q=${query}&limit_per_type=10&events_status=active`;
@@ -9312,17 +9779,18 @@ async function buildDashboard({
     },
     matches: {}
   });
-  const [schedule, trendSchedule, initialFinalResults] = await Promise.all([
+  const [schedule, trendSchedule, initialFinalResults, groupStandings] = await Promise.all([
     fetchScheduleWindow(),
     fetchTournamentTrendSchedule(),
-    fetchFinalResults()
+    fetchFinalResults(),
+    fetchWorldCupStandings()
   ]);
   let finalResults = initialFinalResults;
   const trendSourceSchedule = trendSchedule.ok ? trendSchedule : schedule;
   const tournamentTrend = buildTournamentTrend(trendSourceSchedule, fifaRankings);
   const polymarket = await fetchPolymarket(schedule);
   const preliminaryWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend));
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend, groupStandings));
   if (!DISABLE_HISTORY_RECORDING && trendSourceSchedule.ok) {
     try {
       await syncFinalResultsFromSchedule(trendSourceSchedule, allModeledMatches, finalResults);
@@ -9331,7 +9799,7 @@ async function buildDashboard({
     }
   }
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, trendSourceSchedule.matches || schedule.matches || [], finalResults);
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings);
   attachMarketCharts(matches, polymarket);
   const bettingExpert = await attachBettingExpertSignals(matches, { enabled: true });
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
@@ -9402,6 +9870,15 @@ async function buildDashboard({
         detail: tournamentTrend.summary
       },
       {
+        source: "小组积分与出线形势",
+        ok: groupStandings.ok,
+        lastUpdated: groupStandings.lastUpdated || "",
+        error: groupStandings.error || (groupStandings.errors || []).join("；"),
+        detail: groupStandings.ok
+          ? `${groupStandings.groups.length} 个小组 · ${groupStandings.qualificationRuleZh}`
+          : "ESPN 小组积分表不可用，出线动机不参与模型"
+      },
+      {
         source: "世界杯账号监控",
         ok: eliteTraders.ok,
         lastUpdated: eliteTraders.updatedAt || "",
@@ -9446,6 +9923,16 @@ async function buildDashboard({
     researchFramework,
     contextMeta: context.meta || {},
     tournamentTrend,
+    groupStandings: {
+      source: groupStandings.source,
+      url: groupStandings.url,
+      ok: groupStandings.ok,
+      lastUpdated: groupStandings.lastUpdated,
+      qualificationRule: groupStandings.qualificationRule,
+      qualificationRuleZh: groupStandings.qualificationRuleZh,
+      groups: groupStandings.groups,
+      errors: groupStandings.errors || []
+    },
     schedule,
     matches,
     bettingExpert,
