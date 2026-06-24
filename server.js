@@ -751,18 +751,6 @@ function poisson(lambda, goals) {
   return Math.exp(-lambda) * Math.pow(lambda, goals) / factorial;
 }
 
-function calibratedBttsProbability(rawBtts, lambdaHome, lambdaAway) {
-  const minLambda = Math.min(lambdaHome, lambdaAway);
-  const maxLambda = Math.max(lambdaHome, lambdaAway);
-  const balance = maxLambda > 0 ? minLambda / maxLambda : 0;
-  const bothCanScoreBoost = clamp((minLambda - 0.72) * 0.11, 0, 0.055);
-  const balanceBoost = clamp((balance - 0.62) * 0.09, 0, 0.045);
-  const lowTempoPenalty = lambdaHome + lambdaAway < 1.95 ? 0.025 : 0;
-  const mismatchPenalty = balance < 0.5 ? 0.04 : 0;
-  const recentCalibration = 0.035;
-  return clamp(rawBtts + recentCalibration + bothCanScoreBoost + balanceBoost - lowTempoPenalty - mismatchPenalty, 0.18, 0.62);
-}
-
 function scoreModel(lambdaHome, lambdaAway) {
   const maxGoals = 10;
   let home = 0;
@@ -787,14 +775,13 @@ function scoreModel(lambdaHome, lambdaAway) {
   }
 
   scores.sort((a, b) => b.probability - a.probability);
-  const calibratedBtts = calibratedBttsProbability(btts, lambdaHome, lambdaAway);
   return {
     home,
     draw,
     away,
     under25,
     over25: 1 - under25,
-    btts: calibratedBtts,
+    btts,
     rawBtts: btts,
     topScores: scores.slice(0, 6),
     topScoresFull: scores
@@ -920,7 +907,7 @@ function scaleScoreDistribution(probabilities, targetTriplet) {
     under25: summary.under25,
     over25: 1 - summary.under25,
     rawBtts: summary.rawBtts,
-    btts: calibratedBttsProbability(summary.rawBtts, probabilities.lambdaHome || 1.1, probabilities.lambdaAway || 1.1),
+    btts: summary.rawBtts,
     topScoresFull: normalizedScores
   });
 }
@@ -1423,7 +1410,6 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
     const favoriteKey = homeUnderdog ? "away" : "home";
     deltas[underdogKey] += trend.adjustments.underdogWinDelta;
     deltas[favoriteKey] -= trend.adjustments.underdogWinDelta * 0.65;
-    deltas.btts += Math.min(0.018, trend.adjustments.underdogWinDelta * 0.7);
     notes.push(`弱队进球趋势让 ${homeUnderdog ? match.homeName : match.awayName} 胜/受让侧小幅上修。`);
   }
 
@@ -1437,7 +1423,6 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
     const thisRank = side === "home" ? homeRank : awayRank;
     const isUnderdog = thisRank && otherRank ? thisRank > otherRank : false;
     const cafDelta = clamp(0.008 * sampleWeight + ((profile.underdogGoalRate || 0) - 0.45) * 0.025 * sampleWeight, 0.004, 0.02);
-    deltas.btts += cafDelta;
     if (isUnderdog) {
       deltas[side] += cafDelta * 0.8;
       deltas[side === "home" ? "away" : "home"] -= cafDelta * 0.45;
@@ -1451,13 +1436,11 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
     away: match.probabilities.away + deltas.away
   });
   const over25 = probabilityShift(match.probabilities.over25, deltas.over25);
-  const btts = probabilityShift(match.probabilities.btts, deltas.btts);
   match.probabilities = recalculateScoreSummaries({
     ...match.probabilities,
     ...winTriplet,
     over25,
     under25: 1 - over25,
-    btts,
     trendAdjusted: true
   });
   match.tournamentTrend = {
@@ -2185,6 +2168,20 @@ function scoreListText(scores = [], limit = 3) {
   return scores.slice(0, limit).map((score) => `${score.score} ${formatPercent(score.probability)}`).join(" / ");
 }
 
+function goalLeanText(probabilities = {}) {
+  const over25 = Number(probabilities.over25);
+  const under25 = Number(probabilities.under25);
+  const btts = Number(probabilities.btts);
+  const bttsNo = 1 - btts;
+  const totalText = Number.isFinite(over25) && Number.isFinite(under25)
+    ? (under25 >= over25 ? `小2.5 ${formatPercent(under25)}` : `大2.5 ${formatPercent(over25)}`)
+    : "大小球待算";
+  const bttsText = Number.isFinite(btts)
+    ? (bttsNo >= btts ? `双进否 ${formatPercent(bttsNo)}` : `双进是 ${formatPercent(btts)}`)
+    : "双进待算";
+  return `${totalText} / ${bttsText}`;
+}
+
 function aiPredictionModelSummary(match) {
   const model = match.modelV2 || match.dynamicModel?.goldmanStyle;
   const probabilities = match.probabilities || {};
@@ -2194,7 +2191,7 @@ function aiPredictionModelSummary(match) {
   const pieces = [
     `${match.homeName} xG ${Number(lambda.lambdaHome || 0).toFixed(2)}，${match.awayName} xG ${Number(lambda.lambdaAway || 0).toFixed(2)}`,
     topScores.length ? `最可能比分：${scoreListText(topScores, 3)}` : "",
-    `大2.5 ${formatPercent(probabilities.over25)} / BTTS ${formatPercent(probabilities.btts)}`
+    `进球概率较高侧：${goalLeanText(probabilities)}`
   ].filter(Boolean);
   return pieces.join("；") + "。";
 }

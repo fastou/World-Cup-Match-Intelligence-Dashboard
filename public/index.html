@@ -4231,6 +4231,30 @@
         `;
       }
 
+      function goalLeanDisplay(probabilities = {}) {
+        const over25 = Number(probabilities.over25);
+        const under25 = Number(probabilities.under25);
+        const bttsYes = Number(probabilities.btts);
+        const bttsNo = 1 - bttsYes;
+        const totalLean = Number.isFinite(over25) && Number.isFinite(under25)
+          ? (under25 >= over25
+            ? { zh: `小2.5 ${fmtPct(under25)}`, en: `U2.5 ${fmtPct(under25)}`, gap: under25 - over25 }
+            : { zh: `大2.5 ${fmtPct(over25)}`, en: `O2.5 ${fmtPct(over25)}`, gap: over25 - under25 })
+          : { zh: "大小球待算", en: "Total pending", gap: 0 };
+        const bttsLean = Number.isFinite(bttsYes)
+          ? (bttsNo >= bttsYes
+            ? { zh: `双进否 ${fmtPct(bttsNo)}`, en: `BTTS No ${fmtPct(bttsNo)}`, gap: bttsNo - bttsYes }
+            : { zh: `双进是 ${fmtPct(bttsYes)}`, en: `BTTS Yes ${fmtPct(bttsYes)}`, gap: bttsYes - bttsNo })
+          : { zh: "双进待算", en: "BTTS pending", gap: 0 };
+        const tight = [totalLean.gap, bttsLean.gap].some((gap) => Number.isFinite(gap) && Math.abs(gap) < 0.06);
+        return {
+          text: currentLang === "en" ? `${totalLean.en} / ${bttsLean.en}` : `${totalLean.zh} / ${bttsLean.zh}`,
+          note: tight
+            ? (currentLang === "en" ? "near 50/50" : "接近五五开")
+            : ""
+        };
+      }
+
       function renderAiPrediction(match) {
         const prediction = match.aiPrediction || {};
         const model = match.modelV2 || match.dynamicModel?.goldmanStyle || {};
@@ -4267,6 +4291,7 @@
         const evidence = Array.isArray(prediction.evidence) ? prediction.evidence : [];
         const drivers = Array.isArray(prediction.modelDrivers) ? prediction.modelDrivers : [];
         const dataGaps = Array.isArray(prediction.dataGaps) ? prediction.dataGaps : [];
+        const goalLean = goalLeanDisplay(match.probabilities || {});
         const statusText = (status) => ({
           synced: currentLang === "en" ? "synced" : "已同步",
           partial: currentLang === "en" ? "partial" : "部分",
@@ -4293,8 +4318,8 @@
                   <strong>${escapeHtml(topScoreText)}</strong>
                 </div>
                 <div class="prediction-model-metric">
-                  <span>${escapeHtml(currentLang === "en" ? "Goals" : "进球倾向")}</span>
-                  <strong>${escapeHtml(currentLang === "en" ? `O2.5 ${fmtPct(match.probabilities?.over25)} / BTTS ${fmtPct(match.probabilities?.btts)}` : `大2.5 ${fmtPct(match.probabilities?.over25)} / 双进 ${fmtPct(match.probabilities?.btts)}`)}</strong>
+                  <span>${escapeHtml(currentLang === "en" ? "Goal lean" : "进球概率较高侧")}</span>
+                  <strong>${escapeHtml(goalLean.text)}${goalLean.note ? ` · ${escapeHtml(goalLean.note)}` : ""}</strong>
                 </div>
                 <div class="prediction-model-metric">
                   <span>${escapeHtml(currentLang === "en" ? "Calibration" : "校准")}</span>
