@@ -12,7 +12,10 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Treat the dashboard as research and monitoring software. Do not automate orders, guarantee outcomes, or present outputs as financial advice.
 - Do not fabricate missing sports, odds, Polymarket, lineup, injury, weather, or account data. Mark unavailable inputs as missing, stale, or source-unreachable.
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
+- Comprehensive match forecasts should use a transparent xG-to-score-distribution layer: long-term strength/Elo-style baseline, recent form, World Cup record, dynamic context, tournament trend, Poisson score grid, and only a light market calibration. Do not present this as an official Goldman Sachs model unless using an official source; label it as Goldman-style public methodology when relevant.
 - Include a tournament-trend layer when current-tournament results exist: compute it from deduplicated final scores, keep the sample size visible, and apply only small weighted adjustments so early-tournament signals do not overfit.
+- In final group-stage rounds, include group qualification situation and motivation: current points, rank, goal difference, whether a team needs a win, whether goal difference matters, whether a draw has value, knockout-path value for finishing first vs second, and whether tempo control or rotation risk rises. Apply only small, explainable xG adjustments.
+- In final group-stage rounds, do not stop at "draw has value." If first-place finish changes the likely knockout path or avoids a stronger opponent, model a small aggression/path-value adjustment and explain it in the match notes.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -90,6 +93,7 @@ Use these prediction modes:
 Downgrade output when inputs are incomplete:
 
 - Missing lineups or injuries: no strong confidence or aggressive action label.
+- Lineup gate reasons must distinguish projected lineups, queried-but-unverified lineups, and missing lineup sources. Do not collapse those states into a vague "lineup not fully confirmed" message.
 - Missing odds or Polymarket curves: no price guidance.
 - Auto-baseline fixtures: only low-confidence AI context and observation labels until static teams, real odds, Polymarket curves, and dynamic context are available.
 - Stale news, weather, or AI synthesis: show the stale reason and update time.
@@ -127,10 +131,17 @@ When maintaining public market data:
 
 - Fetch live curves for match result, handicap, and totals separately when markets exist.
 - Treat BTTS / Both Teams To Score as a first-class market alongside match result, handicap, and totals: generate Yes/No probabilities, match Polymarket BTTS tokens when available, show curves, archive snapshots, and settle reviews from final scores.
+- Fetch each match's `-more-markets` Polymarket event when available and expose a separate derivative market catalog for browsing. Include correct score/ball-score markets, halves, team totals, alternate totals, alternate spreads, BTTS variants, and other markets as market data. Do not mix these derivative rows into model buy recommendations until a specific probability model and current-score gate exists for that market type.
+- If Polymarket does not return a derivative category such as correct score/ball-score for a match, show a structured missing state for that category instead of leaving the UI blank or inventing prices.
 - The next-three-day fixture window is a data collection and context sync scope. Do not render it as the primary home-page match list unless explicitly requested.
 - The primary dashboard tabs should default to every match on the current Beijing/Shanghai matchday, not the entire ESPN/FIFA schedule window and not the date embedded in Polymarket market slugs. A late-night match whose Polymarket slug says the prior date should still be grouped by its kickoff date in Asia/Shanghai. Matches without live Polymarket curves may appear as schedule/awaiting-market, but must not generate fake price advice.
 - Opportunity radar should use the same current Beijing/Shanghai matchday as the main tabs, then rank only real priced/curved market candidates within that focused set. Diversify surfaced candidates across BTTS, totals, handicap, and match result, and do not let high-edge longshot moneyline rows crowd out structured market opportunities with live curves.
 - Opportunity radar should consume trend-adjusted probabilities and can add small ranking boosts for trend-supported markets such as BTTS-hot, underdog-scoring, or underdog-handicap signals. It must still obey price, data-quality, and curve gates.
+- Opportunity radar scans should be archived as lightweight runs/items even when the visible dashboard is using light mode, so later review can compare surfaced candidates, observation candidates, prices, edge, and final outcomes.
+- In-play recommendations must apply current-score gates before ranking. Do not recommend already crossed or already satisfied entry lines as new buy points: for example, after the score reaches 3 total goals, Over 2.5 is `已穿线不追`; Under 2.5 is impossible; after both teams score, BTTS Yes is already satisfied and BTTS No is impossible. Correct-score markets that the current score has passed must also be blocked.
+- In-play recommendations must suppress extreme long-tail moneyline rows after a large score gap. If a team trails by three or more goals, or by two or more goals late, and the comeback/draw probability is tiny or the market is trading near 0¢, label it `长尾不追` and move it below practical live markets instead of saying `等待更好价格`.
+- In-play opportunity labels must distinguish real Polymarket live prices from local/manual snapshots. If the row does not have a live Polymarket price/curve, show waiting or downgraded language instead of a buy-style recommendation.
+- BTTS recommendations need a post-review discipline layer. Do not promote BTTS Yes as a main buy only because the underdog has pace, effort, or a plausible counterattack path. Downgrade BTTS Yes when under 2.5 is high, 1-0/2-0/0-0 score mass is concentrated, the favorite has a strong clean-sheet/control path, or the underdog lacks verified shot-creation evidence.
 - Match Polymarket team names with exact team aliases or word-boundary tokens. Do not treat short team codes such as `SCO`, `MAR`, or `CAN` as arbitrary substrings, because they can appear inside unrelated words like `score`, `market`, or `canceled`.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
 - Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`, and South Korea/Korea Republic using `kr` rather than `kor`.
@@ -146,6 +157,7 @@ When maintaining public market data:
 - Fetch and display top holders for relevant Polymarket condition/token pairs when public holder data is available. Mark whether holders match the World Cup Top 10 list.
 - Store holder snapshots separately for recommendation-mapped markets and general World Cup market-pool tokens so later analysis can compare holder behavior to outcomes.
 - If account or position data is unavailable, show unavailable status instead of fallback-looking fake rows.
+- BettingExpert may be used as a public community-tipster source under each match. First parse the public World Cup leaderboard, then match those leaderboard users against each match page's public tips. If the leaderboard exposes fewer than 20 users or omits win-rate fields on some rows, show that source limit explicitly rather than filling ordinary match-page users into the Top 20.
 
 ## History And Backtesting
 
@@ -160,6 +172,8 @@ Important dashboard updates should be archived so later strategy analysis can co
 - static world rankings, team recent form, and head-to-head context
 - squad physical/line-profile context and AI human-read notes
 - tournament-trend sample, signals, and per-match adjustment notes
+- group qualification situation, knockout-path motivation notes, and any small xG adjustment applied from points-table pressure or top-spot path value
+- opportunity radar runs and candidate items, including strict candidates, observation candidates, price, edge, max informational entry price, confidence, expiry time, and AI/rule rationale
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.

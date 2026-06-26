@@ -4237,12 +4237,24 @@
         const bttsYes = Number(probabilities.btts);
         const bttsNo = 1 - bttsYes;
         const totalLean = Number.isFinite(over25) && Number.isFinite(under25)
-          ? (under25 >= over25
+          ? (Math.abs(over25 - under25) < 0.06
+            ? {
+              zh: `大小2.5接近五五开（大 ${fmtPct(over25)} / 小 ${fmtPct(under25)}）`,
+              en: `O/U2.5 near 50/50 (O ${fmtPct(over25)} / U ${fmtPct(under25)})`,
+              gap: Math.abs(over25 - under25)
+            }
+            : under25 >= over25
             ? { zh: `小2.5 ${fmtPct(under25)}`, en: `U2.5 ${fmtPct(under25)}`, gap: under25 - over25 }
             : { zh: `大2.5 ${fmtPct(over25)}`, en: `O2.5 ${fmtPct(over25)}`, gap: over25 - under25 })
           : { zh: "大小球待算", en: "Total pending", gap: 0 };
         const bttsLean = Number.isFinite(bttsYes)
-          ? (bttsNo >= bttsYes
+          ? (Math.abs(bttsYes - bttsNo) < 0.06
+            ? {
+              zh: `双进接近五五开（是 ${fmtPct(bttsYes)} / 否 ${fmtPct(bttsNo)}）`,
+              en: `BTTS near 50/50 (Yes ${fmtPct(bttsYes)} / No ${fmtPct(bttsNo)})`,
+              gap: Math.abs(bttsYes - bttsNo)
+            }
+            : bttsNo >= bttsYes
             ? { zh: `双进否 ${fmtPct(bttsNo)}`, en: `BTTS No ${fmtPct(bttsNo)}`, gap: bttsNo - bttsYes }
             : { zh: `双进是 ${fmtPct(bttsYes)}`, en: `BTTS Yes ${fmtPct(bttsYes)}`, gap: bttsYes - bttsNo })
           : { zh: "双进待算", en: "BTTS pending", gap: 0 };

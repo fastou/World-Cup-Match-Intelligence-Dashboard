@@ -422,6 +422,41 @@ CREATE TABLE IF NOT EXISTS inplay_recommendation_snapshots (
   FOREIGN KEY(live_snapshot_id) REFERENCES live_match_snapshots(id)
 );
 
+CREATE TABLE IF NOT EXISTS opportunity_radar_runs (
+  run_id TEXT PRIMARY KEY,
+  generated_at TEXT NOT NULL,
+  scan_date TEXT,
+  focus_match_date TEXT,
+  focus_match_count INTEGER,
+  candidate_count INTEGER,
+  observation_candidate_count INTEGER,
+  payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS opportunity_radar_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  item_id TEXT,
+  kind TEXT NOT NULL,
+  match_id TEXT,
+  match_name TEXT,
+  kickoff_shanghai TEXT,
+  market_key TEXT,
+  market_type TEXT,
+  market_name TEXT,
+  action TEXT,
+  confidence TEXT,
+  model_probability REAL,
+  market_price REAL,
+  edge REAL,
+  max_buy_price REAL,
+  source TEXT,
+  score REAL,
+  expires_at TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES opportunity_radar_runs(run_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_match_snapshots_match_time ON match_snapshots(match_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_market_snapshots_snapshot ON market_snapshots(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_market_snapshots_match_key ON market_snapshots(match_id, recommendation_key);
@@ -437,6 +472,7 @@ CREATE INDEX IF NOT EXISTS idx_polymarket_holders_market ON polymarket_holder_sn
 CREATE INDEX IF NOT EXISTS idx_results_updated ON match_results(updated_at);
 CREATE INDEX IF NOT EXISTS idx_live_match_snapshots_match_time ON live_match_snapshots(match_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_inplay_recommendations_match_key ON inplay_recommendation_snapshots(match_id, recommendation_key);
+CREATE INDEX IF NOT EXISTS idx_opportunity_radar_items_match_key ON opportunity_radar_items(match_id, market_key, run_id);
 
 CREATE VIEW IF NOT EXISTS v_moneyline_backtest AS
 SELECT
@@ -1096,12 +1132,79 @@ async function recordLiveMatchSnapshot(payload) {
   return { liveSnapshotId };
 }
 
+async function recordOpportunityRadarSnapshot(payload, options = {}) {
+  if (!payload?.meta) return null;
+  await ensureHistorySchema();
+  const generatedAt = payload.meta.generatedAt || new Date().toISOString();
+  const id = options.runId || runId("opportunity", new Date(generatedAt));
+  const operations = [{
+    sql:
+    `INSERT OR REPLACE INTO opportunity_radar_runs
+     (run_id, generated_at, scan_date, focus_match_date, focus_match_count,
+      candidate_count, observation_candidate_count, payload_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+    params: [
+      id,
+      generatedAt,
+      payload.meta.scanDate || "",
+      payload.meta.focusMatchDate || "",
+      numberOrNull(payload.meta.focusMatchCount),
+      numberOrNull(payload.meta.candidateCount),
+      numberOrNull(payload.meta.observationCandidateCount),
+      json(payload)
+    ]
+  }, {
+    sql: "DELETE FROM opportunity_radar_items WHERE run_id = ?;",
+    params: [id]
+  }];
+
+  const addItems = (items, kind) => {
+    for (const item of items || []) {
+      operations.push({
+        sql:
+        `INSERT INTO opportunity_radar_items
+         (run_id, item_id, kind, match_id, match_name, kickoff_shanghai, market_key,
+          market_type, market_name, action, confidence, model_probability, market_price,
+          edge, max_buy_price, source, score, expires_at, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        params: [
+          id,
+          item.id || "",
+          kind,
+          item.matchId || "",
+          item.matchName || "",
+          item.kickoffShanghai || "",
+          item.marketKey || "",
+          item.marketType || "",
+          item.name || item.marketName || "",
+          item.action || "",
+          item.confidence || "",
+          numberOrNull(item.modelProbability),
+          numberOrNull(item.marketPrice),
+          numberOrNull(item.disciplinedEdge ?? item.edge),
+          numberOrNull(item.maxBuyPrice),
+          item.source || "",
+          numberOrNull(item.score),
+          item.expiresAt || "",
+          json(item)
+        ]
+      });
+    }
+  };
+
+  addItems(payload.items, "strict");
+  addItems(payload.observations, "observation");
+  await runOperations(operations);
+  return { runId: id, generatedAt };
+}
+
 module.exports = {
   ensureHistorySchema,
   recordDashboardSnapshot,
   recordContextSnapshot,
   recordMatchResult,
   recordLiveMatchSnapshot,
+  recordOpportunityRadarSnapshot,
   historyDbPath,
   runSql,
   runOperations

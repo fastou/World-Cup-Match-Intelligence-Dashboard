@@ -2,7 +2,15 @@ const http = require("http");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
-const { recordDashboardSnapshot, recordMatchResult, recordLiveMatchSnapshot, ensureHistorySchema, historyDbPath, runSql } = require("./scripts/history-store");
+const {
+  recordDashboardSnapshot,
+  recordMatchResult,
+  recordLiveMatchSnapshot,
+  recordOpportunityRadarSnapshot,
+  ensureHistorySchema,
+  historyDbPath,
+  runSql
+} = require("./scripts/history-store");
 
 const PORT = Number(process.env.PORT || 4173);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH || "");
@@ -1040,6 +1048,28 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     }
   }
 
+  const motivation = buildMatchMotivationProfile(match);
+  if (motivation.ok) {
+    const tempoDelta = Number(motivation.tempoDelta) || 0;
+    const overDelta = Number(motivation.over25Delta) || 0;
+    const homeAttackDelta = motivation.homeAttack ? 0.026 : motivation.homeControl ? -0.012 : 0;
+    const awayAttackDelta = motivation.awayAttack ? 0.026 : motivation.awayControl ? -0.012 : 0;
+    const pathHomeDelta = motivation.homePathValue > 0.04 ? 0.016 : 0;
+    const pathAwayDelta = motivation.awayPathValue > 0.04 ? 0.016 : 0;
+    const homeMotivationDelta = clamp(tempoDelta * 0.45 + overDelta * 0.35 + homeAttackDelta + pathHomeDelta, -0.035, 0.07);
+    const awayMotivationDelta = clamp(tempoDelta * 0.45 + overDelta * 0.35 + awayAttackDelta + pathAwayDelta, -0.035, 0.07);
+    if (homeMotivationDelta || awayMotivationDelta) {
+      lambdaHome += homeMotivationDelta;
+      lambdaAway += awayMotivationDelta;
+      drivers.push({
+        label: "第三轮动机/路径",
+        homeXgDelta: roundTo(homeMotivationDelta, 3),
+        awayXgDelta: roundTo(awayMotivationDelta, 3),
+        reason: motivation.notes.join(" ")
+      });
+    }
+  }
+
   lambdaHome = roundTo(clamp(lambdaHome, 0.18, 4.8), 3);
   lambdaAway = roundTo(clamp(lambdaAway, 0.18, 4.8), 3);
   let probabilities = scoreModel(lambdaHome, lambdaAway);
@@ -1442,17 +1472,43 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
     notes.push(`${match[`${side}Name`]} 属于非洲样本组，本届非洲队进球/抗预期样本较强，速度、身体和转换作为重点复核项，零封假设降权。`);
   }
 
+  const motivation = match.matchMotivation || buildMatchMotivationProfile(match);
+  if (motivation.ok) {
+    if (motivation.bttsDelta) {
+      deltas.btts += motivation.bttsDelta;
+      notes.push(`第三轮动机修正：${motivation.notes.slice(0, 2).join(" ")}`);
+    }
+    if (motivation.over25Delta) {
+      deltas.over25 += motivation.over25Delta;
+      deltas.under25 -= motivation.over25Delta;
+    }
+    if (motivation.homeAttack && !motivation.awayAttack) {
+      deltas.home += 0.008;
+      notes.push(`${match.homeName} 抢分/净胜球压力更强，胜率小幅上修但防守暴露也计入 BTTS。`);
+    }
+    if (motivation.awayAttack && !motivation.homeAttack) {
+      deltas.away += 0.008;
+      notes.push(`${match.awayName} 抢分/净胜球压力更强，胜率小幅上修但防守暴露也计入 BTTS。`);
+    }
+    if (motivation.homeControl && motivation.awayControl && !motivation.homeAttack && !motivation.awayAttack) {
+      deltas.draw += 0.008;
+      notes.push("双方控节奏/平局价值较高，平局和小比分路径小幅上修。");
+    }
+  }
+
   const winTriplet = normalizeProbabilityTriplet({
     home: match.probabilities.home + deltas.home,
     draw: match.probabilities.draw + deltas.draw,
     away: match.probabilities.away + deltas.away
   });
   const over25 = probabilityShift(match.probabilities.over25, deltas.over25);
+  const btts = probabilityShift(match.probabilities.btts, deltas.btts);
   match.probabilities = recalculateScoreSummaries({
     ...match.probabilities,
     ...winTriplet,
     over25,
     under25: 1 - over25,
+    btts,
     trendAdjusted: true
   });
   match.tournamentTrend = {
@@ -1575,6 +1631,107 @@ function scoreProbability(match, score) {
   return typeof item?.probability === "number" ? item.probability : 0;
 }
 
+function scoreMass(match, predicate) {
+  return (match?.probabilities?.topScoresFull || []).reduce((sum, row) => {
+    const homeGoals = Number(row.homeGoals);
+    const awayGoals = Number(row.awayGoals);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return sum;
+    return predicate(homeGoals, awayGoals, row) ? sum + (row.probability || 0) : sum;
+  }, 0);
+}
+
+function knockoutPathValue(team) {
+  const delta = Number(team?.knockoutPath?.pathValueDelta);
+  return Number.isFinite(delta) ? delta : 0;
+}
+
+function teamMustAttack(team) {
+  if (!team) return false;
+  if (team.needsBigWin || team.needsWin || team.needsTopSpotWin || (team.mustChase && !team.canAcceptDraw)) {
+    return true;
+  }
+  if (team.canAcceptDraw && !team.needsTopSpotWin && !team.needsWin && !team.needsBigWin) {
+    return false;
+  }
+  const status = String(team.status || team.statusLabel || "");
+  const notes = [...(team.notes || []), ...(team.notesEn || [])].join(" ");
+  return /must[_-]?win|need[_-]?win|must chase|goal-difference|必须|要赢|净胜|大比分|抢分/.test(`${status} ${notes}`);
+}
+
+function teamCanControlTempo(team) {
+  if (!team) return false;
+  if (team.likelyManageTempo || team.likelyRotate) return true;
+  if (team.canAcceptDraw && !team.needsTopSpotWin && !team.needsWin && !team.needsBigWin) return true;
+  const status = String(team.status || team.statusLabel || "");
+  const notes = [...(team.notes || []), ...(team.notesEn || [])].join(" ");
+  return /drawUseful|qualified|rotation|平局有价值|已出线|轮换|控节奏|tempo/.test(`${status} ${notes}`);
+}
+
+function buildMatchMotivationProfile(match) {
+  const situation = match?.groupSituation || {};
+  const home = situation.home || null;
+  const away = situation.away || null;
+  const homeAttack = teamMustAttack(home);
+  const awayAttack = teamMustAttack(away);
+  const homeControl = teamCanControlTempo(home);
+  const awayControl = teamCanControlTempo(away);
+  const homePath = knockoutPathValue(home);
+  const awayPath = knockoutPathValue(away);
+  const notes = [];
+  let tempoDelta = 0;
+  let bttsDelta = 0;
+  let overDelta = 0;
+  let underPenalty = 0;
+  let favoriteAggression = 0;
+
+  if (homeAttack && awayAttack) {
+    tempoDelta += 0.055;
+    bttsDelta += 0.035;
+    overDelta += 0.035;
+    notes.push("双方都有抢分/净胜球压力，比赛更容易开放，单纯小球降权。");
+  } else if (homeAttack || awayAttack) {
+    tempoDelta += 0.03;
+    bttsDelta += 0.018;
+    overDelta += 0.02;
+    notes.push(`${homeAttack ? match.homeName : match.awayName} 有主动抢分压力，落后方追分路径要计入 BTTS/大球。`);
+  }
+
+  if (homeControl && awayControl && !homeAttack && !awayAttack) {
+    tempoDelta -= 0.035;
+    underPenalty -= 0.01;
+    notes.push("双方平局/控节奏价值较高，进攻节奏下修。");
+  } else if ((homeControl || awayControl) && !(homeAttack || awayAttack)) {
+    tempoDelta -= 0.018;
+    notes.push(`${homeControl ? match.homeName : match.awayName} 有控节奏/轮换风险，小幅压低进球节奏。`);
+  }
+
+  if (homePath > 0.04 || awayPath > 0.04) {
+    favoriteAggression += 0.018;
+    overDelta += 0.012;
+    notes.push("小组第一/淘汰路径价值明显，强队不能只按“平局够用”处理。");
+  }
+
+  const profile = {
+    ok: Boolean(situation.ok),
+    homeAttack,
+    awayAttack,
+    homeControl,
+    awayControl,
+    homePathValue: roundTo(homePath, 4),
+    awayPathValue: roundTo(awayPath, 4),
+    tempoDelta: roundTo(clamp(tempoDelta, -0.05, 0.08), 4),
+    bttsDelta: roundTo(clamp(bttsDelta, -0.025, 0.055), 4),
+    over25Delta: roundTo(clamp(overDelta, -0.025, 0.055), 4),
+    under25Penalty: roundTo(clamp(underPenalty, -0.025, 0.03), 4),
+    favoriteAggression: roundTo(clamp(favoriteAggression, 0, 0.035), 4),
+    notes: [...new Set([...(situation.matchNotes || []).slice(0, 2), ...notes])].slice(0, 5)
+  };
+  match.matchMotivation = profile;
+  match.dynamicModel = match.dynamicModel || {};
+  match.dynamicModel.matchMotivation = profile;
+  return profile;
+}
+
 function exactCleanSheetRisk(match, side) {
   const scores = match?.probabilities?.topScoresFull || [];
   return scores.reduce((sum, row) => {
@@ -1608,6 +1765,11 @@ function marketReviewAdjustments(match, rec) {
   const favoriteCleanSheet = exactCleanSheetRisk(match, favoriteSide);
   const under25 = match?.probabilities?.under25 || 0;
   const btts = match?.probabilities?.btts || 0;
+  const motivation = match.matchMotivation || buildMatchMotivationProfile(match);
+  const totalThreePlusMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals + awayGoals >= 3);
+  const bothTeamsChasing = motivation.homeAttack && motivation.awayAttack;
+  const oneTeamChasing = motivation.homeAttack || motivation.awayAttack;
+  const openMotivation = bothTeamsChasing || (oneTeamChasing && (motivation.over25Delta || 0) > 0.015);
 
   if (rec.marketType === "btts" && rec.key === "bttsYes") {
     const oneNilRisk = scoreProbability(match, "1-0") + scoreProbability(match, "0-1");
@@ -1632,6 +1794,28 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.025;
       scorePenalty += 0.055;
       reasons.push("强队控场型优势明显，领先后更可能守住零封而不是互捅。");
+    }
+    if (openMotivation && btts >= 0.46) {
+      edgePenalty = Math.max(0, edgePenalty - 0.018);
+      scorePenalty = Math.max(0, scorePenalty - 0.03);
+      reasons.push("第三轮抢分/净胜球压力提高弱队进球与追分路径，BTTS 不再只按低比分先验降级。");
+    }
+    if (motivation.homeControl && motivation.awayControl && btts < 0.55) {
+      edgePenalty += 0.018;
+      scorePenalty += 0.03;
+      reasons.push("双方都有控节奏/平局价值，BTTS Yes 需要更强射门证据。");
+    }
+  }
+
+  if (rec.marketType === "btts" && rec.key === "bttsNo") {
+    if (openMotivation && btts >= 0.43) {
+      edgePenalty += 0.025;
+      scorePenalty += 0.045;
+      reasons.push("第三轮抢分压力下，BTTS No 要防落后方冒险压上。");
+    }
+    if (favoriteCleanSheet >= 0.26 && under25 >= 0.59 && !openMotivation) {
+      scorePenalty -= 0.012;
+      reasons.push("低比分零封路径集中，BTTS No 结构有支撑。");
     }
   }
 
@@ -1662,6 +1846,23 @@ function marketReviewAdjustments(match, rec) {
     if (lowScoreMass >= 0.58 && under25 >= 0.58) {
       scorePenalty -= 0.015;
       reasons.push("低比分集中度支持小球，但仍需防红牌/早球打穿。");
+    }
+    if (openMotivation || totalThreePlusMass >= 0.43) {
+      edgePenalty += 0.028;
+      scorePenalty += 0.05;
+      reasons.push("第三轮抢分/净胜球或3球以上路径不低，小球不作为主推荐。");
+    }
+  }
+
+  if (rec.marketType === "total" && rec.key === "over25") {
+    if (openMotivation && totalThreePlusMass >= 0.38) {
+      scorePenalty -= 0.014;
+      reasons.push("比赛形势偏开放，Over 2.5 的复盘纪律适度放宽。");
+    }
+    if (motivation.homeControl && motivation.awayControl && totalThreePlusMass < 0.42) {
+      edgePenalty += 0.02;
+      scorePenalty += 0.04;
+      reasons.push("双方都有控节奏价值，Over 2.5 需要更低价格或现场证据。");
     }
   }
 
@@ -2185,11 +2386,17 @@ function goalLeanText(probabilities = {}) {
   const under25 = Number(probabilities.under25);
   const btts = Number(probabilities.btts);
   const bttsNo = 1 - btts;
+  const totalGap = Math.abs((Number.isFinite(over25) ? over25 : 0) - (Number.isFinite(under25) ? under25 : 0));
+  const bttsGap = Math.abs((Number.isFinite(btts) ? btts : 0) - (Number.isFinite(bttsNo) ? bttsNo : 0));
   const totalText = Number.isFinite(over25) && Number.isFinite(under25)
-    ? (under25 >= over25 ? `小2.5 ${formatPercent(under25)}` : `大2.5 ${formatPercent(over25)}`)
+    ? (totalGap < 0.06
+      ? `大小2.5接近五五开（大 ${formatPercent(over25)} / 小 ${formatPercent(under25)}）`
+      : under25 >= over25 ? `小2.5 ${formatPercent(under25)}` : `大2.5 ${formatPercent(over25)}`)
     : "大小球待算";
   const bttsText = Number.isFinite(btts)
-    ? (bttsNo >= btts ? `双进否 ${formatPercent(bttsNo)}` : `双进是 ${formatPercent(btts)}`)
+    ? (bttsGap < 0.06
+      ? `双进接近五五开（是 ${formatPercent(btts)} / 否 ${formatPercent(bttsNo)}）`
+      : bttsNo >= btts ? `双进否 ${formatPercent(bttsNo)}` : `双进是 ${formatPercent(btts)}`)
     : "双进待算";
   return `${totalText} / ${bttsText}`;
 }
@@ -3913,6 +4120,11 @@ async function buildOpportunityRadar({ force = false } = {}) {
   writeJsonAtomic(OPPORTUNITY_CACHE_PATH, payload).catch((error) => {
     console.error(`Failed to persist opportunity cache: ${error.message}`);
   });
+  if (!DISABLE_HISTORY_RECORDING) {
+    recordOpportunityRadarSnapshot(payload).catch((error) => {
+      console.error(`Failed to record opportunity radar history: ${error.message}`);
+    });
+  }
   return payload;
 }
 
@@ -10377,8 +10589,11 @@ SELECT json_object(
   'eliteTraderRankings', (SELECT count(*) FROM elite_trader_rankings),
   'contextRuns', (SELECT count(*) FROM context_runs),
   'matchResults', (SELECT count(*) FROM match_results),
+  'opportunityRadarRuns', (SELECT count(*) FROM opportunity_radar_runs),
+  'opportunityRadarItems', (SELECT count(*) FROM opportunity_radar_items),
   'latestDashboardRun', (SELECT max(generated_at) FROM dashboard_runs),
-  'latestContextRun', (SELECT max(captured_at) FROM context_runs)
+  'latestContextRun', (SELECT max(captured_at) FROM context_runs),
+  'latestOpportunityRadarRun', (SELECT max(generated_at) FROM opportunity_radar_runs)
  ) AS summary;
 `, [historyDbPath()], "one");
   const line = output.trim().split("\n").filter(Boolean).pop();

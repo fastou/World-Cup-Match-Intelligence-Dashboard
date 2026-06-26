@@ -15,6 +15,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Comprehensive match forecasts should use a transparent xG-to-score-distribution layer: long-term strength/Elo-style baseline, recent form, World Cup record, dynamic context, tournament trend, Poisson score grid, and only a light market calibration. Do not present this as an official Goldman Sachs model unless using an official source; label it as Goldman-style public methodology when relevant.
 - Include a tournament-trend layer when current-tournament results exist: compute it from deduplicated final scores, keep the sample size visible, and apply only small weighted adjustments so early-tournament signals do not overfit.
 - In final group-stage rounds, include group qualification situation and motivation: current points, rank, goal difference, whether a team needs a win, whether goal difference matters, whether a draw has value, knockout-path value for finishing first vs second, and whether tempo control or rotation risk rises. Apply only small, explainable xG adjustments.
+- In final group-stage rounds, do not stop at "draw has value." If first-place finish changes the likely knockout path or avoids a stronger opponent, model a small aggression/path-value adjustment and explain it in the match notes.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -136,6 +137,7 @@ When maintaining public market data:
 - The primary dashboard tabs should default to every match on the current Beijing/Shanghai matchday, not the entire ESPN/FIFA schedule window and not the date embedded in Polymarket market slugs. A late-night match whose Polymarket slug says the prior date should still be grouped by its kickoff date in Asia/Shanghai. Matches without live Polymarket curves may appear as schedule/awaiting-market, but must not generate fake price advice.
 - Opportunity radar should use the same current Beijing/Shanghai matchday as the main tabs, then rank only real priced/curved market candidates within that focused set. Diversify surfaced candidates across BTTS, totals, handicap, and match result, and do not let high-edge longshot moneyline rows crowd out structured market opportunities with live curves.
 - Opportunity radar should consume trend-adjusted probabilities and can add small ranking boosts for trend-supported markets such as BTTS-hot, underdog-scoring, or underdog-handicap signals. It must still obey price, data-quality, and curve gates.
+- Opportunity radar scans should be archived as lightweight runs/items even when the visible dashboard is using light mode, so later review can compare surfaced candidates, observation candidates, prices, edge, and final outcomes.
 - In-play recommendations must apply current-score gates before ranking. Do not recommend already crossed or already satisfied entry lines as new buy points: for example, after the score reaches 3 total goals, Over 2.5 is `已穿线不追`; Under 2.5 is impossible; after both teams score, BTTS Yes is already satisfied and BTTS No is impossible. Correct-score markets that the current score has passed must also be blocked.
 - In-play recommendations must suppress extreme long-tail moneyline rows after a large score gap. If a team trails by three or more goals, or by two or more goals late, and the comeback/draw probability is tiny or the market is trading near 0¢, label it `长尾不追` and move it below practical live markets instead of saying `等待更好价格`.
 - In-play opportunity labels must distinguish real Polymarket live prices from local/manual snapshots. If the row does not have a live Polymarket price/curve, show waiting or downgraded language instead of a buy-style recommendation.
@@ -171,6 +173,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - squad physical/line-profile context and AI human-read notes
 - tournament-trend sample, signals, and per-match adjustment notes
 - group qualification situation, knockout-path motivation notes, and any small xG adjustment applied from points-table pressure or top-spot path value
+- opportunity radar runs and candidate items, including strict candidates, observation candidates, price, edge, max informational entry price, confidence, expiry time, and AI/rule rationale
 - final match result
 
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.
