@@ -17,6 +17,7 @@ const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
+const H2H_WINDOW_YEARS = Number(process.env.H2H_WINDOW_YEARS || 20);
 const RECENT_FORM_LIMIT = Number(process.env.RECENT_FORM_LIMIT || 5);
 const SOURCE_SYNC_CONCURRENCY = Number(process.env.SOURCE_SYNC_CONCURRENCY || 3);
 const SOURCE_REQUEST_SPACING_MS = Number(process.env.SOURCE_REQUEST_SPACING_MS || 250);
@@ -1700,7 +1701,7 @@ function h2hWindow(match) {
   const kickoffMs = Number.isFinite(kickoff.getTime()) ? kickoff.getTime() : Date.now();
   const windowEnd = new Date(kickoffMs);
   const windowStart = new Date(kickoffMs);
-  windowStart.setUTCFullYear(windowStart.getUTCFullYear() - 4);
+  windowStart.setUTCFullYear(windowStart.getUTCFullYear() - H2H_WINDOW_YEARS);
   return {
     startMs: windowStart.getTime(),
     endMs: kickoffMs,
@@ -1729,6 +1730,18 @@ function uniqueH2hSources(sources) {
     seen.add(key);
     return true;
   });
+}
+
+function normalizeH2hWindowText(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/赛前四年正式 A 级国际赛和友谊赛/g, `赛前${H2H_WINDOW_YEARS}年正式 A 级国际赛和友谊赛`)
+    .replace(/近四年无直接交手样本/g, `近${H2H_WINDOW_YEARS}年窗口按可审计比分重新筛选`)
+    .replace(/近四年没有可确认直接交手/g, `近${H2H_WINDOW_YEARS}年窗口按可审计比分重新筛选`)
+    .replace(/近四年没有可确认交手/g, `近${H2H_WINDOW_YEARS}年窗口按可审计比分重新筛选`)
+    .replace(/模型窗口内只使用 2023 这场/g, `近${H2H_WINDOW_YEARS}年窗口内纳入 2023 这场`)
+    .replace(/模型窗口内只使用 2025-11-15 美国 2-1 巴拉圭/g, `近${H2H_WINDOW_YEARS}年窗口内纳入 2016、2018、2025 这三场可核验交手`)
+    .replace(/模型窗口内只使用 2022 这场/g, `近${H2H_WINDOW_YEARS}年窗口内纳入 2018、2022 这两场`);
 }
 
 function buildVerifiedHeadToHeadContext(match, override, fifaRankings) {
@@ -1781,11 +1794,11 @@ function buildVerifiedHeadToHeadContext(match, override, fifaRankings) {
   }));
 
   return {
-    windowYears: 4,
+    windowYears: H2H_WINDOW_YEARS,
     windowStart: window.windowStart,
     windowEnd: window.windowEnd,
     asOf: window.asOf,
-    scope: override.scope || "赛前四年正式 A 级国际赛和友谊赛",
+    scope: normalizeH2hWindowText(override.scope) || `赛前${H2H_WINDOW_YEARS}年正式 A 级国际赛和友谊赛`,
     summary,
     latestMeetings: recentMeetings.slice(0, 5).map((meeting) => ({
       date: meeting.date,
@@ -1795,10 +1808,10 @@ function buildVerifiedHeadToHeadContext(match, override, fifaRankings) {
       score: `${meeting.homeGoals}-${meeting.awayGoals}`,
       source: meeting.source || ""
     })),
-    allTimeNote,
+    allTimeNote: normalizeH2hWindowText(allTimeNote),
     impact: summary.matches > 0
-      ? `${rankingText} 近四年有 ${summary.matches} 场直接交手；样本很小，只做低权重复核，不单独大幅调整模型。`
-      : `${rankingText} 近四年无可确认直接交手，模型不对胜平负、让球盘或大小球做交手加权。`,
+      ? `${rankingText} 近${H2H_WINDOW_YEARS}年有 ${summary.matches} 场直接交手；样本很小，只做低权重复核，不单独大幅调整模型。`
+      : `${rankingText} 近${H2H_WINDOW_YEARS}年无可确认直接交手，模型不对胜平负、让球盘或大小球做交手加权。`,
     sourceStatus: summary.matches > 0 ? "verified-structured" : "verified-no-pre-match-meetings",
     sources,
     updatedAt: nowIso
@@ -1828,11 +1841,11 @@ function buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides = {},
   const awayRank = rankingRecord(fifaRankings, match.away);
   const rankingText = homeRank && awayRank ? `长期实力基线：${match.homeName} FIFA 第 ${homeRank}，${match.awayName} FIFA 第 ${awayRank}。` : "长期实力基线部分可用。";
   return {
-    windowYears: 4,
+    windowYears: H2H_WINDOW_YEARS,
     windowStart: window.windowStart,
     windowEnd: window.windowEnd,
     asOf: window.asOf,
-    scope: "近四年公开交手检索",
+    scope: `近${H2H_WINDOW_YEARS}年公开交手检索`,
     summary: {
       matches: null,
       homeWins: null,
@@ -1843,7 +1856,7 @@ function buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides = {},
     },
     latestMeetings: [],
     allTimeNote: "已查询公开源，但本轮未抓到可审计比分；标记为待核验，不把未知交手当成 0 场。",
-    impact: `${rankingText} 四年交手待核验前不调整模型，只作为赛前复核项。`,
+    impact: `${rankingText} 近${H2H_WINDOW_YEARS}年交手待核验前不调整模型，只作为赛前复核项。`,
     sourceStatus: "queried-pending-verification",
     sources: [
       {

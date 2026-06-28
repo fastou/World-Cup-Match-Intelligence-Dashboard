@@ -18,6 +18,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - In final group-stage rounds, do not stop at "draw has value." If first-place finish changes the likely knockout path or avoids a stronger opponent, model a small aggression/path-value adjustment and explain it in the match notes.
 - In knockout rounds, keep 90-minute match result separate from `Team to Advance`. Regulation win/draw/loss remains a 90-minute market; advancement equals regulation win plus the draw probability split by extra-time/penalty tiebreak factors.
 - For `Team to Advance`, compute and display a separate advancement probability using regulation probabilities plus a conservative tiebreak split from xG edge, ranking/depth, and World Cup record. Do not compare a 90-minute win price directly with an advancement price.
+- For knockout advancement, include knockout-stage experience as a low-weight tiebreak factor when structured World Cup records exist: best finish, finals appearances, and finals matches can form a transparent proxy. Label it as a proxy, not as verified penalty-taking ability.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -77,11 +78,11 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Each team should include squad physical and line-profile context when a public squad source is available: average height, age, caps, GK/DF/MF/FW splits, club-tier level, source, update date, and data limits. Do not infer market value, goalkeeper shot-stopping, player ratings, or fitness from these lineup metrics; label unavailable value/rating fields explicitly.
 - AI "human read" notes may summarize squad-profile contrasts only after structured data exists. They must not invent transfer values, injuries, lineups, save rates, or tactical facts not present in the payload.
 - If head-to-head is not yet available for an auto-baseline fixture, show a structured missing/pending status with source target, not a blank value.
-- Each modeled match should include recent head-to-head context for the four years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
+- Each modeled match should include recent head-to-head context for the 20 years before kickoff: window start/end, match count, W/D/L, goals, latest meetings, sources, update time, and model impact.
 - Do not backfill the current match result into pre-match head-to-head context. If the recent window has no meetings, state that explicitly and apply no head-to-head model weighting.
 - Do not display search-engine snippets as head-to-head meetings. Only dated, auditable score records belong in latest meetings; generic search summaries may only appear as source status or pending-verification notes.
 - Do not show search-engine proxy URLs as H2H source links. Link only to auditable source pages such as ESPN, 11v11, worldfootball.net, National Football Teams, or reputable match previews.
-- Historical context outside the four-year window may be shown as background only; label it separately from model inputs.
+- Historical context outside the 20-year window may be shown as background only; label it separately from model inputs.
 - When static context is added, surface it in the Static tab and preserve it in dashboard history if it affects future review.
 
 ## Data Quality Logic
@@ -109,7 +110,7 @@ Every data dimension should use an explicit source chain instead of simply waiti
 
 Fallbacks may explain uncertainty and keep the page useful, but they must not fabricate unavailable facts. For example, do not create starting XIs, confirmed injuries, holder rows, odds, or head-to-head scores when no source supports them. Show `queried / pending`, `pending verification`, or `rule fallback` instead of blank values when the sync ran but did not produce a verified fact.
 
-Ranking, venue, weather, recent form, tactical matchup, AI synthesis, and four-year head-to-head context should all have either a verified value or a visible low-confidence fallback. A plain `waiting` state should be reserved for source failures, not for dimensions that can be explained from existing baseline inputs.
+Ranking, venue, weather, recent form, tactical matchup, AI synthesis, and 20-year head-to-head context should all have either a verified value or a visible low-confidence fallback. A plain `waiting` state should be reserved for source failures, not for dimensions that can be explained from existing baseline inputs.
 
 Tournament trend fields should explain their evidence: sample size, BTTS rate, over/under rate, draw rate, underdog scoring rate, favorite clean-sheet rate, confederation summaries, and per-match adjustment notes. Never hard-code narrative beliefs such as "African teams are strong" as permanent truths; convert them into current-tournament, sample-weighted signals such as CAF goals, underdog scoring, BTTS, and results versus ranking expectation.
 
@@ -179,6 +180,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - tournament-trend sample, signals, and per-match adjustment notes
 - group qualification situation, knockout-path motivation notes, and any small xG adjustment applied from points-table pressure or top-spot path value
 - knockout-round advancement probability, tiebreak split, Team to Advance market price/curve, and settlement status when the match has an advancement market
+- knockout-stage experience proxy used in advancement tiebreaks, including best finish, finals appearances, finals matches, and adjustment note
 - opportunity radar runs and candidate items, including strict candidates, observation candidates, price, edge, max informational entry price, confidence, expiry time, and AI/rule rationale
 - final match result
 

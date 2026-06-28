@@ -56,6 +56,7 @@ const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
 const MATCH_SCHEDULE_LOOKBACK_DAYS = Number(process.env.MATCH_SCHEDULE_LOOKBACK_DAYS || 1);
+const H2H_WINDOW_YEARS = Number(process.env.H2H_WINDOW_YEARS || 20);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const ESPN_WORLDCUP_CORE = "https://sports.core.api.espn.com/v2/sports/soccer/leagues/fifa.world";
 const ESPN_WORLDCUP_GROUP_COUNT = Number(process.env.ESPN_WORLDCUP_GROUP_COUNT || 12);
@@ -877,12 +878,46 @@ function worldCupRecordStrength(record) {
   };
 }
 
+function knockoutStageBase(record) {
+  if (!record || record.ok === false) return null;
+  const text = `${record.bestFinish || ""} ${record.bestFinishZh || ""}`.toLowerCase();
+  if (!text.trim()) return null;
+  if (/champion|winner|冠军/.test(text)) return { score: 0.88, labelZh: "冠军经历", labelEn: "champion history" };
+  if (/runner|亚军/.test(text)) return { score: 0.8, labelZh: "决赛经历", labelEn: "final experience" };
+  if (/third|fourth|semi|季军|第四|半决赛|四强/.test(text)) return { score: 0.7, labelZh: "四强经历", labelEn: "semi-final experience" };
+  if (/quarter|八强|quarter-final/.test(text)) return { score: 0.58, labelZh: "八强经历", labelEn: "quarter-final experience" };
+  if (/round of 16|last 16|十六强|16强/.test(text)) return { score: 0.46, labelZh: "淘汰赛首轮经历", labelEn: "round-of-16 experience" };
+  if (/group|小组/.test(text)) return { score: 0.26, labelZh: "小组赛履历", labelEn: "group-stage record" };
+  if (/no finals|首次|无正赛|none/.test(text)) return { score: 0.12, labelZh: "缺少世界杯正赛履历", labelEn: "limited finals record" };
+  return { score: 0.34, labelZh: "世界杯履历有限", labelEn: "limited World Cup record" };
+}
+
+function knockoutExperienceProfile(record) {
+  const base = knockoutStageBase(record);
+  if (!base) return null;
+  const appearances = Number(record.appearances || 0);
+  const matches = Number(record.matches || 0);
+  const appearanceBoost = appearances ? clamp(Math.log1p(appearances) / Math.log1p(22) * 0.08, 0, 0.08) : 0;
+  const matchBoost = matches ? clamp(Math.log1p(matches) / Math.log1p(115) * 0.06, 0, 0.06) : 0;
+  return {
+    score: roundTo(clamp(base.score + appearanceBoost + matchBoost, 0.08, 0.96), 3),
+    labelZh: base.labelZh,
+    labelEn: base.labelEn,
+    bestFinish: record.bestFinish || "",
+    bestFinishZh: record.bestFinishZh || "",
+    appearances: Number.isFinite(appearances) ? appearances : null,
+    matches: Number.isFinite(matches) ? matches : null,
+    sourceNote: "best-finish proxy"
+  };
+}
+
 function advanceTiebreakProbability(match, fifaRankings = {}) {
   const probabilities = match?.probabilities || {};
   const lambdaHome = Number(probabilities.lambdaHome ?? match?.dynamicModel?.adjusted?.lambdaHome ?? match?.modelV2?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
   const lambdaAway = Number(probabilities.lambdaAway ?? match?.dynamicModel?.adjusted?.lambdaAway ?? match?.modelV2?.adjusted?.lambdaAway ?? match?.model?.lambdaAway);
   let tiebreakHome = 0.5;
   const notes = [];
+  let knockoutExperience = null;
 
   if (Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway)) {
     const xgDelta = lambdaHome - lambdaAway;
@@ -906,9 +941,24 @@ function advanceTiebreakProbability(match, fifaRankings = {}) {
     notes.push("世界杯历史履历只作为加时/点球拆分的弱信号。");
   }
 
+  const homeKnockout = knockoutExperienceProfile(match?.homeTeam?.worldCupRecord);
+  const awayKnockout = knockoutExperienceProfile(match?.awayTeam?.worldCupRecord);
+  if (homeKnockout && awayKnockout) {
+    const experienceDelta = clamp((homeKnockout.score - awayKnockout.score) * 0.055, -0.04, 0.04);
+    tiebreakHome += experienceDelta;
+    knockoutExperience = {
+      home: homeKnockout,
+      away: awayKnockout,
+      delta: roundTo(experienceDelta, 4),
+      note: "淘汰赛经验来自世界杯最佳成绩、参赛次数和正赛场次的低权重代理，不等于点球实力。"
+    };
+    notes.push(`淘汰赛经验代理：${match?.homeName || match?.home} ${homeKnockout.labelZh}，${match?.awayName || match?.away} ${awayKnockout.labelZh}。`);
+  }
+
   return {
     home: clamp(tiebreakHome, 0.38, 0.62),
-    notes: [...new Set(notes)].slice(0, 4)
+    knockoutExperience,
+    notes: [...new Set(notes)].slice(0, 5)
   };
 }
 
@@ -927,6 +977,7 @@ function attachAdvanceProbabilities(match, fifaRankings = {}) {
     drawProbability: triplet.draw,
     method: "常规时间胜率 + 平局后加时/点球拆分",
     methodEn: "Regulation win probability plus draw split by extra-time/penalty tiebreak",
+    knockoutExperience: tiebreak.knockoutExperience,
     notes: [
       `晋级盘不是90分钟胜平负：${match.homeName || match.home}晋级 = 90分钟胜 + 平局 × 加时/点球胜出概率。`,
       ...tiebreak.notes
@@ -2603,8 +2654,8 @@ function aiPredictionDataGaps(match) {
   const injuries = match.completeness?.components?.find((item) => item.label === "伤停");
   if (injuries && injuries.status !== "synced") gaps.push("伤停信息未完全确认。");
   const h2h = match.headToHead || context.headToHead;
-  if (h2h?.sourceStatus && h2h.sourceStatus !== "synced" && h2h.sourceStatus !== "verified") {
-    gaps.push("近四年交手未结构化为可审计比分，暂不加权。");
+  if (h2h?.sourceStatus && h2h.sourceStatus !== "synced" && !/^verified/i.test(String(h2h.sourceStatus))) {
+    gaps.push("近20年交手未结构化为可审计比分，暂不加权。");
   }
   const liveMoneyline = (match.recommendations || []).filter((rec) => rec.marketType === "moneyline" && rec.chart?.source === "Polymarket").length;
   if (!liveMoneyline) gaps.push("胜平负 Polymarket 曲线未完整匹配。");
@@ -2635,6 +2686,19 @@ function aiPredictionEvidence(match, top, rows) {
     status: match.homeTeam?.worldCupRecord && match.awayTeam?.worldCupRecord ? "synced" : "partial",
     detail: `${aiPredictionWorldCupEvidence(match.homeTeam, match.homeName)} ${aiPredictionWorldCupEvidence(match.awayTeam, match.awayName)}`
   });
+  const knockout = match.probabilities?.advance?.knockoutExperience;
+  if (knockout?.home && knockout?.away) {
+    const direction = knockout.delta > 0.003
+      ? `${match.homeName} 平局后晋级拆分略受益`
+      : knockout.delta < -0.003
+        ? `${match.awayName} 平局后晋级拆分略受益`
+        : "两队淘汰赛履历接近";
+    evidence.push({
+      label: "淘汰赛经验",
+      status: "synced",
+      detail: `${match.homeName}：${knockout.home.bestFinishZh || knockout.home.bestFinish || knockout.home.labelZh}，参赛 ${knockout.home.appearances ?? "-"} 次 / 正赛 ${knockout.home.matches ?? "-"} 场；${match.awayName}：${knockout.away.bestFinishZh || knockout.away.bestFinish || knockout.away.labelZh}，参赛 ${knockout.away.appearances ?? "-"} 次 / 正赛 ${knockout.away.matches ?? "-"} 场。${direction}；这是低权重代理，不等于点球实力。`
+    });
+  }
   if (match.humanMatchup?.summary) {
     evidence.push({
       label: "阵容与人性化对位",
@@ -2722,6 +2786,10 @@ function buildAiPrediction(match) {
   reasons.push(`Elo-xG Poisson 模型给出 ${top.label} ${(top.probability * 100).toFixed(1)}%，领先 ${runnerUp.label} ${((top.probability - runnerUp.probability) * 100).toFixed(1)} 个百分点。`);
   if (top.marketType === "advance" && match.probabilities?.advance) {
     reasons.push(`淘汰赛晋级模型：常规时间胜率加上平局后的加时/点球拆分；平局概率 ${(match.probabilities.advance.drawProbability * 100).toFixed(1)}%，${match.homeName} 平局后晋级拆分 ${(match.probabilities.advance.tiebreakHome * 100).toFixed(1)}%。`);
+    const knockout = match.probabilities.advance.knockoutExperience;
+    if (knockout?.home && knockout?.away) {
+      reasons.push(`淘汰赛经验复核：${match.homeName} ${knockout.home.labelZh}，${match.awayName} ${knockout.away.labelZh}，只作为加时/点球拆分的低权重代理。`);
+    }
   }
   const modelSummary = aiPredictionModelSummary(match);
   if (modelSummary) reasons.push(modelSummary);
@@ -5616,7 +5684,7 @@ function h2hWindow(kickoffIso) {
   const kickoffMs = Number.isFinite(kickoff.getTime()) ? kickoff.getTime() : Date.now();
   const windowEnd = new Date(kickoffMs);
   const windowStart = new Date(kickoffMs);
-  windowStart.setUTCFullYear(windowStart.getUTCFullYear() - 4);
+  windowStart.setUTCFullYear(windowStart.getUTCFullYear() - H2H_WINDOW_YEARS);
   return {
     startMs: windowStart.getTime(),
     endMs: kickoffMs,
@@ -5646,6 +5714,18 @@ function uniqueSources(sources) {
     seen.add(key);
     return true;
   });
+}
+
+function normalizeH2hWindowText(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/赛前四年正式 A 级国际赛和友谊赛/g, `赛前${H2H_WINDOW_YEARS}年正式 A 级国际赛和友谊赛`)
+    .replace(/近四年无直接交手样本/g, `近${H2H_WINDOW_YEARS}年窗口按可审计比分重新筛选`)
+    .replace(/近四年没有可确认直接交手/g, `近${H2H_WINDOW_YEARS}年窗口按可审计比分重新筛选`)
+    .replace(/近四年没有可确认交手/g, `近${H2H_WINDOW_YEARS}年窗口按可审计比分重新筛选`)
+    .replace(/模型窗口内只使用 2023 这场/g, `近${H2H_WINDOW_YEARS}年窗口内纳入 2023 这场`)
+    .replace(/模型窗口内只使用 2025-11-15 美国 2-1 巴拉圭/g, `近${H2H_WINDOW_YEARS}年窗口内纳入 2016、2018、2025 这三场可核验交手`)
+    .replace(/模型窗口内只使用 2022 这场/g, `近${H2H_WINDOW_YEARS}年窗口内纳入 2018、2022 这两场`);
 }
 
 function h2hFromOverride(event, h2hOverrides, fifaRankings) {
@@ -5695,11 +5775,11 @@ function h2hFromOverride(event, h2hOverrides, fifaRankings) {
   ]).map((source) => ({ ...source, status: source.status || "verified" }));
 
   return {
-    windowYears: 4,
+    windowYears: H2H_WINDOW_YEARS,
     windowStart: window.windowStart,
     windowEnd: window.windowEnd,
     asOf: window.asOf,
-    scope: override.scope || "赛前四年正式 A 级国际赛和友谊赛",
+    scope: normalizeH2hWindowText(override.scope) || `赛前${H2H_WINDOW_YEARS}年正式 A 级国际赛和友谊赛`,
     summary,
     latestMeetings: recentMeetings.slice(0, 5).map((meeting) => ({
       date: meeting.date,
@@ -5709,10 +5789,10 @@ function h2hFromOverride(event, h2hOverrides, fifaRankings) {
       score: `${meeting.homeGoals}-${meeting.awayGoals}`,
       source: meeting.source || ""
     })),
-    allTimeNote: override.allTimeNote || "已读取结构化 H2H 来源；未记录历史交手时不把未知当成 0 场。",
+    allTimeNote: normalizeH2hWindowText(override.allTimeNote) || "已读取结构化 H2H 来源；未记录历史交手时不把未知当成 0 场。",
     impact: summary.matches > 0
-      ? `${rankingText} 近四年有 ${summary.matches} 场直接交手；样本很小，只做低权重复核，不单独大幅调整模型。`
-      : `${rankingText} 近四年无可确认直接交手，模型不对胜平负、让球盘或大小球做交手加权。`,
+      ? `${rankingText} 近${H2H_WINDOW_YEARS}年有 ${summary.matches} 场直接交手；样本很小，只做低权重复核，不单独大幅调整模型。`
+      : `${rankingText} 近${H2H_WINDOW_YEARS}年无可确认直接交手，模型不对胜平负、让球盘或大小球做交手加权。`,
     sourceStatus: summary.matches > 0 ? "verified-structured" : "verified-no-pre-match-meetings",
     sources,
     updatedAt: new Date().toISOString()
@@ -5776,11 +5856,11 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
       lineupConfidence: "低",
       lastChecked: new Date().toISOString()
     },
-    headToHead: syncedContext.headToHead || fallbackHeadToHead || {
-      windowYears: 4,
-      windowStart: String(new Date(event.kickoffUtc).getUTCFullYear() - 4),
+    headToHead: fallbackHeadToHead || (Number(syncedContext.headToHead?.windowYears) >= H2H_WINDOW_YEARS ? syncedContext.headToHead : null) || {
+      windowYears: H2H_WINDOW_YEARS,
+      windowStart: String(new Date(event.kickoffUtc).getUTCFullYear() - H2H_WINDOW_YEARS),
       windowEnd: String(new Date(event.kickoffUtc).getUTCFullYear()),
-      scope: "近四年公开交手检索",
+      scope: `近${H2H_WINDOW_YEARS}年公开交手检索`,
       summary: {
         matches: null,
         homeWins: null,
@@ -5865,11 +5945,29 @@ function attachScheduleEventToMatch(match, scheduleEvent) {
   return match;
 }
 
-function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}, tournamentTrend = null, groupStandings = null) {
+function scheduleLikeEventFromMatch(match) {
+  return {
+    kickoffUtc: match.kickoffShanghai || match.kickoffLocal,
+    home: {
+      code: match.home,
+      abbreviation: match.home,
+      name: match.homeName || TEAM_SEARCH_NAMES[match.home] || match.home
+    },
+    away: {
+      code: match.away,
+      abbreviation: match.away,
+      name: match.awayName || TEAM_SEARCH_NAMES[match.away] || match.away
+    }
+  };
+}
+
+function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squadProfiles, fifaRankings = {}, tournamentTrend = null, groupStandings = null, h2hOverrides = {}) {
   const homeTeam = attachStaticProfiles(teams[match.home], match.home, worldCupRecords, squadProfiles);
   const awayTeam = attachStaticProfiles(teams[match.away], match.away, worldCupRecords, squadProfiles);
   const matchContext = contextForMatch(context, match.id);
   const mergedMatch = deepMerge(match, { context: matchContext });
+  const overrideHeadToHead = h2hFromOverride(scheduleLikeEventFromMatch(mergedMatch), h2hOverrides, fifaRankings);
+  const mergedHeadToHead = overrideHeadToHead || (Number(matchContext.headToHead?.windowYears) >= H2H_WINDOW_YEARS ? matchContext.headToHead : null) || mergedMatch.headToHead;
   const dynamicModel = applyDynamicAdjustments(mergedMatch);
   const probabilities = scoreModel(dynamicModel.adjusted.lambdaHome, dynamicModel.adjusted.lambdaAway);
   const enriched = {
@@ -5880,7 +5978,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
     awayEnglishName: TEAM_SEARCH_NAMES[match.away] || awayTeam.englishName || awayTeam.name,
     homeTeam,
     awayTeam,
-    headToHead: matchContext.headToHead || mergedMatch.headToHead,
+    headToHead: mergedHeadToHead,
     recentFormRecords: matchContext.recentFormRecords || mergedMatch.recentFormRecords,
     probabilities,
     dynamicModel
@@ -10620,7 +10718,7 @@ async function buildDashboard({
   const tournamentTrend = buildTournamentTrend(trendSourceSchedule, fifaRankings);
   const polymarket = await fetchPolymarket(schedule);
   const preliminaryWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
-  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend, groupStandings));
+  const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend, groupStandings, h2hOverrides));
   if (!DISABLE_HISTORY_RECORDING && trendSourceSchedule.ok) {
     try {
       await syncFinalResultsFromSchedule(trendSourceSchedule, allModeledMatches, finalResults);

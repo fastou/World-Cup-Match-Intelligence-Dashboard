@@ -2821,7 +2821,7 @@
         "榜单": "Leaderboard",
         "静态": "Static",
         "静态信息": "Static Information",
-        "近四年交手": "Last Four Years Head-to-Head",
+        "近20年交手": "Last 20 Years Head-to-Head",
         "球队最近战绩": "Recent Team Results",
         "最近战绩未同步。": "Recent results not synced.",
         "等待公开赛果同步": "Waiting for public results sync",
@@ -2837,7 +2837,7 @@
         "胜/平/负": "W/D/L",
         "进球": "Goals",
         "暂无交手记录": "No meetings found",
-        "近四年无直接交手样本": "No direct head-to-head sample in the last four years",
+        "近20年无直接交手样本": "No direct head-to-head sample in the last 20 years",
         "模型不对胜平负、让球盘或大小球做交手加权": "No head-to-head weighting is applied to match result, handicap, or totals",
         "动态": "Dynamic",
         "世界排名": "World ranking",
@@ -2938,9 +2938,9 @@
         [/等待服务器同步/g, "waiting for server sync"],
         [/加载失败：/g, "Load failed: "],
         [/当前是 file:\/\/ 打开的静态文件，请通过 Node 服务或远端 \/worldcup\/ 访问页面，否则 API 数据无法加载。/g, "This page was opened with file://. Use the Node server or remote /worldcup/ path so API data can load."],
-        [/赛前四年正式 A 级国际赛和友谊赛/g, "Senior international matches and friendlies in the four years before kickoff"],
-        [/两队赛前最近一次公开可核验交手为 2010-06-11 世界杯，墨西哥 1-1 南非；近四年没有可确认交手。/g, "The latest publicly verifiable pre-match meeting was the 2010-06-11 World Cup match, Mexico 1-1 South Africa; no confirmed meeting in the last four years."],
-        [/两队赛前最近一次公开可核验交手为 2016-06-05 友谊赛，韩国 2-1 捷克；近四年没有可确认交手。/g, "The latest publicly verifiable pre-match meeting was the 2016-06-05 friendly, South Korea 2-1 Czech Republic; no confirmed meeting in the last four years."],
+        [/赛前20年正式 A 级国际赛和友谊赛/g, "Senior international matches and friendlies in the 20 years before kickoff"],
+        [/两队赛前最近一次公开可核验交手为 2010-06-11 世界杯，墨西哥 1-1 南非；近20年窗口内纳入这场。/g, "The latest publicly verifiable pre-match meeting was the 2010-06-11 World Cup match, Mexico 1-1 South Africa; it is included in the 20-year window."],
+        [/两队赛前最近一次公开可核验交手为 2016-06-05 友谊赛，韩国 2-1 捷克；近20年窗口内纳入这场。/g, "The latest publicly verifiable pre-match meeting was the 2016-06-05 friendly, South Korea 2-1 Czech Republic; it is included in the 20-year window."],
         [/欧赔/g, "Decimal"],
         [/港赔/g, "HK"],
         [/美赔/g, "US"],
@@ -3092,8 +3092,8 @@
       function formatH2hFallback(summary) {
         if (summary.matches === 0) {
           return currentLang === "en"
-            ? "No confirmed direct meetings in the four-year window; no head-to-head model weighting."
-            : "近四年没有可确认直接交手；模型不做交手加权。";
+            ? "No confirmed direct meetings in the 20-year window; no head-to-head model weighting."
+            : "近20年没有可确认直接交手；模型不做交手加权。";
         }
         return currentLang === "en"
           ? "Public sources were checked, but no auditable score records have been parsed yet. This does not mean zero meetings."
@@ -3107,7 +3107,7 @@
         const sources = Array.isArray(headToHead.sources) ? headToHead.sources : [];
         return `
           <section class="static-block wide">
-            <h4>近四年交手</h4>
+            <h4>近20年交手</h4>
             <div class="h2h-summary-grid">
               <div class="h2h-stat"><span>总场次</span><strong>${escapeHtml(formatH2hMatchCount(headToHead))}</strong></div>
               <div class="h2h-stat"><span>胜/平/负</span><strong>${escapeHtml(formatH2hRecord(match, headToHead))}</strong></div>
