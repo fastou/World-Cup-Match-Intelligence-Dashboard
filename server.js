@@ -877,6 +877,64 @@ function worldCupRecordStrength(record) {
   };
 }
 
+function advanceTiebreakProbability(match, fifaRankings = {}) {
+  const probabilities = match?.probabilities || {};
+  const lambdaHome = Number(probabilities.lambdaHome ?? match?.dynamicModel?.adjusted?.lambdaHome ?? match?.modelV2?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
+  const lambdaAway = Number(probabilities.lambdaAway ?? match?.dynamicModel?.adjusted?.lambdaAway ?? match?.modelV2?.adjusted?.lambdaAway ?? match?.model?.lambdaAway);
+  let tiebreakHome = 0.5;
+  const notes = [];
+
+  if (Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway)) {
+    const xgDelta = lambdaHome - lambdaAway;
+    tiebreakHome += clamp(xgDelta * 0.09, -0.075, 0.075);
+    notes.push(`加时/点球初始拆分参考 xG 差 ${xgDelta >= 0 ? "+" : ""}${xgDelta.toFixed(2)}。`);
+  }
+
+  const homeRank = rankingNumber(match?.home, fifaRankings) || Number(match?.homeTeam?.worldRanking?.rank);
+  const awayRank = rankingNumber(match?.away, fifaRankings) || Number(match?.awayTeam?.worldRanking?.rank);
+  if (Number.isFinite(homeRank) && Number.isFinite(awayRank)) {
+    const rankDelta = awayRank - homeRank;
+    tiebreakHome += clamp(rankDelta / 850, -0.055, 0.055);
+    notes.push(`点球/加时心理与深度用 FIFA 排名差做低权重修正。`);
+  }
+
+  const homeRecord = worldCupRecordStrength(match?.homeTeam?.worldCupRecord);
+  const awayRecord = worldCupRecordStrength(match?.awayTeam?.worldCupRecord);
+  if (homeRecord && awayRecord) {
+    const recordDelta = (homeRecord.pointsRate - awayRecord.pointsRate) * 0.035;
+    tiebreakHome += clamp(recordDelta, -0.025, 0.025);
+    notes.push("世界杯历史履历只作为加时/点球拆分的弱信号。");
+  }
+
+  return {
+    home: clamp(tiebreakHome, 0.38, 0.62),
+    notes: [...new Set(notes)].slice(0, 4)
+  };
+}
+
+function attachAdvanceProbabilities(match, fifaRankings = {}) {
+  if (!match?.probabilities) return match;
+  const triplet = normalizeProbabilityTriplet(match.probabilities);
+  const tiebreak = advanceTiebreakProbability(match, fifaRankings);
+  const homeAdvance = clamp(triplet.home + triplet.draw * tiebreak.home, 0.01, 0.99);
+  const awayAdvance = clamp(triplet.away + triplet.draw * (1 - tiebreak.home), 0.01, 0.99);
+  const total = homeAdvance + awayAdvance;
+  match.probabilities.advance = {
+    home: homeAdvance / total,
+    away: awayAdvance / total,
+    tiebreakHome: tiebreak.home,
+    tiebreakAway: 1 - tiebreak.home,
+    drawProbability: triplet.draw,
+    method: "常规时间胜率 + 平局后加时/点球拆分",
+    methodEn: "Regulation win probability plus draw split by extra-time/penalty tiebreak",
+    notes: [
+      `晋级盘不是90分钟胜平负：${match.homeName || match.home}晋级 = 90分钟胜 + 平局 × 加时/点球胜出概率。`,
+      ...tiebreak.notes
+    ].slice(0, 5)
+  };
+  return match;
+}
+
 function marketMoneylineTriplet(match) {
   const recs = new Map((match.recommendations || []).filter((rec) => rec.marketType === "moneyline").map((rec) => [rec.key, rec]));
   const values = {
@@ -1127,6 +1185,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
   const modelV2 = buildGoldmanStyleModel(match, fifaRankings, options);
   match.modelV2 = modelV2;
   match.probabilities = modelV2.probabilities;
+  attachAdvanceProbabilities(match, fifaRankings);
   match.dynamicModel = match.dynamicModel || {};
   if (!match.dynamicModel.preGoldmanAdjusted) {
     match.dynamicModel.preGoldmanAdjusted = { ...(match.dynamicModel.adjusted || {}) };
@@ -1140,6 +1199,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     drivers: modelV2.drivers,
     topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
   };
+  reapplyStoredTournamentTrend(match, fifaRankings);
   return match;
 }
 
@@ -1525,6 +1585,29 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
   };
   match.dynamicModel = match.dynamicModel || {};
   match.dynamicModel.tournamentTrend = match.tournamentTrend;
+  attachAdvanceProbabilities(match, fifaRankings);
+  return match;
+}
+
+function reapplyStoredTournamentTrend(match, fifaRankings = {}) {
+  const deltas = match?.tournamentTrend?.deltas;
+  if (!match?.probabilities || !deltas || match.probabilities.trendAdjusted) return match;
+  const winTriplet = normalizeProbabilityTriplet({
+    home: match.probabilities.home + (Number(deltas.home) || 0),
+    draw: match.probabilities.draw + (Number(deltas.draw) || 0),
+    away: match.probabilities.away + (Number(deltas.away) || 0)
+  });
+  const over25 = probabilityShift(match.probabilities.over25, Number(deltas.over25) || 0);
+  const btts = probabilityShift(match.probabilities.btts, Number(deltas.btts) || 0);
+  match.probabilities = recalculateScoreSummaries({
+    ...match.probabilities,
+    ...winTriplet,
+    over25,
+    under25: 1 - over25,
+    btts,
+    trendAdjusted: true
+  });
+  attachAdvanceProbabilities(match, fifaRankings);
   return match;
 }
 
@@ -1841,6 +1924,16 @@ function marketReviewAdjustments(match, rec) {
     }
   }
 
+  if (rec.marketType === "advance") {
+    if (typeof rec.edge === "number" && rec.edge > 0 && rec.edge < 0.055) {
+      scorePenalty += 0.018;
+      reasons.push("晋级盘没有平局结果，但 edge 不足时仍只做观察，不追高。");
+    }
+    if (match?.probabilities?.draw >= 0.3 && typeof rec.edge === "number" && rec.edge < 0.08) {
+      reasons.push("晋级判断对加时/点球拆分较敏感，平局概率偏高时降低下注确定性。");
+    }
+  }
+
   if (rec.marketType === "total" && rec.key === "under25") {
     const lowScoreMass = ["0-0", "1-0", "0-1", "1-1", "2-0", "0-2"].reduce((sum, score) => sum + scoreProbability(match, score), 0);
     if (lowScoreMass >= 0.58 && under25 >= 0.58) {
@@ -1934,6 +2027,16 @@ function gatedAction(baseDecision, row, match) {
     };
   }
 
+  if (match.manualMarkets?.sourceType === "auto-baseline" && row.chart?.source !== "Polymarket") {
+    return {
+      action: "WATCH",
+      label: "基线观察",
+      stake: "none",
+      gated: true,
+      reasons: ["当前为本地参考价，不是真实盘口"]
+    };
+  }
+
   if (!hasChart) reasons.push("实时曲线不足");
   if (!gate.allowStrongTrade) reasons.push(...(gate.reasons || []));
 
@@ -1978,6 +2081,7 @@ function buildRecommendations(match, probabilities) {
   const moneyline = markets.moneyline || {};
   const totals = markets.totals || {};
   const bttsMarkets = markets.btts || {};
+  const advanceMarkets = markets.advance || {};
   const homeMarketAliases = marketTeamAliases(match, "home");
   const awayMarketAliases = marketTeamAliases(match, "away");
   const rows = [
@@ -2052,6 +2156,33 @@ function buildRecommendations(match, probabilities) {
       marketPrice: bttsMarkets.no
     }
   ];
+
+  if (probabilities.advance && (advanceMarkets.available || typeof advanceMarkets.home === "number" || typeof advanceMarkets.away === "number")) {
+    if (typeof advanceMarkets.home === "number") {
+      rows.push({
+        key: "advance-home",
+        marketType: "advance",
+        marketTypeLabel: "晋级",
+        name: `${match.homeName}晋级`,
+        aliases: [`${match.homeName}晋级`, `${match.homeName} to advance`, "team to advance", "advance", ...homeMarketAliases],
+        side: "YES",
+        modelProbability: probabilities.advance.home,
+        marketPrice: advanceMarkets.home
+      });
+    }
+    if (typeof advanceMarkets.away === "number") {
+      rows.push({
+        key: "advance-away",
+        marketType: "advance",
+        marketTypeLabel: "晋级",
+        name: `${match.awayName}晋级`,
+        aliases: [`${match.awayName}晋级`, `${match.awayName} to advance`, "team to advance", "advance", ...awayMarketAliases],
+        side: "YES",
+        modelProbability: probabilities.advance.away,
+        marketPrice: advanceMarkets.away
+      });
+    }
+  }
 
   for (const handicap of markets.handicaps || []) {
     const home = handicapProbabilityFromProbabilities(probabilities, handicap.homeLine, "home");
@@ -2303,27 +2434,57 @@ function marketBelongsToMatch(market, homeAliases, awayAliases, homeCode = "", a
 
 function probabilityRows(match) {
   const recommendationsByKey = new Map((match.recommendations || []).map((rec) => [rec.key, rec]));
-  return [
+  const rows = [];
+  if (match.probabilities?.advance && (recommendationsByKey.has("advance-home") || recommendationsByKey.has("advance-away") || match.manualMarkets?.advance?.available)) {
+    rows.push(
+      {
+        key: "advance-home",
+        marketType: "advance",
+        marketTypeLabel: "晋级",
+        label: `${match.homeName}晋级`,
+        probability: match.probabilities.advance.home,
+        marketPrice: match.manualMarkets?.advance?.home
+      },
+      {
+        key: "advance-away",
+        marketType: "advance",
+        marketTypeLabel: "晋级",
+        label: `${match.awayName}晋级`,
+        probability: match.probabilities.advance.away,
+        marketPrice: match.manualMarkets?.advance?.away
+      }
+    );
+  }
+  rows.push(
     {
       key: "home",
+      marketType: "moneyline",
+      marketTypeLabel: "胜平负",
       label: `${match.homeName}胜`,
       probability: match.probabilities.home,
       marketPrice: match.manualMarkets?.moneyline?.home
     },
     {
       key: "draw",
+      marketType: "moneyline",
+      marketTypeLabel: "胜平负",
       label: "平局",
       probability: match.probabilities.draw,
       marketPrice: match.manualMarkets?.moneyline?.draw
     },
     {
       key: "away",
+      marketType: "moneyline",
+      marketTypeLabel: "胜平负",
       label: `${match.awayName}胜`,
       probability: match.probabilities.away,
       marketPrice: match.manualMarkets?.moneyline?.away
     }
-  ].map((row) => ({
+  );
+  return rows.map((row) => ({
     ...row,
+    marketType: row.marketType || recommendationsByKey.get(row.key)?.marketType || "",
+    marketTypeLabel: row.marketTypeLabel || recommendationsByKey.get(row.key)?.marketTypeLabel || "",
     marketPrice: recommendationsByKey.get(row.key)?.chart?.currentPrice ?? recommendationsByKey.get(row.key)?.marketPrice ?? row.marketPrice,
     marketSource: recommendationsByKey.get(row.key)?.chart?.source || "",
     edge: edge(row.probability, recommendationsByKey.get(row.key)?.chart?.currentPrice ?? recommendationsByKey.get(row.key)?.marketPrice ?? row.marketPrice)
@@ -2357,6 +2518,14 @@ function aiPredictionWorldCupEvidence(team, name) {
 }
 
 function aiPredictionMarketRead(top, rows) {
+  if (top?.marketType === "advance") {
+    const regulationRows = rows.filter((row) => row.marketType === "moneyline");
+    const regulationTop = regulationRows.sort((a, b) => b.probability - a.probability)[0];
+    const advanceText = typeof top.marketPrice === "number"
+      ? `${top.label} 晋级价 ${formatPercent(top.marketPrice)}，edge ${formatPercent(top.edge)}`
+      : `${top.label} 晋级实时价格缺失`;
+    return `${advanceText}。注意：晋级盘包含加时/点球；90分钟胜平负最高项是 ${regulationTop?.label || "-"} ${formatPercent(regulationTop?.probability)}，不能直接互相替代。`;
+  }
   if (!top || typeof top.marketPrice !== "number") {
     return "对应胜平负实时价格缺失，盘口只作为概率展示，不给价格判断。";
   }
@@ -2439,6 +2608,9 @@ function aiPredictionDataGaps(match) {
   }
   const liveMoneyline = (match.recommendations || []).filter((rec) => rec.marketType === "moneyline" && rec.chart?.source === "Polymarket").length;
   if (!liveMoneyline) gaps.push("胜平负 Polymarket 曲线未完整匹配。");
+  const hasAdvanceMarket = (match.recommendations || []).some((rec) => rec.marketType === "advance");
+  const liveAdvance = (match.recommendations || []).filter((rec) => rec.marketType === "advance" && rec.chart?.source === "Polymarket").length;
+  if (hasAdvanceMarket && !liveAdvance) gaps.push("晋级盘已识别，但 Polymarket 晋级曲线未完整匹配。");
   return gaps.slice(0, 5);
 }
 
@@ -2525,9 +2697,11 @@ function aiPredictionEvidence(match, top, rows) {
 }
 
 function buildAiPrediction(match) {
-  const rows = probabilityRows(match).sort((a, b) => b.probability - a.probability);
-  const top = rows[0];
-  const runnerUp = rows[1];
+  const rows = probabilityRows(match);
+  const advanceRows = rows.filter((row) => row.marketType === "advance");
+  const rankedRows = [...(advanceRows.length >= 2 ? advanceRows : rows)].sort((a, b) => b.probability - a.probability);
+  const top = rankedRows[0];
+  const runnerUp = rankedRows[1] || rows.find((row) => row.key !== top?.key) || top;
   const topRecommendation = (match.recommendations || []).find((rec) => rec.key === top.key);
   const positiveEdges = (match.recommendations || [])
     .filter((rec) => typeof rec.edge === "number" && rec.edge > 0)
@@ -2546,6 +2720,9 @@ function buildAiPrediction(match) {
   const reasons = [];
 
   reasons.push(`Elo-xG Poisson 模型给出 ${top.label} ${(top.probability * 100).toFixed(1)}%，领先 ${runnerUp.label} ${((top.probability - runnerUp.probability) * 100).toFixed(1)} 个百分点。`);
+  if (top.marketType === "advance" && match.probabilities?.advance) {
+    reasons.push(`淘汰赛晋级模型：常规时间胜率加上平局后的加时/点球拆分；平局概率 ${(match.probabilities.advance.drawProbability * 100).toFixed(1)}%，${match.homeName} 平局后晋级拆分 ${(match.probabilities.advance.tiebreakHome * 100).toFixed(1)}%。`);
+  }
   const modelSummary = aiPredictionModelSummary(match);
   if (modelSummary) reasons.push(modelSummary);
   reasons.push(aiPredictionCalibrationSummary(match));
@@ -2617,6 +2794,7 @@ function formatCents(value) {
 }
 
 function recommendationMarketPriority(rec) {
+  if (rec.marketType === "advance") return 3.4;
   if (rec.marketType === "total") return 3;
   if (rec.marketType === "btts") return 2.6;
   if (rec.marketType === "handicap") return 2;
@@ -3003,7 +3181,7 @@ function diversifiedOpportunityRows(rows, limit = OPPORTUNITY_MAX_ITEMS, nowMs =
 
   const activeOrNearRows = sorted.filter((row) => opportunityTimePriority(row, nowMs) >= 3);
   for (const row of activeOrNearRows) add(row, { capMoneyline: false });
-  for (const marketType of ["btts", "total", "handicap"]) {
+  for (const marketType of ["advance", "btts", "total", "handicap"]) {
     add(sorted.find((row) => row.hasLiveChart && row.rec?.marketType === marketType), { capMoneyline: false });
   }
   for (const row of sorted) {
@@ -3469,6 +3647,10 @@ function liveProbabilityModel(match, live) {
   notes.push(...momentum.notes);
 
   const triplet = applyLiveTripletShift(base, shifts);
+  const tiebreakHome = typeof base.advance?.tiebreakHome === "number" ? base.advance.tiebreakHome : 0.5;
+  const advanceHomeRaw = triplet.home + triplet.draw * tiebreakHome;
+  const advanceAwayRaw = triplet.away + triplet.draw * (1 - tiebreakHome);
+  const advanceTotal = Math.max(0.01, advanceHomeRaw + advanceAwayRaw);
   const tempo = statsReady
     ? clamp(((Number(live.stats.home.shots) || 0) + (Number(live.stats.away.shots) || 0)) / Math.max(1, elapsed || 1), 0, 0.42)
     : 0;
@@ -3504,6 +3686,12 @@ function liveProbabilityModel(match, live) {
     over25,
     under25: 1 - over25,
     btts,
+    advance: {
+      home: advanceHomeRaw / advanceTotal,
+      away: advanceAwayRaw / advanceTotal,
+      tiebreakHome,
+      tiebreakAway: 1 - tiebreakHome
+    },
     elapsedMinute: elapsed,
     scoreKnown: hasScore,
     statsReady,
@@ -3519,6 +3707,8 @@ function liveProbabilityForRecommendation(rec, liveModel) {
   if (rec.key === "under25") return liveModel.under25;
   if (rec.key === "bttsYes") return liveModel.btts;
   if (rec.key === "bttsNo") return 1 - liveModel.btts;
+  if (rec.key === "advance-home") return liveModel.advance?.home ?? rec.modelProbability;
+  if (rec.key === "advance-away") return liveModel.advance?.away ?? rec.modelProbability;
   if (rec.marketType === "handicap") {
     const base = Number(rec.modelProbability);
     const teamShift = rec.key.endsWith("-home") ? liveModel.home - (rec._baseHome || 0) : liveModel.away - (rec._baseAway || 0);
@@ -4486,6 +4676,25 @@ function settleRecommendationFromResult(rec, result) {
         : null
     };
   }
+  if (rec.marketType === "advance") {
+    const advanceKey = result.advanceKey || (homeGoals > awayGoals ? "advance-home" : homeGoals < awayGoals ? "advance-away" : "");
+    if (!advanceKey) {
+      return {
+        status: "pending",
+        label: "待晋级结果",
+        outcomeText: `赛果 ${homeGoals}-${awayGoals}，需要加时/点球晋级方后才能结算 Team to Advance。`
+      };
+    }
+    const won = rec.key === advanceKey;
+    return {
+      status: won ? "hit" : "miss",
+      label: won ? "命中" : "未命中",
+      outcomeText: `赛果 ${homeGoals}-${awayGoals}，晋级结果为 ${advanceKey === "advance-home" ? "主队晋级" : "客队晋级"}。`,
+      profitPerShare: typeof rec.marketPrice === "number"
+        ? (won ? 1 - rec.marketPrice : -rec.marketPrice)
+        : null
+    };
+  }
   if (rec.marketType === "total") {
     const total = homeGoals + awayGoals;
     const won = rec.key === "under25" ? total < 2.5 : rec.key === "over25" ? total > 2.5 : null;
@@ -5062,6 +5271,8 @@ async function fetchAiTradePlans(matches) {
       "BTTS 与小于2.5同时看好时，只能二选一；若低比分集中，应优先小球而不是 BTTS。",
       "弱队 +0.5 如果存在强队1-0风险，只能观察，不能作为首选。",
       "胜平负长赔冷门和平局不能作为首选；除非该方向是模型最高概率、概率至少48%、且强交易闸门打开，否则只能写激进小注/观察。首选优先让球或大小球。",
+      "淘汰赛要区分90分钟胜平负和 Team to Advance 晋级盘：晋级盘包含加时/点球，不能把常规时间胜率直接当晋级率。",
+      "如果首选是晋级盘，必须说明它的模型概率来自常规时间胜率 + 平局后的加时/点球拆分，并仍然遵守实时价格和曲线闸门。",
       "如果没有实时价格或曲线，写等待/观察，不给硬价格。",
       "summary 要像给人看的短结论，例如：首选小于2.5球，49¢附近可观察，小仓，不追高。",
       "entryText 必须包含明确价格纪律或等待条件。"
@@ -5695,6 +5906,7 @@ function attachMarketCharts(matches, polymarket) {
   const now = Math.floor(Date.now() / 1000);
   for (const match of matches) {
     match.marketCatalog = buildMatchMarketCatalog(match, polymarket);
+    mergeAdvanceMarketPricesFromCatalog(match);
     for (const recommendation of match.recommendations) {
       const token = findChartToken(match, recommendation, tokenCatalog);
       if (token) {
@@ -5770,6 +5982,9 @@ function attachMarketCharts(matches, polymarket) {
 function marketCatalogCategory(market) {
   const type = String(market?.sportsMarketType || "").toLowerCase();
   const text = `${market?.question || ""} ${market?.slug || ""}`.toLowerCase();
+  if (type.includes("team_to_advance") || /team\s+to\s+advance|to[-_\s]?advance|晋级/.test(text)) {
+    return { key: "advance", label: "晋级", labelEn: "To Advance" };
+  }
   if (/correct[-_\s]?score|exact[-_\s]?score|scorecast|比分|球胆/.test(text) || type.includes("correct_score")) {
     return { key: "correctScore", label: "球胆 / 正确比分", labelEn: "Correct Score" };
   }
@@ -5796,14 +6011,15 @@ function marketCatalogCategory(market) {
 
 function marketCatalogSortScore(item) {
   const order = {
-    moneyline: 0,
-    spreads: 1,
-    totals: 2,
-    teamTotals: 3,
-    btts: 4,
-    halves: 5,
-    correctScore: 6,
-    other: 7
+    advance: 0,
+    moneyline: 1,
+    spreads: 2,
+    totals: 3,
+    teamTotals: 4,
+    btts: 5,
+    halves: 6,
+    correctScore: 7,
+    other: 8
   };
   return (order[item.category] ?? 9) * 1000000000 - Number(item.volume || 0);
 }
@@ -5813,13 +6029,14 @@ function buildMatchMarketCatalog(match, polymarket) {
   const homeAliases = teamNameVariants(match.home, match.homeName);
   const awayAliases = teamNameVariants(match.away, match.awayName);
   const expectedCategories = [
+    { key: "advance", label: "晋级", labelEn: "To Advance" },
+    { key: "moneyline", label: "胜平负", labelEn: "Result" },
+    { key: "spreads", label: "让球 / 分差", labelEn: "Spreads" },
+    { key: "totals", label: "总进球", labelEn: "Totals" },
+    { key: "btts", label: "双方进球", labelEn: "BTTS" },
     { key: "correctScore", label: "球胆 / 正确比分", labelEn: "Correct Score" },
     { key: "halves", label: "半场 / 上下半场", labelEn: "Halves" },
     { key: "teamTotals", label: "球队进球数", labelEn: "Team Totals" },
-    { key: "totals", label: "总进球", labelEn: "Totals" },
-    { key: "spreads", label: "让球 / 分差", labelEn: "Spreads" },
-    { key: "btts", label: "双方进球", labelEn: "BTTS" },
-    { key: "moneyline", label: "胜平负", labelEn: "Result" },
     { key: "other", label: "其他盘口", labelEn: "Other" }
   ];
   const items = markets
@@ -5891,6 +6108,42 @@ function buildMatchMarketCatalog(match, polymarket) {
   };
 }
 
+function mergeAdvanceMarketPricesFromCatalog(match) {
+  const advanceCategory = (match?.marketCatalog?.categories || []).find((category) => category.key === "advance");
+  const markets = (advanceCategory?.markets || []).filter((market) => Array.isArray(market.outcomes) && market.outcomes.length >= 2);
+  if (!markets.length) return match;
+  const homeAliases = marketTeamAliases(match, "home");
+  const awayAliases = marketTeamAliases(match, "away");
+  const selected = [...markets].sort((a, b) => Number(b.volume || 0) - Number(a.volume || 0))[0];
+  const homeOutcome = selected.outcomes.find((outcome) => aliasesMatchText(homeAliases, outcome.label));
+  const awayOutcome = selected.outcomes.find((outcome) => aliasesMatchText(awayAliases, outcome.label));
+  const home = Number(homeOutcome?.price);
+  const away = Number(awayOutcome?.price);
+  if (!Number.isFinite(home) && !Number.isFinite(away)) return match;
+  const nowIso = new Date().toISOString();
+  match.manualMarkets = {
+    ...(match.manualMarkets || {}),
+    advance: {
+      available: true,
+      home: Number.isFinite(home) ? home : undefined,
+      away: Number.isFinite(away) ? away : undefined,
+      marketId: selected.marketId || "",
+      conditionId: selected.conditionId || "",
+      question: selected.question || "",
+      slug: selected.slug || "",
+      source: "Polymarket Team to Advance",
+      sourceType: "polymarket",
+      lastUpdated: nowIso
+    },
+    source: match.manualMarkets?.sourceType === "auto-baseline"
+      ? "Polymarket 晋级盘 + 赛程自动基线参考价"
+      : match.manualMarkets?.source || "Polymarket 实时市场 API",
+    sourceType: match.manualMarkets?.sourceType,
+    lastUpdated: nowIso
+  };
+  return match;
+}
+
 function localHistoryForRecommendation(match, recommendation) {
   const history = match.manualMarkets && match.manualMarkets.history ? match.manualMarkets.history : {};
   const raw = history[recommendation.key] || [];
@@ -5909,6 +6162,7 @@ function buildTokenCatalog(polymarket) {
     conditionId: market.conditionId || "",
     marketQuestion: market.question || "",
     marketSlug: market.slug || "",
+    sportsMarketType: market.sportsMarketType || "",
     marketQuestionText: `${market.question || ""}`.toLowerCase(),
     marketCoreText: `${market.question || ""} ${market.slug || ""}`.toLowerCase(),
     eventTitle: market.eventTitle || "",
@@ -5937,18 +6191,29 @@ function findChartToken(match, recommendation, tokens) {
 
   if (!matchTokens.length) return null;
 
+  if (recommendation.marketType === "advance") {
+    const teamAliases = recommendation.key === "advance-home" ? homeAliases : awayAliases;
+    return sameMatchTokens.find((token) => {
+      const text = `${token.marketText} ${token.labelText}`;
+      return isAdvanceToken(token) && aliasesMatchText(teamAliases, token.labelText);
+    }) || sameMatchTokens.find((token) => {
+      const text = `${token.marketText} ${token.labelText}`;
+      return isAdvanceToken(token) && aliasesMatchText(teamAliases, text);
+    }) || null;
+  }
+
   if (recommendation.marketType === "moneyline") {
     if (recommendation.key === "draw") {
       return sameMatchTokens.find((token) => {
         const text = `${token.marketText} ${token.labelText}`;
-        return !isSpreadOrTotalToken(token) && (text.includes("draw") || text.includes("平")) && token.labelText.includes("yes");
-      }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && (token.labelText.includes("draw") || token.labelText.includes("平"))) || null;
+        return !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && (text.includes("draw") || text.includes("平")) && token.labelText.includes("yes");
+      }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && (token.labelText.includes("draw") || token.labelText.includes("平"))) || null;
     }
     const teamAliases = recommendation.key === "home" ? homeAliases : awayAliases;
-    return sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && aliasesMatchText(teamAliases, token.labelText))
+    return sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && aliasesMatchText(teamAliases, token.labelText))
       || sameMatchTokens.find((token) => {
         const text = `${token.marketQuestionText} ${token.labelText}`;
-        return !isSpreadOrTotalToken(token) && teamAliases.some((team) => textContainsAlias(token.marketQuestionText, team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
+        return !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && teamAliases.some((team) => textContainsAlias(token.marketQuestionText, team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
       }) || null;
   }
 
@@ -6025,6 +6290,12 @@ function lineMatchesText(handicap, recommendationKey, text) {
 function isSpreadOrTotalToken(token) {
   const text = `${token?.marketText || ""} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""}`;
   return text.includes("spread") || text.includes("o/u") || text.includes("-total-") || text.includes("-spread-");
+}
+
+function isAdvanceToken(token) {
+  const type = String(token?.sportsMarketType || "").toLowerCase();
+  const text = `${token?.marketText || ""} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""}`.toLowerCase();
+  return type.includes("team_to_advance") || /team\s+to\s+advance|to[-_\s]?advance|晋级/.test(text);
 }
 
 function tokenBelongsToMatch(token, homeAliases, awayAliases) {

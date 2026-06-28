@@ -4342,9 +4342,9 @@
               <div class="prediction-grid">
                 ${rows.map((row) => `
                   <div class="prediction-prob-card">
-                    <span class="prediction-row-label">${escapeHtml(row.label)}</span>
+                    <span class="prediction-row-label">${escapeHtml(row.marketTypeLabel ? `${row.marketTypeLabel} · ${row.label}` : row.label)}</span>
                     <strong>AI ${fmtPct(row.probability)}</strong>
-                    <span class="prediction-market-line">${escapeHtml(marketPrefix)} ${fmtPct(row.marketPrice)}${row.marketSource ? ` · ${escapeHtml(row.marketSource)}` : ""}</span>
+                    <span class="prediction-market-line">${escapeHtml(row.marketSource === "Polymarket" ? "盘口" : marketPrefix)} ${fmtPct(row.marketPrice)}${row.marketSource ? ` · ${escapeHtml(row.marketSource)}` : ""}</span>
                     <span class="prediction-edge ${typeof row.edge === "number" && row.edge > 0 ? "good" : typeof row.edge === "number" && row.edge < 0 ? "bad" : ""}">Edge ${fmtPct(row.edge)}</span>
                   </div>
                 `).join("")}
@@ -4806,6 +4806,15 @@
 
       function renderOddsBoard(match) {
         const marketTypeEmptyState = {
+          advance: currentLang === "en"
+            ? {
+              title: "No live to-advance curve yet",
+              body: "Polymarket has not returned a live history curve for Team to Advance. This market is separate from 90-minute result."
+            }
+            : {
+              title: "暂无 Polymarket 晋级曲线",
+              body: "Polymarket 当前未返回这场晋级盘的实时历史曲线。晋级盘包含加时/点球，不等于90分钟胜平负。"
+            },
           moneyline: currentLang === "en"
             ? {
               title: "No live single-match result market yet",
@@ -4844,6 +4853,7 @@
             }
         };
         const groups = [
+          { type: "advance", label: currentLang === "en" ? "To Advance" : "晋级" },
           { type: "moneyline", label: currentLang === "en" ? "Result" : "胜平负" },
           { type: "handicap", label: currentLang === "en" ? "Handicap" : "让球盘" },
           { type: "total", label: currentLang === "en" ? "Totals" : "大小球" },
@@ -4909,7 +4919,7 @@
             <div class="odds-board-head">
               <div>
                 <div class="odds-board-title">当前比赛实时盘</div>
-                <div class="odds-board-meta">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))} · 胜平负、让球盘、大小球可切换</div>
+                <div class="odds-board-meta">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))} · 晋级、胜平负、让球盘、大小球可切换</div>
               </div>
             </div>
             <div class="odds-board-tabs" role="tablist" aria-label="盘口切换">${tabs}</div>
@@ -5362,6 +5372,7 @@
                 ${match.scheduleSource ? `<li><strong>赛程来源</strong><span>${escapeHtml(match.scheduleSource)}</span></li>` : ""}
                 <li><strong>盘口来源</strong><span>${escapeHtml(match.manualMarkets.source)}</span></li>
                 <li><strong>盘口更新时间</strong><span>${fmtTime(match.manualMarkets.lastUpdated)}</span></li>
+                ${match.manualMarkets.advance?.available ? `<li><strong>晋级</strong><span>${escapeHtml(homeName(match))} ${fmtPrice(match.manualMarkets.advance?.home)} / ${escapeHtml(awayName(match))} ${fmtPrice(match.manualMarkets.advance?.away)} · Team to Advance 包含加时/点球，不等于90分钟胜平负</span></li>` : ""}
                 <li><strong>胜平负</strong><span>${escapeHtml(homeName(match))} ${fmtPrice(match.manualMarkets.moneyline?.home)} / 平局 ${fmtPrice(match.manualMarkets.moneyline?.draw)} / ${escapeHtml(awayName(match))} ${fmtPrice(match.manualMarkets.moneyline?.away)}</span></li>
                 <li><strong>大小球</strong><span>小于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.under25)} / 大于 2.5 球 ${fmtPrice(match.manualMarkets.totals?.over25)}</span></li>
                 <li><strong>双方进球</strong><span>是 ${fmtPrice(match.manualMarkets.btts?.yes)} / 否 ${fmtPrice(match.manualMarkets.btts?.no)} · 模型 ${fmtPct(match.probabilities.btts)}</span></li>

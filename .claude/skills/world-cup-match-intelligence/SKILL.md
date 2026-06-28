@@ -16,6 +16,8 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Include a tournament-trend layer when current-tournament results exist: compute it from deduplicated final scores, keep the sample size visible, and apply only small weighted adjustments so early-tournament signals do not overfit.
 - In final group-stage rounds, include group qualification situation and motivation: current points, rank, goal difference, whether a team needs a win, whether goal difference matters, whether a draw has value, knockout-path value for finishing first vs second, and whether tempo control or rotation risk rises. Apply only small, explainable xG adjustments.
 - In final group-stage rounds, do not stop at "draw has value." If first-place finish changes the likely knockout path or avoids a stronger opponent, model a small aggression/path-value adjustment and explain it in the match notes.
+- In knockout rounds, keep 90-minute match result separate from `Team to Advance`. Regulation win/draw/loss remains a 90-minute market; advancement equals regulation win plus the draw probability split by extra-time/penalty tiebreak factors.
+- For `Team to Advance`, compute and display a separate advancement probability using regulation probabilities plus a conservative tiebreak split from xG edge, ranking/depth, and World Cup record. Do not compare a 90-minute win price directly with an advancement price.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -131,6 +133,8 @@ When maintaining public market data:
 
 - Fetch live curves for match result, handicap, and totals separately when markets exist.
 - Treat BTTS / Both Teams To Score as a first-class market alongside match result, handicap, and totals: generate Yes/No probabilities, match Polymarket BTTS tokens when available, show curves, archive snapshots, and settle reviews from final scores.
+- Treat `Team to Advance` as a first-class knockout market when Polymarket returns it: categorize it separately from match result, map both team outcomes, show live curves, archive snapshots, and include it in recommendations only when a real market price exists.
+- Never let `Team to Advance` tokens satisfy 90-minute moneyline matching. Exclude advancement markets from match-result token matching so a team's advancement price is not mistaken for its regulation win price.
 - Fetch each match's `-more-markets` Polymarket event when available and expose a separate derivative market catalog for browsing. Include correct score/ball-score markets, halves, team totals, alternate totals, alternate spreads, BTTS variants, and other markets as market data. Do not mix these derivative rows into model buy recommendations until a specific probability model and current-score gate exists for that market type.
 - If Polymarket does not return a derivative category such as correct score/ball-score for a match, show a structured missing state for that category instead of leaving the UI blank or inventing prices.
 - The next-three-day fixture window is a data collection and context sync scope. Do not render it as the primary home-page match list unless explicitly requested.
@@ -140,6 +144,7 @@ When maintaining public market data:
 - Opportunity radar scans should be archived as lightweight runs/items even when the visible dashboard is using light mode, so later review can compare surfaced candidates, observation candidates, prices, edge, and final outcomes.
 - In-play recommendations must apply current-score gates before ranking. Do not recommend already crossed or already satisfied entry lines as new buy points: for example, after the score reaches 3 total goals, Over 2.5 is `已穿线不追`; Under 2.5 is impossible; after both teams score, BTTS Yes is already satisfied and BTTS No is impossible. Correct-score markets that the current score has passed must also be blocked.
 - In-play recommendations must suppress extreme long-tail moneyline rows after a large score gap. If a team trails by three or more goals, or by two or more goals late, and the comeback/draw probability is tiny or the market is trading near 0¢, label it `长尾不追` and move it below practical live markets instead of saying `等待更好价格`.
+- In-play advancement recommendations should recompute from the live regulation triplet plus the same extra-time/penalty tiebreak split. Do not leave `Team to Advance` at its pre-match probability once live score, time, and attack/defense stats are available.
 - In-play opportunity labels must distinguish real Polymarket live prices from local/manual snapshots. If the row does not have a live Polymarket price/curve, show waiting or downgraded language instead of a buy-style recommendation.
 - BTTS recommendations need a post-review discipline layer. Do not promote BTTS Yes as a main buy only because the underdog has pace, effort, or a plausible counterattack path. Downgrade BTTS Yes when under 2.5 is high, 1-0/2-0/0-0 score mass is concentrated, the favorite has a strong clean-sheet/control path, or the underdog lacks verified shot-creation evidence.
 - Match Polymarket team names with exact team aliases or word-boundary tokens. Do not treat short team codes such as `SCO`, `MAR`, or `CAN` as arbitrary substrings, because they can appear inside unrelated words like `score`, `market`, or `canceled`.
@@ -173,6 +178,7 @@ Important dashboard updates should be archived so later strategy analysis can co
 - squad physical/line-profile context and AI human-read notes
 - tournament-trend sample, signals, and per-match adjustment notes
 - group qualification situation, knockout-path motivation notes, and any small xG adjustment applied from points-table pressure or top-spot path value
+- knockout-round advancement probability, tiebreak split, Team to Advance market price/curve, and settlement status when the match has an advancement market
 - opportunity radar runs and candidate items, including strict candidates, observation candidates, price, edge, max informational entry price, confidence, expiry time, and AI/rule rationale
 - final match result
 
