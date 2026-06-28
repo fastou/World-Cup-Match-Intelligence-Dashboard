@@ -878,6 +878,70 @@ function worldCupRecordStrength(record) {
   };
 }
 
+function teamRecentTournamentProfile(match, side) {
+  const code = String(side === "home" ? match?.home : match?.away || "").toUpperCase();
+  const completed = match?.tournamentTrend?.completedMatches || [];
+  const rows = completed.filter((event) => event.home === code || event.away === code);
+  if (!rows.length) return null;
+  const summary = {
+    code,
+    matches: rows.length,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    goalsFor: 0,
+    goalsAgainst: 0,
+    cleanSheets: 0,
+    failedToScore: 0,
+    btts: 0,
+    over25: 0
+  };
+  for (const event of rows) {
+    const isHome = event.home === code;
+    const [homeGoalsRaw, awayGoalsRaw] = String(event.score || "0-0").split("-").map(Number);
+    const goalsFor = isHome ? homeGoalsRaw : awayGoalsRaw;
+    const goalsAgainst = isHome ? awayGoalsRaw : homeGoalsRaw;
+    summary.goalsFor += Number(goalsFor) || 0;
+    summary.goalsAgainst += Number(goalsAgainst) || 0;
+    if (goalsFor > goalsAgainst) summary.wins += 1;
+    else if (goalsFor === goalsAgainst) summary.draws += 1;
+    else summary.losses += 1;
+    if (goalsAgainst === 0) summary.cleanSheets += 1;
+    if (goalsFor === 0) summary.failedToScore += 1;
+    if (goalsFor > 0 && goalsAgainst > 0) summary.btts += 1;
+    if (goalsFor + goalsAgainst > 2.5) summary.over25 += 1;
+  }
+  summary.pointsRate = (summary.wins * 3 + summary.draws) / (summary.matches * 3);
+  summary.goalsForPerMatch = summary.goalsFor / summary.matches;
+  summary.goalsAgainstPerMatch = summary.goalsAgainst / summary.matches;
+  summary.goalDiffPerMatch = (summary.goalsFor - summary.goalsAgainst) / summary.matches;
+  summary.cleanSheetRate = summary.cleanSheets / summary.matches;
+  summary.failedToScoreRate = summary.failedToScore / summary.matches;
+  summary.bttsRate = summary.btts / summary.matches;
+  summary.over25Rate = summary.over25 / summary.matches;
+  return summary;
+}
+
+function h2hStrength(match) {
+  const h2h = match?.headToHead || match?.context?.headToHead;
+  const summary = h2h?.summary || {};
+  const matches = Number(summary.matches || 0);
+  if (!Number.isFinite(matches) || matches <= 0) return null;
+  const homeWins = Number(summary.homeWins || 0);
+  const awayWins = Number(summary.awayWins || 0);
+  const draws = Number(summary.draws || 0);
+  const homeGoals = Number(summary.homeGoals || 0);
+  const awayGoals = Number(summary.awayGoals || 0);
+  return {
+    matches,
+    homePointsRate: (homeWins * 3 + draws) / (matches * 3),
+    awayPointsRate: (awayWins * 3 + draws) / (matches * 3),
+    goalDiffPerMatch: (homeGoals - awayGoals) / matches,
+    sourceStatus: h2h.sourceStatus || "",
+    windowYears: h2h.windowYears || H2H_WINDOW_YEARS
+  };
+}
+
 function knockoutStageBase(record) {
   if (!record || record.ok === false) return null;
   const text = `${record.bestFinish || ""} ${record.bestFinishZh || ""}`.toLowerCase();
@@ -911,6 +975,181 @@ function knockoutExperienceProfile(record) {
   };
 }
 
+function daysBetween(fromIso, toIso) {
+  const from = new Date(fromIso || "").getTime();
+  const to = new Date(toIso || "").getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return (to - from) / (24 * 60 * 60 * 1000);
+}
+
+function restProfile(match, side) {
+  const code = String(side === "home" ? match?.home : match?.away || "").toUpperCase();
+  const kickoff = match?.kickoffShanghai || match?.kickoffLocal;
+  const completed = (match?.tournamentTrend?.completedMatches || [])
+    .filter((event) => event.home === code || event.away === code)
+    .filter((event) => new Date(event.kickoffUtc || "").getTime() < new Date(kickoff || "").getTime())
+    .sort((a, b) => new Date(b.kickoffUtc || "").getTime() - new Date(a.kickoffUtc || "").getTime());
+  const last = completed[0];
+  const days = last ? daysBetween(last.kickoffUtc, kickoff) : null;
+  return {
+    code,
+    lastMatch: last || null,
+    restDays: Number.isFinite(days) ? roundTo(days, 2) : null,
+    status: Number.isFinite(days) ? "synced" : "missing"
+  };
+}
+
+function communityTipsterSignal(match) {
+  const source = match?.bettingExpert || {};
+  const rows = [
+    ...(Array.isArray(source.tips) ? source.tips : []),
+    ...(Array.isArray(source.topTipsters) ? source.topTipsters : []),
+    ...(Array.isArray(source.publicTipsters) ? source.publicTipsters : [])
+  ];
+  if (!rows.length) return null;
+  const buckets = {
+    home: 0,
+    draw: 0,
+    away: 0,
+    over25: 0,
+    under25: 0,
+    bttsYes: 0,
+    bttsNo: 0,
+    handicapHome: 0,
+    handicapAway: 0
+  };
+  const weighted = rows.slice(0, 20).map((tip) => {
+    const text = `${tip.oneliner || tip.pick || ""} ${tip.description || ""}`.toLowerCase();
+    const weight = clamp((Number(tip.user?.yield ?? tip.publicYield) || 0) / 10 + (Number(tip.user?.rating ?? tip.publicRating) || 0) / 5 + (Number(tip.bet?.stake ?? tip.stake) || 0) / 10, 0.25, 2.2);
+    if (text.includes("both teams to score: yes") || /\bbtts\b.*yes/.test(text)) buckets.bttsYes += weight;
+    if (text.includes("both teams to score: no") || /\bbtts\b.*no/.test(text)) buckets.bttsNo += weight;
+    if (text.includes("over 2.5") || text.includes("over 2.75") || text.includes("over 3")) buckets.over25 += weight;
+    if (text.includes("under 2.5") || text.includes("under 2.75") || text.includes("under 3")) buckets.under25 += weight;
+    if (text.includes("draw")) buckets.draw += weight;
+    if (text.includes(String(match.homeName || "").toLowerCase()) && (text.includes("win") || text.includes("draw no bet"))) buckets.home += weight;
+    if (text.includes(String(match.awayName || "").toLowerCase()) && (text.includes("win") || text.includes("draw no bet"))) buckets.away += weight;
+    if (text.includes("(ah)") || text.includes("handicap")) {
+      if (text.includes(String(match.homeName || "").toLowerCase())) buckets.handicapHome += weight;
+      if (text.includes(String(match.awayName || "").toLowerCase())) buckets.handicapAway += weight;
+    }
+    return { tip, weight };
+  });
+  const total = weighted.reduce((sum, item) => sum + item.weight, 0);
+  if (!total) return null;
+  return {
+    status: "synced",
+    count: rows.length,
+    buckets: Object.fromEntries(Object.entries(buckets).map(([key, value]) => [key, roundTo(value, 3)])),
+    topText: rows.slice(0, 3).map((tip) => tip.oneliner || tip.pick).filter(Boolean).join("；")
+  };
+}
+
+function buildContextSignals(match) {
+  const homeTournament = teamRecentTournamentProfile(match, "home");
+  const awayTournament = teamRecentTournamentProfile(match, "away");
+  const homeRest = restProfile(match, "home");
+  const awayRest = restProfile(match, "away");
+  const h2h = h2hStrength(match);
+  const community = communityTipsterSignal(match);
+  const signals = [];
+  const impacts = {
+    homeXgDelta: 0,
+    awayXgDelta: 0,
+    bttsDelta: 0,
+    over25Delta: 0,
+    drawDelta: 0,
+    tiebreakHomeDelta: 0
+  };
+
+  if (homeTournament && awayTournament) {
+    const sampleWeight = clamp(Math.min(homeTournament.matches, awayTournament.matches) / 3, 0.35, 1);
+    const formDelta = clamp(((homeTournament.goalDiffPerMatch - awayTournament.goalDiffPerMatch) * 0.045 + (homeTournament.pointsRate - awayTournament.pointsRate) * 0.08) * sampleWeight, -0.09, 0.09);
+    const attackHome = clamp((homeTournament.goalsForPerMatch - 1.35) * 0.025 * sampleWeight, -0.035, 0.045);
+    const attackAway = clamp((awayTournament.goalsForPerMatch - 1.35) * 0.025 * sampleWeight, -0.035, 0.045);
+    impacts.homeXgDelta += formDelta + attackHome;
+    impacts.awayXgDelta += -formDelta * 0.78 + attackAway;
+    impacts.bttsDelta += clamp(((homeTournament.failedToScoreRate + awayTournament.failedToScoreRate) * -0.018 + (homeTournament.bttsRate + awayTournament.bttsRate - 0.8) * 0.018) * sampleWeight, -0.025, 0.025);
+    impacts.over25Delta += clamp(((homeTournament.over25Rate + awayTournament.over25Rate) / 2 - 0.5) * 0.035 * sampleWeight, -0.02, 0.025);
+    signals.push({
+      id: "current-world-cup-form",
+      label: "本届当前状态",
+      status: "synced",
+      homeXgDelta: roundTo(formDelta + attackHome, 3),
+      awayXgDelta: roundTo(-formDelta * 0.78 + attackAway, 3),
+      reason: `${match.homeName} 本届 ${homeTournament.wins}-${homeTournament.draws}-${homeTournament.losses}，进 ${homeTournament.goalsFor}/失 ${homeTournament.goalsAgainst}；${match.awayName} ${awayTournament.wins}-${awayTournament.draws}-${awayTournament.losses}，进 ${awayTournament.goalsFor}/失 ${awayTournament.goalsAgainst}。`
+    });
+  }
+
+  if (Number.isFinite(homeRest.restDays) && Number.isFinite(awayRest.restDays)) {
+    const restGap = clamp(homeRest.restDays - awayRest.restDays, -3, 3);
+    const restDelta = clamp(restGap * 0.012, -0.035, 0.035);
+    impacts.homeXgDelta += restDelta;
+    impacts.awayXgDelta -= restDelta;
+    if (Math.abs(restDelta) >= 0.006) {
+      signals.push({
+        id: "rest-days",
+        label: "休息天数",
+        status: "synced",
+        homeXgDelta: roundTo(restDelta, 3),
+        awayXgDelta: roundTo(-restDelta, 3),
+        reason: `${match.homeName} 休息约 ${homeRest.restDays} 天，${match.awayName} 休息约 ${awayRest.restDays} 天；淘汰赛体能只做小幅修正。`
+      });
+    }
+  }
+
+  if (h2h) {
+    const sampleWeight = clamp(h2h.matches / 5, 0.25, 0.8);
+    const h2hDelta = clamp(((h2h.homePointsRate - h2h.awayPointsRate) * 0.045 + h2h.goalDiffPerMatch * 0.018) * sampleWeight, -0.045, 0.045);
+    impacts.homeXgDelta += h2hDelta;
+    impacts.awayXgDelta -= h2hDelta * 0.75;
+    impacts.tiebreakHomeDelta += clamp(h2hDelta * 0.25, -0.012, 0.012);
+    signals.push({
+      id: "twenty-year-h2h",
+      label: "近20年交手",
+      status: /^verified/i.test(String(h2h.sourceStatus)) ? "synced" : "partial",
+      homeXgDelta: roundTo(h2hDelta, 3),
+      awayXgDelta: roundTo(-h2hDelta * 0.75, 3),
+      reason: `近 ${h2h.windowYears || H2H_WINDOW_YEARS} 年 ${h2h.matches} 场交手，按胜平负和净胜球做极低权重复核。`
+    });
+  }
+
+  if (community) {
+    const b = community.buckets || {};
+    impacts.bttsDelta += clamp((b.bttsYes - b.bttsNo) * 0.006, -0.018, 0.018);
+    impacts.over25Delta += clamp((b.over25 - b.under25) * 0.005, -0.015, 0.015);
+    impacts.drawDelta += clamp(b.draw * 0.003, 0, 0.012);
+    signals.push({
+      id: "community-tipsters",
+      label: "公开高手/榜单意见",
+      status: "synced",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: `抓到 ${community.count} 条 BettingExpert 世界杯公开 tips；只做方向共识小修正，Top: ${community.topText || "无摘要"}。`
+    });
+  }
+
+  const missing = [];
+  if (!homeTournament || !awayTournament) missing.push("本届队内状态样本不足");
+  if (!Number.isFinite(homeRest.restDays) || !Number.isFinite(awayRest.restDays)) missing.push("休息天数未匹配");
+  if (!h2h) missing.push("近20年交手未结构化");
+  if (!community) missing.push("公开 tipster 信号未匹配");
+  missing.push("裁判尺度/黄牌停赛/点球手/门将扑救质量需要独立结构化源，当前不入模");
+
+  return {
+    ok: signals.length > 0,
+    version: "2026.06.28",
+    impacts: Object.fromEntries(Object.entries(impacts).map(([key, value]) => [key, roundTo(value, 4)])),
+    signals,
+    homeTournament,
+    awayTournament,
+    rest: { home: homeRest, away: awayRest },
+    h2h,
+    community,
+    missing,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function advanceTiebreakProbability(match, fifaRankings = {}) {
   const probabilities = match?.probabilities || {};
   const lambdaHome = Number(probabilities.lambdaHome ?? match?.dynamicModel?.adjusted?.lambdaHome ?? match?.modelV2?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
@@ -939,6 +1178,13 @@ function advanceTiebreakProbability(match, fifaRankings = {}) {
     const recordDelta = (homeRecord.pointsRate - awayRecord.pointsRate) * 0.035;
     tiebreakHome += clamp(recordDelta, -0.025, 0.025);
     notes.push("世界杯历史履历只作为加时/点球拆分的弱信号。");
+  }
+
+  const contextSignals = match?.contextSignals || buildContextSignals(match);
+  if (contextSignals?.impacts?.tiebreakHomeDelta) {
+    const delta = clamp(Number(contextSignals.impacts.tiebreakHomeDelta) || 0, -0.018, 0.018);
+    tiebreakHome += delta;
+    notes.push(`近20年交手/本届状态对加时点球拆分做 ${delta >= 0 ? "+" : ""}${delta.toFixed(3)} 低权重修正。`);
   }
 
   const homeKnockout = knockoutExperienceProfile(match?.homeTeam?.worldCupRecord);
@@ -1157,6 +1403,23 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     }
   }
 
+  const contextSignals = match.contextSignals || buildContextSignals(match);
+  if (contextSignals.ok) {
+    const impact = contextSignals.impacts || {};
+    const homeSignalDelta = clamp(Number(impact.homeXgDelta) || 0, -0.12, 0.12);
+    const awaySignalDelta = clamp(Number(impact.awayXgDelta) || 0, -0.12, 0.12);
+    if (homeSignalDelta || awaySignalDelta) {
+      lambdaHome += homeSignalDelta;
+      lambdaAway += awaySignalDelta;
+      drivers.push({
+        label: "补充数据维度",
+        homeXgDelta: roundTo(homeSignalDelta, 3),
+        awayXgDelta: roundTo(awaySignalDelta, 3),
+        reason: contextSignals.signals.slice(0, 3).map((item) => `${item.label}：${item.reason}`).join(" ")
+      });
+    }
+  }
+
   const motivation = buildMatchMotivationProfile(match);
   if (motivation.ok) {
     const tempoDelta = Number(motivation.tempoDelta) || 0;
@@ -1182,6 +1445,32 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   lambdaHome = roundTo(clamp(lambdaHome, 0.18, 4.8), 3);
   lambdaAway = roundTo(clamp(lambdaAway, 0.18, 4.8), 3);
   let probabilities = scoreModel(lambdaHome, lambdaAway);
+  if (contextSignals?.ok) {
+    const impact = contextSignals.impacts || {};
+    const bttsDelta = clamp(Number(impact.bttsDelta) || 0, -0.035, 0.035);
+    const over25Delta = clamp(Number(impact.over25Delta) || 0, -0.03, 0.035);
+    const drawDelta = clamp(Number(impact.drawDelta) || 0, -0.015, 0.02);
+    if (bttsDelta || over25Delta || drawDelta) {
+      const adjustedTriplet = normalizeProbabilityTriplet({
+        home: probabilities.home,
+        draw: probabilities.draw + drawDelta,
+        away: probabilities.away
+      });
+      probabilities = recalculateScoreSummaries({
+        ...probabilities,
+        ...adjustedTriplet,
+        btts: probabilityShift(probabilities.btts, bttsDelta),
+        over25: probabilityShift(probabilities.over25, over25Delta),
+        under25: 1 - probabilityShift(probabilities.over25, over25Delta)
+      });
+      drivers.push({
+        label: "衍生市场维度",
+        homeXgDelta: 0,
+        awayXgDelta: 0,
+        reason: `补充维度对 BTTS ${bttsDelta >= 0 ? "+" : ""}${formatPercent(bttsDelta)}、大2.5 ${over25Delta >= 0 ? "+" : ""}${formatPercent(over25Delta)}、平局 ${drawDelta >= 0 ? "+" : ""}${formatPercent(drawDelta)} 做低权重修正。`
+      });
+    }
+  }
   probabilities.lambdaHome = lambdaHome;
   probabilities.lambdaAway = lambdaAway;
   const preMarket = normalizeProbabilityTriplet(probabilities);
@@ -1227,7 +1516,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       lambdaAway
     },
     calibration,
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || driver.label === "盘口轻校准").slice(0, 7),
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "补充数据维度"].includes(driver.label)).slice(0, 9),
     probabilities
   };
 }
@@ -2726,6 +3015,17 @@ function aiPredictionEvidence(match, top, rows) {
       detail: `样本 ${match.tournamentTrend.sampleSize} 场：BTTS ${formatPercent(rates.btts)}，大 2.5 ${formatPercent(rates.over25)}，平局 ${formatPercent(rates.draw)}。`
     });
     if (match.tournamentTrend.notes?.length) drivers.push(`赛会趋势：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
+  }
+  if (match.contextSignals?.ok) {
+    const syncedSignals = (match.contextSignals.signals || []).filter((item) => item.status === "synced").slice(0, 4);
+    evidence.push({
+      label: "新增关注维度",
+      status: syncedSignals.length ? "synced" : "partial",
+      detail: syncedSignals.length
+        ? syncedSignals.map((item) => `${item.label}：${item.reason}`).join(" ")
+        : `已列入但暂未完全结构化：${(match.contextSignals.missing || []).slice(0, 3).join("；")}。`
+    });
+    drivers.push(...syncedSignals.slice(0, 3).map((item) => `${item.label}：${item.reason}`));
   }
   if (match.groupSituation?.ok) {
     evidence.push({
@@ -5889,6 +6189,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   baseMatch.dynamicModel = applyDynamicAdjustments(baseMatch);
   baseMatch.probabilities = scoreModel(baseMatch.dynamicModel.adjusted.lambdaHome, baseMatch.dynamicModel.adjusted.lambdaAway);
   applyTournamentTrendToMatch(baseMatch, tournamentTrend, fifaRankings);
+  baseMatch.contextSignals = buildContextSignals(baseMatch);
   applyGoldmanStyleModel(baseMatch, fifaRankings, { useMarketCalibration: false });
   baseMatch.manualMarkets = autoBaselineManualMarkets(baseMatch, baseMatch.probabilities);
   baseMatch.recommendations = [];
@@ -5986,6 +6287,7 @@ function normalizeMatch(match, teams, context, polymarket, worldCupRecords, squa
   enriched.humanMatchup = buildHumanMatchup(enriched, fifaRankings);
   enriched.groupSituation = buildGroupSituation(enriched, groupStandings, fifaRankings);
   applyTournamentTrendToMatch(enriched, tournamentTrend, fifaRankings);
+  enriched.contextSignals = buildContextSignals(enriched);
   applyGoldmanStyleModel(enriched, fifaRankings, { useMarketCalibration: false });
   const withInitialRecommendations = {
     ...enriched,
@@ -6075,6 +6377,50 @@ function attachMarketCharts(matches, polymarket) {
       applyReviewDiscipline(recommendation, match);
     }
   }
+}
+
+function recomputeMatchesAfterExternalSignals(matches, polymarket, fifaRankings = {}) {
+  const tokenCatalog = buildTokenCatalog(polymarket);
+  for (const match of matches || []) {
+    match.contextSignals = buildContextSignals(match);
+    applyGoldmanStyleModel(match, fifaRankings, { useMarketCalibration: true });
+    match.recommendations = buildRecommendations(match, match.probabilities);
+    for (const recommendation of match.recommendations) {
+      const token = findChartToken(match, recommendation, tokenCatalog);
+      if (token) {
+        recommendation.chart = {
+          source: "Polymarket",
+          marketId: token.marketId,
+          conditionId: token.conditionId,
+          tokenId: token.tokenId,
+          marketQuestion: token.marketQuestion,
+          marketSlug: token.marketSlug,
+          eventSlug: token.eventSlug,
+          label: token.label,
+          currentPrice: token.currentPrice,
+          history: token.history || []
+        };
+      } else {
+        const localHistory = localHistoryForRecommendation(match, recommendation);
+        recommendation.chart = {
+          source: "本地盘口快照",
+          marketQuestion: "本地盘口基线",
+          label: recommendation.name,
+          currentPrice: recommendation.marketPrice,
+          history: localHistory.length >= 2 ? localHistory : [],
+          status: localHistory.length >= 2 ? "local-history" : "price-only"
+        };
+      }
+      refreshRecommendationPricing(recommendation, match);
+    }
+    match.completeness = buildCompleteness(match, polymarket);
+    match.tradingGate = buildTradingGate(match.completeness);
+    for (const recommendation of match.recommendations) {
+      recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
+      applyReviewDiscipline(recommendation, match);
+    }
+  }
+  return matches;
 }
 
 function marketCatalogCategory(market) {
@@ -10730,6 +11076,7 @@ async function buildDashboard({
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings);
   attachMarketCharts(matches, polymarket);
   const bettingExpert = await attachBettingExpertSignals(matches, { enabled: true });
+  recomputeMatchesAfterExternalSignals(matches, polymarket, fifaRankings);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
   if (!includeElite) {
     eliteTraders = mergeCachedEliteSignals(matches, polymarket, dashboardCache) || eliteTraders;
@@ -10796,6 +11143,12 @@ async function buildDashboard({
         lastUpdated: tournamentTrend.updatedAt || "",
         error: trendSchedule.ok ? undefined : trendSchedule.error,
         detail: tournamentTrend.summary
+      },
+      {
+        source: "新增关注维度",
+        ok: true,
+        lastUpdated: new Date().toISOString(),
+        detail: "已低权重纳入：休息天数、本届队内状态、近20年交手、淘汰赛经验、公开榜单意见；待结构化：裁判尺度、黄牌停赛、点球手、门将扑救质量"
       },
       {
         source: "小组积分与出线形势",

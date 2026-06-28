@@ -13,12 +13,14 @@ Use this skill when building, modifying, operating, or extending a football matc
 - Do not fabricate missing sports, odds, Polymarket, lineup, injury, weather, or account data. Mark unavailable inputs as missing, stale, or source-unreachable.
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
 - Comprehensive match forecasts should use a transparent xG-to-score-distribution layer: long-term strength/Elo-style baseline, recent form, World Cup record, dynamic context, tournament trend, Poisson score grid, and only a light market calibration. Do not present this as an official Goldman Sachs model unless using an official source; label it as Goldman-style public methodology when relevant.
+- Comprehensive match forecasts should also check supplemental dimensions when data exists: rest days since the previous match, current-tournament team form, 20-year head-to-head, knockout-stage experience, public tipster consensus, travel/venue burden, referee/card risk, suspension accumulation, penalty taker/keeper evidence, and goalkeeper shot-stopping evidence. Only the structured dimensions may enter the model; unverified dimensions stay as missing/watchlist items.
 - Include a tournament-trend layer when current-tournament results exist: compute it from deduplicated final scores, keep the sample size visible, and apply only small weighted adjustments so early-tournament signals do not overfit.
 - In final group-stage rounds, include group qualification situation and motivation: current points, rank, goal difference, whether a team needs a win, whether goal difference matters, whether a draw has value, knockout-path value for finishing first vs second, and whether tempo control or rotation risk rises. Apply only small, explainable xG adjustments.
 - In final group-stage rounds, do not stop at "draw has value." If first-place finish changes the likely knockout path or avoids a stronger opponent, model a small aggression/path-value adjustment and explain it in the match notes.
 - In knockout rounds, keep 90-minute match result separate from `Team to Advance`. Regulation win/draw/loss remains a 90-minute market; advancement equals regulation win plus the draw probability split by extra-time/penalty tiebreak factors.
 - For `Team to Advance`, compute and display a separate advancement probability using regulation probabilities plus a conservative tiebreak split from xG edge, ranking/depth, and World Cup record. Do not compare a 90-minute win price directly with an advancement price.
 - For knockout advancement, include knockout-stage experience as a low-weight tiebreak factor when structured World Cup records exist: best finish, finals appearances, and finals matches can form a transparent proxy. Label it as a proxy, not as verified penalty-taking ability.
+- In knockout rounds, add rest/fatigue and current-tournament form as low-weight model factors when schedule and completed-score data exist. Public tipster consensus may only be used as a small market-context signal, never as a substitute for the model.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -124,6 +126,7 @@ When updating source collection:
 - Keep fetch timeouts bounded; one slow source should not block the whole dashboard.
 - Optional AI synthesis must summarize only retrieved public facts and explicitly state missing inputs.
 - Public sync should generate `worldcup-context.json` fields for lineups, injuries, team news, recent form, tactical matchup, weather, AI synthesis, and head-to-head. If a field cannot be verified, write a structured low-confidence explanation with source status rather than leaving the UI blank.
+- When adding new dimensions, separate computable inputs from watchlist inputs. Computable examples: rest days from schedule, current-tournament W/D/L and goals from final scores, 20-year H2H from verified overrides, and public tipster direction from parsed tips. Watchlist examples until a source exists: referee/card tendency, yellow-card suspension risk, penalty taker/keeper evidence, goalkeeper shot-stopping, and travel fatigue beyond venue/kickoff.
 - ESPN schedule venue data should be carried into match records and used to drive weather lookup whenever possible.
 - Context writes should not fail just because historical archiving is slow or locked. Write `worldcup-context.json` first, then archive with a bounded timeout and warning.
 - Server-side AI trade summaries should use the merged dashboard state after live prices, curves, holders, model probabilities, and trading gates are attached. Use a rule-based fallback first, then optional OpenAI-compatible synthesis from server environment/Codex config without committing secrets.
@@ -170,6 +173,7 @@ When maintaining public market data:
 Important dashboard updates should be archived so later strategy analysis can compare:
 
 - model probability at the time
+- supplemental signal payload: rest days, current-tournament form, 20-year H2H impact, tipster consensus, and missing/watchlist dimensions
 - public market prices and curves
 - BTTS Yes/No model probability, price, edge, recommendation, and final settlement
 - dynamic context state

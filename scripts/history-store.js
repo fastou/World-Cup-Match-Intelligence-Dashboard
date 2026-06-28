@@ -302,6 +302,23 @@ CREATE TABLE IF NOT EXISTS human_matchup_snapshots (
   FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
 );
 
+CREATE TABLE IF NOT EXISTS context_signal_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  match_id TEXT NOT NULL,
+  status TEXT,
+  updated_at TEXT,
+  signal_count INTEGER,
+  home_xg_delta REAL,
+  away_xg_delta REAL,
+  btts_delta REAL,
+  over25_delta REAL,
+  draw_delta REAL,
+  tiebreak_home_delta REAL,
+  missing_json TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY(snapshot_id) REFERENCES match_snapshots(snapshot_id)
+);
+
 CREATE TABLE IF NOT EXISTS polymarket_holder_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
@@ -594,6 +611,9 @@ async function recordDashboardSnapshot(payload, options = {}) {
       sql: "DELETE FROM human_matchup_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
     }, {
+      sql: "DELETE FROM context_signal_snapshots WHERE snapshot_id = ?;",
+      params: [snapshotId]
+    }, {
       sql:
       `INSERT OR REPLACE INTO match_snapshots
        (snapshot_id, run_id, match_id, captured_at, prediction_label, prediction_key, prediction_probability,
@@ -792,6 +812,31 @@ async function recordDashboardSnapshot(payload, options = {}) {
         textOrNull(humanMatchup.aiRead?.source),
         textOrNull(humanMatchup.aiRead?.summary),
         json(humanMatchup)
+      ]
+    });
+
+    const contextSignals = match.contextSignals || {};
+    const contextSignalImpacts = contextSignals.impacts || {};
+    operations.push({
+      sql:
+      `INSERT OR REPLACE INTO context_signal_snapshots
+       (snapshot_id, match_id, status, updated_at, signal_count, home_xg_delta, away_xg_delta,
+        btts_delta, over25_delta, draw_delta, tiebreak_home_delta, missing_json, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      params: [
+        snapshotId,
+        match.id,
+        contextSignals.ok ? "synced" : "partial",
+        textOrNull(contextSignals.updatedAt),
+        numberOrNull((contextSignals.signals || []).length),
+        numberOrNull(contextSignalImpacts.homeXgDelta),
+        numberOrNull(contextSignalImpacts.awayXgDelta),
+        numberOrNull(contextSignalImpacts.bttsDelta),
+        numberOrNull(contextSignalImpacts.over25Delta),
+        numberOrNull(contextSignalImpacts.drawDelta),
+        numberOrNull(contextSignalImpacts.tiebreakHomeDelta),
+        json(contextSignals.missing || []),
+        json(contextSignals)
       ]
     });
 
