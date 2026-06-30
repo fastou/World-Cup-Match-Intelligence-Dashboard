@@ -2885,6 +2885,154 @@ function matchCurrentScoreGate(match, score) {
   };
 }
 
+function scoreOutcomeSide(score) {
+  const homeGoals = Number(score?.homeGoals);
+  const awayGoals = Number(score?.awayGoals);
+  if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return "";
+  if (homeGoals > awayGoals) return "home";
+  if (awayGoals > homeGoals) return "away";
+  return "draw";
+}
+
+function sideLabelForMatch(match, side) {
+  if (side === "home") return `${match.homeName}胜`;
+  if (side === "away") return `${match.awayName}胜`;
+  if (side === "draw") return "平局";
+  return "未知方向";
+}
+
+function recommendationCurrentPrice(rec) {
+  return rec?.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number"
+    ? rec.chart.currentPrice
+    : rec?.marketPrice;
+}
+
+function correctScoreMarketBias(match) {
+  const moneyline = {};
+  const advance = {};
+  for (const rec of match?.recommendations || []) {
+    if (rec.marketType === "moneyline" && ["home", "draw", "away"].includes(rec.key)) {
+      moneyline[rec.key] = recommendationCurrentPrice(rec);
+    }
+    if (rec.key === "advance-home") advance.home = recommendationCurrentPrice(rec);
+    if (rec.key === "advance-away") advance.away = recommendationCurrentPrice(rec);
+  }
+  const homePrice = moneyline.home;
+  const awayPrice = moneyline.away;
+  const regularFavorite = typeof homePrice === "number" && typeof awayPrice === "number"
+    ? homePrice > awayPrice ? "home" : awayPrice > homePrice ? "away" : ""
+    : "";
+  const regularMargin = regularFavorite ? Math.abs(homePrice - awayPrice) : 0;
+  const advanceFavorite = typeof advance.home === "number" && typeof advance.away === "number"
+    ? advance.home > advance.away ? "home" : advance.away > advance.home ? "away" : ""
+    : "";
+  const advanceMargin = advanceFavorite ? Math.abs((advance.home || 0) - (advance.away || 0)) : 0;
+  const modelTriplet = match?.probabilities || {};
+  const modelFavorite = [
+    ["home", modelTriplet.home],
+    ["draw", modelTriplet.draw],
+    ["away", modelTriplet.away]
+  ].filter(([, value]) => typeof value === "number").sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  const topScore = (match?.probabilities?.topScores || [])[0] || null;
+  const topScoreSide = scoreOutcomeSide(topScore);
+  return {
+    moneyline,
+    advance,
+    regularFavorite,
+    regularMargin,
+    advanceFavorite,
+    advanceMargin,
+    modelFavorite,
+    topScore: topScore?.score || "",
+    topScoreSide,
+    conflicting: Boolean(regularFavorite && modelFavorite && regularFavorite !== modelFavorite)
+      || Boolean(regularFavorite && topScoreSide && regularFavorite !== topScoreSide)
+  };
+}
+
+function correctScoreStrategy(row, match) {
+  const bias = correctScoreMarketBias(match);
+  const side = scoreOutcomeSide(row);
+  const reasons = [];
+  let alignmentBoost = 0;
+  let directionPenalty = 0;
+  let rankBoost = 0;
+
+  if (row.score === bias.topScore) {
+    rankBoost += 0.06;
+    reasons.push("模型最高比分。");
+  } else if (row.scoreRank <= 3) {
+    rankBoost += 0.02;
+    reasons.push("属于模型前三比分。");
+  } else if (row.scoreRank <= 6) {
+    rankBoost += 0.008;
+  }
+
+  if (bias.conflicting && side === "draw" && row.score === bias.topScore) {
+    alignmentBoost += 0.08;
+    reasons.push("模型与盘口方向冲突，优先用平局比分吸收分歧。");
+  } else if (bias.conflicting && side === "draw" && row.scoreRank <= 4 && row.modelProbability >= 0.04) {
+    alignmentBoost += 0.025;
+    reasons.push("模型与盘口方向冲突，平局比分可做备选。");
+  }
+
+  if (bias.regularFavorite && side === bias.regularFavorite) {
+    alignmentBoost += bias.regularMargin >= 0.05 ? 0.035 : 0.018;
+    reasons.push(`胜平负盘口方向支持${sideLabelForMatch(match, side)}。`);
+  } else if (bias.regularFavorite && side !== "draw" && side !== bias.regularFavorite && bias.regularMargin >= 0.05) {
+    directionPenalty += bias.regularMargin >= 0.1 ? 0.055 : 0.035;
+    reasons.push(`胜平负盘口更偏${sideLabelForMatch(match, bias.regularFavorite)}，${sideLabelForMatch(match, side)}比分降级。`);
+  }
+
+  if (bias.advanceFavorite && side === bias.advanceFavorite) {
+    alignmentBoost += bias.advanceMargin >= 0.1 ? 0.025 : 0.012;
+    reasons.push(`晋级盘方向支持${sideLabelForMatch(match, side)}。`);
+  } else if (bias.advanceFavorite && side !== "draw" && side !== bias.advanceFavorite && bias.advanceMargin >= 0.1) {
+    directionPenalty += 0.035;
+    reasons.push(`晋级盘更偏${sideLabelForMatch(match, bias.advanceFavorite)}，反向小胜球胆不做主推。`);
+  }
+
+  if (row.modelProbability < 0.03) {
+    directionPenalty += 0.015;
+    reasons.push("模型概率偏低，只能当长尾。");
+  }
+
+  const baseEdge = typeof row.edge === "number" ? row.edge : -0.08;
+  const strategyEdge = baseEdge + alignmentBoost * 0.35 + rankBoost * 0.25 - directionPenalty;
+  const strategyScore = (row.modelProbability || 0) * 0.85 + baseEdge * 0.35 + alignmentBoost + rankBoost - directionPenalty;
+  const opposed = side !== "draw" && (directionPenalty >= 0.055 || (bias.conflicting && directionPenalty >= 0.035));
+  let tier = "watch";
+  if (row.modelProbability < 0.03) tier = side && side === bias.regularFavorite ? "longshot" : "watch";
+  else if (opposed) tier = "avoid";
+  else if (row.score === bias.topScore) tier = "primary";
+  else if (side === "draw" && bias.conflicting && row.scoreRank <= 4 && row.modelProbability >= 0.045) tier = "secondary";
+  else if (side && bias.regularFavorite === side && row.modelProbability >= 0.075) tier = bias.conflicting ? "secondary" : "primary";
+  else if (side && bias.regularFavorite === side && row.modelProbability >= 0.02) tier = "longshot";
+  else if (row.scoreRank <= 3) tier = "secondary";
+  else if (row.scoreRank <= 5) tier = "watch";
+
+  return {
+    side,
+    tier,
+    bias,
+    alignmentBoost: roundTo(alignmentBoost, 4),
+    directionPenalty: roundTo(directionPenalty, 4),
+    rankBoost: roundTo(rankBoost, 4),
+    strategyEdge: roundTo(strategyEdge, 4),
+    strategyScore: roundTo(strategyScore, 4),
+    opposed,
+    reasons: [...new Set(reasons)].slice(0, 4)
+  };
+}
+
+function correctScoreMaxBuyPrice(row, strategy) {
+  if (strategy?.tier === "avoid") return fairBuyPrice(row.modelProbability, 0.06);
+  if (strategy?.tier === "primary" && strategy?.side === "draw") return fairBuyPrice(row.modelProbability, 0.04);
+  if (strategy?.side && strategy?.bias?.regularFavorite === strategy.side) return fairBuyPrice(row.modelProbability, 0.015);
+  if (strategy?.tier === "longshot") return fairBuyPrice(row.modelProbability, 0.018);
+  return fairBuyPrice(row.modelProbability, 0.035);
+}
+
 function correctScoreDecision(row, match) {
   const reasons = [];
   const gate = match.tradingGate || {};
@@ -2918,6 +3066,20 @@ function correctScoreDecision(row, match) {
   if (!row.hasHistory) reasons.push("球胆历史曲线不足");
   if (!gate.allowSmallTrade) reasons.push(...(gate.reasons || []));
   if (row.modelProbability < 0.035) reasons.push("模型概率偏低，属于高波动彩票盘");
+  if (row.strategy?.reasons?.length) reasons.push(...row.strategy.reasons);
+
+  const strategyEdge = typeof row.strategy?.strategyEdge === "number" ? row.strategy.strategyEdge : row.edge;
+  const belowLimit = typeof row.marketPrice === "number" && typeof row.maxBuyPrice === "number" && row.marketPrice <= row.maxBuyPrice;
+
+  if (row.strategy?.tier === "avoid") {
+    return {
+      action: "NO_TRADE",
+      label: "不建议",
+      stake: "none",
+      gated: true,
+      reasons: [...new Set(reasons)].slice(0, 6)
+    };
+  }
 
   if (typeof row.edge !== "number") {
     return {
@@ -2928,7 +3090,7 @@ function correctScoreDecision(row, match) {
       reasons
     };
   }
-  if (row.edge <= -0.025) {
+  if (strategyEdge <= -0.035) {
     return {
       action: "AVOID_OR_SELL",
       label: "价格偏贵",
@@ -2937,7 +3099,38 @@ function correctScoreDecision(row, match) {
       reasons
     };
   }
-  if (row.edge >= 0.055 && row.modelProbability >= 0.065 && row.hasHistory && gate.allowSmallTrade) {
+
+  if (row.strategy?.tier === "primary") {
+    return {
+      action: belowLimit && strategyEdge >= 0.015 ? "WATCH" : "WAIT",
+      label: belowLimit && strategyEdge >= 0.015 ? "主推小注候选" : "主推等价格",
+      stake: "tiny",
+      gated: true,
+      reasons: [...new Set(reasons)].slice(0, 6)
+    };
+  }
+
+  if (row.strategy?.tier === "secondary") {
+    return {
+      action: belowLimit && strategyEdge >= 0.01 ? "WATCH" : "NO_TRADE",
+      label: belowLimit && strategyEdge >= 0.01 ? "次选观察" : "次选等价格",
+      stake: "none",
+      gated: true,
+      reasons: [...new Set(reasons)].slice(0, 6)
+    };
+  }
+
+  if (row.strategy?.tier === "longshot") {
+    return {
+      action: belowLimit && strategyEdge >= 0 ? "WATCH" : "NO_TRADE",
+      label: belowLimit && strategyEdge >= 0 ? "博冷观察" : "博冷等价格",
+      stake: "none",
+      gated: true,
+      reasons: [...new Set(reasons)].slice(0, 6)
+    };
+  }
+
+  if (strategyEdge >= 0.055 && row.modelProbability >= 0.065 && row.hasHistory && gate.allowSmallTrade) {
     return {
       action: "BUY_SMALL",
       label: "小注候选",
@@ -2946,7 +3139,7 @@ function correctScoreDecision(row, match) {
       reasons: reasons.length ? reasons : ["球胆高波动，只按小注候选处理"]
     };
   }
-  if (row.edge >= 0.025 && row.modelProbability >= 0.04) {
+  if (strategyEdge >= 0.025 && row.modelProbability >= 0.04) {
     return {
       action: "WATCH",
       label: "观察候选",
@@ -3014,7 +3207,7 @@ function buildCorrectScoreRecommendations(match) {
         scoreRank: probabilityInfo?.rank || null,
         marketPrice,
         edge: edgeValue,
-        maxBuyPrice: fairBuyPrice(modelProbability, 0.02),
+        maxBuyPrice: fairBuyPrice(modelProbability, 0.035),
         odds: oddsFromProbability(marketPrice),
         pushProbability: null,
         source: "Polymarket Correct Score",
@@ -3030,16 +3223,23 @@ function buildCorrectScoreRecommendations(match) {
         historyPoints: Number(yesOutcome?.historyPoints || 0),
         currentScoreGate
       };
+      row.strategy = correctScoreStrategy(row, match);
+      row.maxBuyPrice = correctScoreMaxBuyPrice(row, row.strategy);
       row.decision = correctScoreDecision(row, match);
       return row;
     })
     .filter(Boolean)
     .sort((a, b) => {
-      const actionRank = { BUY_SMALL: 0, WATCH: 1, NO_TRADE: 2, WAIT: 3, AVOID_OR_SELL: 4 };
+      const blockedDiff = Number(Boolean(a.currentScoreGate?.blocked)) - Number(Boolean(b.currentScoreGate?.blocked));
+      if (blockedDiff) return blockedDiff;
+      const tierRank = { primary: 0, secondary: 1, longshot: 2, watch: 3, avoid: 4 };
+      const tierDiff = (tierRank[a.strategy?.tier] ?? 9) - (tierRank[b.strategy?.tier] ?? 9);
+      if (tierDiff) return tierDiff;
+      const actionRank = { BUY_SMALL: 0, WATCH: 1, WAIT: 2, NO_TRADE: 3, AVOID_OR_SELL: 4 };
       const actionDiff = (actionRank[a.decision?.action] ?? 9) - (actionRank[b.decision?.action] ?? 9);
       if (actionDiff) return actionDiff;
-      const edgeDiff = (b.edge ?? -9) - (a.edge ?? -9);
-      if (Math.abs(edgeDiff) > 0.0001) return edgeDiff;
+      const strategyDiff = (b.strategy?.strategyScore ?? -9) - (a.strategy?.strategyScore ?? -9);
+      if (Math.abs(strategyDiff) > 0.0001) return strategyDiff;
       return (b.modelProbability || 0) - (a.modelProbability || 0);
     });
 
@@ -4566,6 +4766,32 @@ function liveProbabilityForRecommendation(rec, liveModel) {
   return rec.modelProbability;
 }
 
+function liveCorrectScoreProbability(row, match, live, liveModel) {
+  const homeScore = Number(live?.score?.home);
+  const awayScore = Number(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return row.modelProbability;
+  if (homeScore > row.homeGoals || awayScore > row.awayGoals) return 0;
+  if (live?.completed) return homeScore === row.homeGoals && awayScore === row.awayGoals ? 1 : 0;
+
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0.02, 1);
+  const homeAdditional = row.homeGoals - homeScore;
+  const awayAdditional = row.awayGoals - awayScore;
+  const baseHomeLambda = Number(match?.dynamicModel?.adjusted?.lambdaHome || match?.model?.lambdaHome || 1.1);
+  const baseAwayLambda = Number(match?.dynamicModel?.adjusted?.lambdaAway || match?.model?.lambdaAway || 1.1);
+  const momentumHome = liveMomentumScore(live).home || 0;
+  const homeLambda = clamp(baseHomeLambda * remaining + Math.max(0, momentumHome) * 0.6, 0.01, 3.2);
+  const awayLambda = clamp(baseAwayLambda * remaining + Math.max(0, -momentumHome) * 0.6, 0.01, 3.2);
+  let probability = poisson(homeLambda, homeAdditional) * poisson(awayLambda, awayAdditional);
+
+  const side = scoreOutcomeSide(row);
+  if (side === "home") probability *= clamp((liveModel.home || row.modelProbability) / Math.max(0.05, match.probabilities?.home || 0.33), 0.45, 1.9);
+  if (side === "away") probability *= clamp((liveModel.away || row.modelProbability) / Math.max(0.05, match.probabilities?.away || 0.33), 0.45, 1.9);
+  if (side === "draw") probability *= clamp((liveModel.draw || row.modelProbability) / Math.max(0.05, match.probabilities?.draw || 0.28), 0.45, 1.9);
+
+  return clamp(probability, 0.001, 0.98);
+}
+
 function parseExactScoreFromRecommendation(rec) {
   const text = `${rec?.key || ""} ${rec?.name || ""} ${rec?.marketTypeLabel || ""} ${rec?.chart?.marketQuestion || ""} ${rec?.chart?.marketSlug || ""}`.toLowerCase();
   const match = text.match(/(?:^|[^0-9])(\d{1,2})\s*[-:]\s*(\d{1,2})(?:[^0-9]|$)/);
@@ -4748,6 +4974,94 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
     .slice(0, 8);
 }
 
+function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality) {
+  const baseRows = match.correctScoreRecommendations?.rows || buildCorrectScoreRecommendations(match).rows || [];
+  if (!baseRows.length || dataQuality.status === "missing") return [];
+  return baseRows
+    .map((row) => {
+      const currentScoreGate = matchCurrentScoreGate({
+        ...match,
+        scheduleStatus: live?.status || match.scheduleStatus,
+        scheduleCompleted: live?.completed,
+        scheduleHomeScore: live?.score?.home,
+        scheduleAwayScore: live?.score?.away
+      }, row);
+      const liveProbability = currentScoreGate?.blocked ? 0 : liveCorrectScoreProbability(row, match, live, liveModel);
+      const liveEdge = edge(liveProbability, row.marketPrice);
+      const strategy = correctScoreStrategy({
+        ...row,
+        modelProbability: liveProbability,
+        edge: liveEdge,
+        currentScoreGate
+      }, match);
+      const maxBuyPrice = currentScoreGate?.blocked ? 0 : correctScoreMaxBuyPrice({ ...row, modelProbability: liveProbability }, strategy);
+      const hasLiveMarket = typeof row.marketPrice === "number";
+      let action = liveActionFor(liveEdge, {
+        ...row,
+        marketPrice: row.marketPrice
+      }, dataQuality, currentScoreGate?.blocked ? { impossible: true, reason: currentScoreGate.reason } : null);
+      if (currentScoreGate?.blocked) {
+        action = { action: "avoid", label: currentScoreGate.label, canConsider: false };
+      } else if (!hasLiveMarket) {
+        action = { action: "wait", label: "等待球胆价格", canConsider: false };
+      } else if (strategy.tier === "avoid") {
+        action = { action: "avoid", label: "不建议", canConsider: false };
+      } else if (dataQuality.status === "pre") {
+        action = { action: "wait", label: "等待开赛", canConsider: false };
+      } else if (liveEdge >= 0.055 && row.marketPrice <= maxBuyPrice) {
+        action = { action: "watch", label: strategy.tier === "primary" ? "实时主推观察" : "实时小注观察", canConsider: dataQuality.status === "synced" };
+      } else if (liveEdge >= 0.02 && row.marketPrice <= maxBuyPrice) {
+        action = { action: "watch", label: strategy.tier === "primary" ? "主推等确认" : "实时观察", canConsider: false };
+      } else if (liveEdge <= -0.03) {
+        action = { action: "avoid", label: "价格偏贵", canConsider: false };
+      } else {
+        action = { action: "wait", label: "等待更好价格", canConsider: false };
+      }
+      const risks = [
+        currentScoreGate?.reason || "",
+        ...(strategy.reasons || []),
+        dataQuality.status !== "synced" ? "现场技术统计不足，球胆实时建议降级。" : "",
+        "球胆高波动，只能小注观察。"
+      ].filter(Boolean);
+      return {
+        key: row.key,
+        marketType: "correctScore",
+        marketTypeLabel: "球胆",
+        name: row.name || row.score,
+        score: row.score,
+        homeGoals: row.homeGoals,
+        awayGoals: row.awayGoals,
+        liveProbability,
+        rawLiveProbability: liveProbability,
+        baseProbability: row.modelProbability,
+        marketPrice: row.marketPrice,
+        edge: liveEdge,
+        maxBuyPrice,
+        action: live?.completed ? "avoid" : action.action,
+        label: live?.completed && !currentScoreGate?.blocked ? "已完赛复盘" : action.label,
+        canConsider: !currentScoreGate?.blocked && !live?.completed && Boolean(action.canConsider) && hasLiveMarket,
+        hasLiveMarket,
+        excluded: Boolean(currentScoreGate?.blocked || strategy.tier === "avoid"),
+        excludedReason: currentScoreGate?.reason || "",
+        source: row.source || "Polymarket Correct Score",
+        strategy,
+        risks
+      };
+    })
+    .filter((row) => typeof row.liveProbability === "number")
+    .sort((a, b) => {
+      const actionScore = Number(b.canConsider) - Number(a.canConsider);
+      if (actionScore) return actionScore;
+      const excludedScore = Number(a.excluded) - Number(b.excluded);
+      if (excludedScore) return excludedScore;
+      const tierRank = { primary: 0, secondary: 1, longshot: 2, watch: 3, avoid: 4 };
+      const tierDiff = (tierRank[a.strategy?.tier] ?? 9) - (tierRank[b.strategy?.tier] ?? 9);
+      if (tierDiff) return tierDiff;
+      return (b.edge ?? -9) - (a.edge ?? -9);
+    })
+    .slice(0, 8);
+}
+
 function buildLiveDataQuality(live) {
   if (!live) return { status: "missing", label: "现场源不可用", reasons: ["ESPN summary 未返回。"] };
   if (live.completed) return { status: "post", label: "已完赛", reasons: ["比赛已结束，实时买点只用于复盘。"] };
@@ -4757,7 +5071,7 @@ function buildLiveDataQuality(live) {
   return { status: "missing", label: "现场数据缺失", reasons: ["比分和技术统计均不可用。"] };
 }
 
-function buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel) {
+function buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel, correctScoreRecommendations = []) {
   if (dataQuality.status === "pre") {
     return {
       action: "wait",
@@ -4772,6 +5086,18 @@ function buildLiveRecommendationSummary(match, live, recommendations, dataQualit
       title: "等待现场数据",
       summary: "实时源暂未返回可用比分或技术统计；不显示入场建议。",
       reasons: dataQuality.reasons || []
+    };
+  }
+  const correctScoreActionable = correctScoreRecommendations.find((rec) => rec.canConsider);
+  if (correctScoreActionable) {
+    return {
+      action: "watch",
+      title: `实时球胆观察：${correctScoreActionable.score}`,
+      summary: `${correctScoreActionable.score} 当前 ${formatCents(correctScoreActionable.marketPrice)}，实时模型 ${formatPercent(correctScoreActionable.liveProbability)}，edge ${formatPercent(correctScoreActionable.edge)}，建议上限 ${formatCents(correctScoreActionable.maxBuyPrice)}。`,
+      reasons: [
+        ...(liveModel.notes || []).slice(0, 2),
+        ...(correctScoreActionable.risks || []).slice(0, 3)
+      ].filter(Boolean).slice(0, 5)
     };
   }
   const top = recommendations?.[0];
@@ -4934,6 +5260,7 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
   const marketRefresh = await refreshMatchMarketsForLive(match, live, force);
   const liveModel = liveProbabilityModel(match, live);
   const recommendations = buildLiveRecommendations(match, live, liveModel, dataQuality);
+  const correctScoreRecommendations = buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality);
   const payload = {
     ok: true,
     matchId: match.id,
@@ -4949,8 +5276,9 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
     live,
     liveModel,
     recommendations,
+    correctScoreRecommendations,
     marketCatalog: match.marketCatalog,
-    recommendationSummary: buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel),
+    recommendationSummary: buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel, correctScoreRecommendations),
     disclaimer: "实时买点是研究辅助，不自动下单；数据不足、价格缺失或比赛已结束时必须降级。"
   };
   if (persist && LIVE_MATCH_PERSIST_ENABLED) {
@@ -11431,6 +11759,7 @@ function compactCorrectScoreRecommendations(payload = null) {
       hasHistory: row.hasHistory,
       historyPoints: row.historyPoints,
       currentScoreGate: row.currentScoreGate,
+      strategy: row.strategy,
       decision: row.decision
     }))
   };

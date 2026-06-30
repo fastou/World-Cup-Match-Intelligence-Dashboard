@@ -1389,6 +1389,27 @@
         gap: 8px;
       }
 
+      .live-correct-score {
+        display: grid;
+        gap: 8px;
+      }
+
+      .live-section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--ink);
+        font-size: 14px;
+        font-weight: 820;
+      }
+
+      .live-section-title span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
       .live-market-row {
         display: grid;
         grid-template-columns: minmax(160px, 1.3fr) repeat(4, minmax(78px, 0.7fr));
@@ -4722,7 +4743,21 @@
         const stats = live.stats || {};
         const score = live.score || {};
         const recommendations = payload.recommendations || [];
+        const correctScores = payload.correctScoreRecommendations || [];
         const scoreText = `${payload.homeName || ""} ${score.home ?? "-"} - ${score.away ?? "-"} ${payload.awayName || ""}`;
+        const correctScoreRows = correctScores.length
+          ? correctScores.slice(0, 6).map((rec) => `
+            <div class="live-market-row">
+              <div><strong>${escapeHtml(rec.score || rec.name || "-")}</strong><span>${escapeHtml(currentLang === "en" ? "Correct score" : "球胆")} · ${escapeHtml(rec.strategy?.tier || "")}</span></div>
+              <span>${escapeHtml(currentLang === "en" ? "Live" : "实时")} ${escapeHtml(fmtPct(rec.liveProbability))}</span>
+              <span>${escapeHtml(currentLang === "en" ? "Price" : "当前价")} ${escapeHtml(fmtPrice(rec.marketPrice))}</span>
+              <span>Edge ${escapeHtml(fmtEdge(rec.edge))}</span>
+              <span>${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(rec.maxBuyPrice))}</span>
+              <span class="live-chip ${escapeHtml(liveActionClass(rec.action))} live-market-action">${escapeHtml(rec.label || rec.action || "-")}</span>
+              ${(rec.risks || []).length ? `<div class="decision-note" style="grid-column: 1 / -1;">${escapeHtml((rec.risks || []).slice(0, 3).join("；"))}</div>` : ""}
+            </div>
+          `).join("")
+          : `<div class="live-summary-card"><div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No correct-score candidate is available right now." : "当前没有可用的实时球胆候选。")}</div></div>`;
         const rows = recommendations.length
           ? recommendations.slice(0, 6).map((rec) => `
             <div class="live-market-row">
@@ -4763,6 +4798,11 @@
               <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Corners" : "角球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.corners, stats.away?.corners))}</strong></div>
               <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Possession" : "控球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.possession, stats.away?.possession, "%"))}</strong></div>
             </div>
+            <div class="live-correct-score">
+              <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Live Correct Score Picks" : "实时球胆推荐")}<span>${escapeHtml(currentLang === "en" ? "score-gated by current match state" : "按当前比分自动过滤")}</span></div>
+              ${correctScoreRows}
+            </div>
+            <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Other Live Markets" : "其他实时盘口")}<span>${escapeHtml(currentLang === "en" ? "moneyline / totals / BTTS / handicap" : "胜平负 / 大小球 / 双进 / 让球")}</span></div>
             <div class="live-market-list">${rows}</div>
             <div class="confidence-note">${escapeHtml(payload.disclaimer || "")}</div>
           </div>
