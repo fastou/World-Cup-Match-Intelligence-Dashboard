@@ -497,7 +497,11 @@ const WORLDCUP_MARKET_SEARCHES = [
 ];
 
 const POLYMARKET_EVENT_SLUG_OVERRIDES = {
-  "BRA-HAI": ["fifwc-bra-hai-2026-06-19"]
+  "BRA-HAI": ["fifwc-bra-hai-2026-06-19"],
+  "CIV-NOR": [
+    "fifwc-civ-nor-2026-06-30",
+    "fifwc-civ-nor-2026-07-01"
+  ]
 };
 
 const NON_SOCCER_POSITION_KEYWORDS = [
@@ -2808,6 +2812,245 @@ function buildRecommendations(match, probabilities) {
     })
     .map((row) => applyReviewDiscipline(row, match))
     .sort((a, b) => (b.edge ?? -9) - (a.edge ?? -9));
+}
+
+function parseCorrectScoreMarket(market) {
+  const question = String(market?.question || "");
+  const slug = String(market?.slug || "");
+  const text = `${question} ${slug}`.toLowerCase();
+  if (/any\s+other|other\s+score|其他比分|其它比分/.test(text)) return null;
+
+  const candidates = [
+    question,
+    slug.replace(/\d{4}-\d{2}-\d{2}/g, " ")
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const matches = [...String(candidate).matchAll(/(?:^|[^0-9])(\d{1,2})\s*[-:]\s*(\d{1,2})(?:[^0-9]|$)/g)];
+    for (const match of matches) {
+      const homeGoals = Number(match[1]);
+      const awayGoals = Number(match[2]);
+      if (Number.isInteger(homeGoals) && Number.isInteger(awayGoals) && homeGoals >= 0 && awayGoals >= 0 && homeGoals <= 10 && awayGoals <= 10) {
+        return {
+          homeGoals,
+          awayGoals,
+          score: `${homeGoals}-${awayGoals}`
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function correctScoreYesOutcome(market) {
+  const outcomes = Array.isArray(market?.outcomes) ? market.outcomes : [];
+  return outcomes.find((outcome) => /^yes$/i.test(String(outcome.label || "").trim()))
+    || outcomes.find((outcome) => typeof outcome.price === "number")
+    || null;
+}
+
+function matchCurrentScoreGate(match, score) {
+  const homeScore = Number(match?.scheduleHomeScore);
+  const awayScore = Number(match?.scheduleAwayScore);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || !score) return null;
+
+  const current = `${homeScore}-${awayScore}`;
+  const target = `${score.homeGoals}-${score.awayGoals}`;
+  const completed = Boolean(match?.scheduleCompleted || isFinishedStatus(match?.scheduleStatus));
+  if (homeScore > score.homeGoals || awayScore > score.awayGoals) {
+    return {
+      blocked: true,
+      label: "已不可能",
+      reason: `当前比分 ${current} 已经超过 ${target}，这个球胆已不可能。`
+    };
+  }
+  if (completed && (homeScore !== score.homeGoals || awayScore !== score.awayGoals)) {
+    return {
+      blocked: true,
+      label: "已完赛未中",
+      reason: `全场比分 ${current} 不等于 ${target}，这个球胆未命中。`
+    };
+  }
+  if (completed) {
+    return {
+      blocked: true,
+      label: "已完赛命中",
+      reason: `全场比分 ${current} 已经结算；这不是新的买入机会。`
+    };
+  }
+  return {
+    blocked: false,
+    label: isInProgressStatus(match?.scheduleStatus) ? "现场可追踪" : "赛前",
+    reason: `当前比分 ${current}，${target} 仍可能出现。`
+  };
+}
+
+function correctScoreDecision(row, match) {
+  const reasons = [];
+  const gate = match.tradingGate || {};
+  if (row.currentScoreGate?.blocked) {
+    return {
+      action: "AVOID_OR_SELL",
+      label: row.currentScoreGate.label,
+      stake: "none",
+      gated: true,
+      reasons: [row.currentScoreGate.reason]
+    };
+  }
+  if (typeof row.marketPrice !== "number") {
+    return {
+      action: "WAIT",
+      label: "等待价格",
+      stake: "none",
+      gated: true,
+      reasons: ["Polymarket 未返回这个球胆 Yes 价格"]
+    };
+  }
+  if (!gate.allowPriceAdvice) {
+    return {
+      action: "WATCH",
+      label: "等待真实盘口",
+      stake: "none",
+      gated: true,
+      reasons: ["真实盘口不可用"]
+    };
+  }
+  if (!row.hasHistory) reasons.push("球胆历史曲线不足");
+  if (!gate.allowSmallTrade) reasons.push(...(gate.reasons || []));
+  if (row.modelProbability < 0.035) reasons.push("模型概率偏低，属于高波动彩票盘");
+
+  if (typeof row.edge !== "number") {
+    return {
+      action: "WAIT",
+      label: "等待价格",
+      stake: "none",
+      gated: true,
+      reasons
+    };
+  }
+  if (row.edge <= -0.025) {
+    return {
+      action: "AVOID_OR_SELL",
+      label: "价格偏贵",
+      stake: "none",
+      gated: true,
+      reasons
+    };
+  }
+  if (row.edge >= 0.055 && row.modelProbability >= 0.065 && row.hasHistory && gate.allowSmallTrade) {
+    return {
+      action: "BUY_SMALL",
+      label: "小注候选",
+      stake: "tiny",
+      gated: true,
+      reasons: reasons.length ? reasons : ["球胆高波动，只按小注候选处理"]
+    };
+  }
+  if (row.edge >= 0.025 && row.modelProbability >= 0.04) {
+    return {
+      action: "WATCH",
+      label: "观察候选",
+      stake: "none",
+      gated: true,
+      reasons: reasons.length ? reasons : ["价格低于模型概率，但球胆波动较大"]
+    };
+  }
+  return {
+    action: "NO_TRADE",
+    label: "不追",
+    stake: "none",
+    gated: true,
+    reasons: reasons.length ? reasons : ["edge 不足以覆盖球胆波动"]
+  };
+}
+
+function buildCorrectScoreRecommendations(match) {
+  const correctScoreCategory = (match?.marketCatalog?.categories || []).find((category) => category.key === "correctScore");
+  const markets = Array.isArray(correctScoreCategory?.markets) ? correctScoreCategory.markets : [];
+  const scoreRows = Array.isArray(match?.probabilities?.topScoresFull) ? match.probabilities.topScoresFull : [];
+  const probabilityByScore = new Map(scoreRows.map((row, index) => [
+    row.score,
+    {
+      probability: Number(row.probability) || 0,
+      rank: index + 1
+    }
+  ]));
+  const sourceUpdatedAt = match?.marketCatalog?.updatedAt || new Date().toISOString();
+
+  if (!markets.length || !scoreRows.length) {
+    return {
+      source: "Polymarket Correct Score + xG score grid",
+      updatedAt: sourceUpdatedAt,
+      available: markets.length,
+      shown: 0,
+      rows: [],
+      missingReason: !markets.length
+        ? "Polymarket 当前未返回这场的球胆/正确比分盘口。"
+        : "模型比分分布不可用。"
+    };
+  }
+
+  const rows = markets
+    .map((market) => {
+      const parsed = parseCorrectScoreMarket(market);
+      if (!parsed) return null;
+      const yesOutcome = correctScoreYesOutcome(market);
+      const probabilityInfo = probabilityByScore.get(parsed.score);
+      const modelProbability = probabilityInfo?.probability || 0;
+      if (!modelProbability) return null;
+      const marketPrice = typeof yesOutcome?.price === "number" ? yesOutcome.price : null;
+      const edgeValue = edge(modelProbability, marketPrice);
+      const currentScoreGate = matchCurrentScoreGate(match, parsed);
+      const row = {
+        key: `correct-score-${parsed.score}`,
+        marketType: "correctScore",
+        marketTypeLabel: "球胆",
+        name: `${parsed.score}`,
+        score: parsed.score,
+        homeGoals: parsed.homeGoals,
+        awayGoals: parsed.awayGoals,
+        side: "YES",
+        modelProbability,
+        scoreRank: probabilityInfo?.rank || null,
+        marketPrice,
+        edge: edgeValue,
+        maxBuyPrice: fairBuyPrice(modelProbability, 0.02),
+        odds: oddsFromProbability(marketPrice),
+        pushProbability: null,
+        source: "Polymarket Correct Score",
+        marketQuestion: market.question || "",
+        marketSlug: market.slug || "",
+        eventSlug: market.eventSlug || "",
+        marketId: market.marketId || "",
+        conditionId: market.conditionId || "",
+        tokenId: yesOutcome?.tokenId || "",
+        volume: Number(market.volume || 0),
+        liquidity: Number(market.liquidity || 0),
+        hasHistory: Boolean(market.hasHistory || yesOutcome?.historyPoints >= 2),
+        historyPoints: Number(yesOutcome?.historyPoints || 0),
+        currentScoreGate
+      };
+      row.decision = correctScoreDecision(row, match);
+      return row;
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const actionRank = { BUY_SMALL: 0, WATCH: 1, NO_TRADE: 2, WAIT: 3, AVOID_OR_SELL: 4 };
+      const actionDiff = (actionRank[a.decision?.action] ?? 9) - (actionRank[b.decision?.action] ?? 9);
+      if (actionDiff) return actionDiff;
+      const edgeDiff = (b.edge ?? -9) - (a.edge ?? -9);
+      if (Math.abs(edgeDiff) > 0.0001) return edgeDiff;
+      return (b.modelProbability || 0) - (a.modelProbability || 0);
+    });
+
+  return {
+    source: "Polymarket Correct Score + xG score grid",
+    updatedAt: sourceUpdatedAt,
+    available: markets.length,
+    shown: Math.min(rows.length, 10),
+    rows: rows.slice(0, 10),
+    missingReason: rows.length ? "" : "已返回球胆盘口，但未能解析出可匹配模型比分的 Yes 价格。"
+  };
 }
 
 function marketTeamAliases(match, side) {
@@ -6614,12 +6857,16 @@ function attachMarketCharts(matches, polymarket) {
       recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
       applyReviewDiscipline(recommendation, match);
     }
+    match.correctScoreRecommendations = buildCorrectScoreRecommendations(match);
   }
 }
 
 function recomputeMatchesAfterExternalSignals(matches, polymarket, fifaRankings = {}) {
   const tokenCatalog = buildTokenCatalog(polymarket);
   for (const match of matches || []) {
+    if (!match.marketCatalog) {
+      match.marketCatalog = buildMatchMarketCatalog(match, polymarket);
+    }
     match.contextSignals = buildContextSignals(match);
     applyGoldmanStyleModel(match, fifaRankings, { useMarketCalibration: true });
     match.recommendations = buildRecommendations(match, match.probabilities);
@@ -6657,6 +6904,7 @@ function recomputeMatchesAfterExternalSignals(matches, polymarket, fifaRankings 
       recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
       applyReviewDiscipline(recommendation, match);
     }
+    match.correctScoreRecommendations = buildCorrectScoreRecommendations(match);
   }
   return matches;
 }
@@ -8653,6 +8901,7 @@ function polymarketTeamSlugCandidates(code) {
     BRA: ["bra", "br", "brazil"],
     CPV: ["cvi", "cpv"],
     HAI: ["hai", "hti", "haiti"],
+    CIV: ["civ", "ivc", "cote-divoire", "ivory-coast"],
     POR: ["prt", "por"],
     COD: ["cdr", "cod", "drc", "cgo"],
     KOR: ["kr", "kor"]
@@ -11147,6 +11396,46 @@ function compactRecommendation(rec = {}) {
   };
 }
 
+function compactCorrectScoreRecommendations(payload = null) {
+  if (!payload) return payload;
+  return {
+    source: payload.source,
+    updatedAt: payload.updatedAt,
+    available: payload.available,
+    shown: payload.shown,
+    missingReason: payload.missingReason,
+    rows: compactArray(payload.rows, 10).map((row) => ({
+      key: row.key,
+      marketType: row.marketType,
+      marketTypeLabel: row.marketTypeLabel,
+      name: row.name,
+      score: row.score,
+      homeGoals: row.homeGoals,
+      awayGoals: row.awayGoals,
+      side: row.side,
+      modelProbability: row.modelProbability,
+      scoreRank: row.scoreRank,
+      marketPrice: row.marketPrice,
+      edge: row.edge,
+      maxBuyPrice: row.maxBuyPrice,
+      odds: row.odds,
+      source: row.source,
+      marketQuestion: row.marketQuestion,
+      marketSlug: row.marketSlug,
+      eventSlug: row.eventSlug,
+      marketId: row.marketId,
+      conditionId: row.conditionId,
+      tokenId: row.tokenId,
+      volume: row.volume,
+      liquidity: row.liquidity,
+      hasHistory: row.hasHistory,
+      historyPoints: row.historyPoints,
+      currentScoreGate: row.currentScoreGate,
+      decision: row.decision
+    }))
+  };
+}
+
 function compactMarketCatalog(catalog = null) {
   if (!catalog) return catalog;
   return {
@@ -11178,6 +11467,7 @@ function compactMatch(match = {}) {
   return {
     ...match,
     recommendations: (match.recommendations || []).map(compactRecommendation),
+    correctScoreRecommendations: compactCorrectScoreRecommendations(match.correctScoreRecommendations),
     marketCatalog: compactMarketCatalog(match.marketCatalog),
     eliteSummary: match.eliteSummary ? {
       ...match.eliteSummary,

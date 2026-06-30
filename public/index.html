@@ -2174,6 +2174,107 @@
         overflow-x: auto;
       }
 
+      .correct-score-recommendations {
+        margin-bottom: 14px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .correct-score-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .correct-score-title {
+        font-size: 15px;
+        font-weight: 780;
+      }
+
+      .correct-score-meta {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .correct-score-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
+        gap: 8px;
+      }
+
+      .correct-score-card {
+        padding: 10px;
+        border: 1px solid #e4e8e3;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .correct-score-card-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .correct-score-score {
+        font-size: 22px;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .correct-score-price {
+        color: var(--green);
+        font-size: 16px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .correct-score-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .correct-score-stats strong {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .correct-score-reason {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .correct-score-link {
+        display: inline-flex;
+        margin-top: 7px;
+        color: #1f6b54;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .correct-score-empty {
+        padding: 12px;
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
       .recommendation-main-row.expandable {
         cursor: pointer;
       }
@@ -5005,6 +5106,84 @@
         `;
       }
 
+      function correctScoreMarketUrl(row) {
+        if (row?.eventSlug && row?.marketSlug) {
+          return `https://polymarket.com/event/${encodeURIComponent(row.eventSlug)}/${encodeURIComponent(row.marketSlug)}`;
+        }
+        if (row?.marketSlug) {
+          return `https://polymarket.com/event/${encodeURIComponent(row.marketSlug)}`;
+        }
+        return "";
+      }
+
+      function renderCorrectScoreRecommendations(match) {
+        const payload = match.correctScoreRecommendations || {};
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        const title = currentLang === "en" ? "Correct Score Picks" : "球胆推荐";
+        const meta = currentLang === "en"
+          ? "Matched Polymarket Correct Score Yes prices with the same xG score grid. High variance: shown as tiny/observe candidates only."
+          : "用同一套 xG 比分分布匹配 Polymarket 球胆 Yes 价格。球胆波动很大，只做小注/观察候选。";
+        const empty = payload.missingReason || (currentLang === "en"
+          ? "No priced correct-score market has been matched for this match."
+          : "这场暂未匹配到可定价的球胆盘口。");
+        if (!rows.length) {
+          return `
+            <section class="correct-score-recommendations">
+              <div class="correct-score-head">
+                <div>
+                  <div class="correct-score-title">${escapeHtml(title)}</div>
+                  <div class="correct-score-meta">${escapeHtml(meta)}</div>
+                </div>
+                <div class="correct-score-meta">${escapeHtml(payload.source || "Polymarket")} · ${escapeHtml(fmtTime(payload.updatedAt))}</div>
+              </div>
+              <div class="correct-score-empty">${escapeHtml(empty)}</div>
+            </section>
+          `;
+        }
+
+        return `
+          <section class="correct-score-recommendations">
+            <div class="correct-score-head">
+              <div>
+                <div class="correct-score-title">${escapeHtml(title)}</div>
+                <div class="correct-score-meta">${escapeHtml(meta)}</div>
+              </div>
+              <div class="correct-score-meta">${escapeHtml(payload.available || rows.length)} ${escapeHtml(currentLang === "en" ? "markets" : "个球胆盘口")} · ${escapeHtml(fmtTime(payload.updatedAt))}</div>
+            </div>
+            <div class="correct-score-grid">
+              ${rows.map((row) => {
+                const reasons = row.decision?.reasons || [];
+                const url = correctScoreMarketUrl(row);
+                const action = row.decision?.action || "WAIT";
+                const label = row.decision?.label || (currentLang === "en" ? "Wait" : "等待");
+                const scoreLabel = currentLang === "en"
+                  ? `${homeName(match)} ${row.homeGoals} - ${row.awayGoals} ${awayName(match)}`
+                  : `${homeName(match)} ${row.homeGoals} - ${row.awayGoals} ${awayName(match)}`;
+                return `
+                  <article class="correct-score-card">
+                    <div class="correct-score-card-top">
+                      <div>
+                        <div class="correct-score-score">${escapeHtml(row.score || row.name || "-")}</div>
+                        <div class="correct-score-meta">${escapeHtml(scoreLabel)}</div>
+                      </div>
+                      <span class="decision ${escapeHtml(action)}">${escapeHtml(label)}</span>
+                    </div>
+                    <div class="correct-score-stats">
+                      <span>${escapeHtml(currentLang === "en" ? "Model" : "模型")}<strong>${escapeHtml(fmtPct(row.modelProbability))}</strong></span>
+                      <span>${escapeHtml(currentLang === "en" ? "Yes price" : "Yes价")}<strong class="correct-score-price">${escapeHtml(fmtPrice(row.marketPrice))}</strong></span>
+                      <span>Edge<strong>${escapeHtml(fmtEdge(row.edge))}</strong></span>
+                      <span>${escapeHtml(currentLang === "en" ? "Limit" : "建议≤")}<strong>${escapeHtml(fmtPrice(row.maxBuyPrice))}</strong></span>
+                    </div>
+                    <div class="correct-score-reason">${escapeHtml(reasons.length ? reasons.join("；") : (currentLang === "en" ? "No extra restriction." : "暂无额外限制。"))}</div>
+                    ${url ? `<a class="correct-score-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(currentLang === "en" ? "Open market" : "打开盘口")}↗</a>` : ""}
+                  </article>
+                `;
+              }).join("")}
+            </div>
+          </section>
+        `;
+      }
+
       function renderLineupTeam(teamName, lineup) {
         const xi = Array.isArray(lineup?.xi) && lineup.xi.length ? lineup.xi : ["待确认"];
         return `
@@ -5318,6 +5497,7 @@
             </div>
 
             <div class="tab-content" data-content="rec">
+              ${renderCorrectScoreRecommendations(match)}
               <div class="recommendations">
                 <table>
                   <thead>
