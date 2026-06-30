@@ -62,6 +62,8 @@ const ESPN_WORLDCUP_CORE = "https://sports.core.api.espn.com/v2/sports/soccer/le
 const ESPN_WORLDCUP_GROUP_COUNT = Number(process.env.ESPN_WORLDCUP_GROUP_COUNT || 12);
 const FIFA_WORLD_CUP_SCHEDULE_URL = "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums";
 const KNOCKOUT_PATH_DIFFICULTY_GAP_THRESHOLD = 0.07;
+const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI || "2026-06-29";
+const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -682,12 +684,14 @@ function hoursSince(iso, now = Date.now()) {
 }
 
 function shanghaiDateKey(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date || Date.now());
+  if (!Number.isFinite(value.getTime())) return "";
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
-  }).formatToParts(date).reduce((acc, part) => {
+  }).formatToParts(value).reduce((acc, part) => {
     if (part.type !== "literal") acc[part.type] = part.value;
     return acc;
   }, {});
@@ -819,6 +823,109 @@ function normalizeProbabilityTriplet(values) {
     draw: draw / total,
     away: away / total
   };
+}
+
+function reweightScoreDistribution(probabilities, weightFn) {
+  const sourceScores = Array.isArray(probabilities?.topScoresFull) ? probabilities.topScoresFull : [];
+  if (!sourceScores.length || typeof weightFn !== "function") return probabilities;
+  const weighted = sourceScores.map((score) => {
+    const weight = Math.max(0.05, Number(weightFn(score)) || 1);
+    return {
+      ...score,
+      probability: (Number(score.probability) || 0) * weight
+    };
+  });
+  const total = weighted.reduce((sum, score) => sum + score.probability, 0) || 1;
+  const normalizedScores = weighted.map((score) => ({ ...score, probability: score.probability / total }));
+  const summary = normalizedScores.reduce((acc, score) => {
+    const homeGoals = Number(score.homeGoals);
+    const awayGoals = Number(score.awayGoals);
+    if (homeGoals > awayGoals) acc.home += score.probability;
+    else if (homeGoals === awayGoals) acc.draw += score.probability;
+    else acc.away += score.probability;
+    if (homeGoals + awayGoals < 3) acc.under25 += score.probability;
+    if (homeGoals > 0 && awayGoals > 0) acc.btts += score.probability;
+    return acc;
+  }, { home: 0, draw: 0, away: 0, under25: 0, btts: 0 });
+  return recalculateScoreSummaries({
+    ...probabilities,
+    ...normalizeProbabilityTriplet(summary),
+    under25: summary.under25,
+    over25: 1 - summary.under25,
+    btts: summary.btts,
+    rawBtts: summary.btts,
+    topScoresFull: normalizedScores
+  });
+}
+
+function applyProbabilityDeltasThroughScoreGrid(probabilities, deltas = {}, options = {}) {
+  const sourceScores = Array.isArray(probabilities?.topScoresFull) ? probabilities.topScoresFull : [];
+  const targetTriplet = normalizeProbabilityTriplet({
+    home: (Number(probabilities?.home) || 0) + (Number(deltas.home) || 0),
+    draw: (Number(probabilities?.draw) || 0) + (Number(deltas.draw) || 0),
+    away: (Number(probabilities?.away) || 0) + (Number(deltas.away) || 0)
+  });
+  const targetOver25 = probabilityShift(probabilities?.over25, Number(deltas.over25) || 0);
+  const targetBtts = probabilityShift(probabilities?.btts, Number(deltas.btts) || 0);
+  if (!sourceScores.length) {
+    return recalculateScoreSummaries({
+      ...probabilities,
+      ...targetTriplet,
+      over25: targetOver25,
+      under25: 1 - targetOver25,
+      btts: targetBtts,
+      rawBtts: targetBtts,
+      ...(options.markTrendAdjusted ? { trendAdjusted: true } : {})
+    });
+  }
+
+  let scores = sourceScores.map((score) => ({ ...score, probability: Number(score.probability) || 0 }));
+  const normalizeScores = () => {
+    const total = scores.reduce((sum, score) => sum + score.probability, 0) || 1;
+    scores = scores.map((score) => ({ ...score, probability: score.probability / total }));
+  };
+  const bucketSum = (predicate) => scores.reduce((sum, score) => sum + (predicate(score) ? score.probability : 0), 0);
+  const scaleBucket = (predicate, target) => {
+    const current = bucketSum(predicate);
+    if (!Number.isFinite(target) || current <= 0) return;
+    const ratio = clamp(target / current, 0.55, 1.65);
+    scores = scores.map((score) => predicate(score) ? { ...score, probability: score.probability * ratio } : score);
+    normalizeScores();
+  };
+
+  normalizeScores();
+  for (let iteration = 0; iteration < 5; iteration += 1) {
+    scaleBucket((score) => score.homeGoals > score.awayGoals, targetTriplet.home);
+    scaleBucket((score) => score.homeGoals === score.awayGoals, targetTriplet.draw);
+    scaleBucket((score) => score.homeGoals < score.awayGoals, targetTriplet.away);
+    scaleBucket((score) => score.homeGoals + score.awayGoals > 2.5, targetOver25);
+    scaleBucket((score) => score.homeGoals + score.awayGoals <= 2.5, 1 - targetOver25);
+    scaleBucket((score) => score.homeGoals > 0 && score.awayGoals > 0, targetBtts);
+    scaleBucket((score) => !(score.homeGoals > 0 && score.awayGoals > 0), 1 - targetBtts);
+  }
+  normalizeScores();
+
+  const summary = scores.reduce((acc, score) => {
+    const homeGoals = Number(score.homeGoals);
+    const awayGoals = Number(score.awayGoals);
+    if (homeGoals > awayGoals) acc.home += score.probability;
+    else if (homeGoals === awayGoals) acc.draw += score.probability;
+    else acc.away += score.probability;
+    if (homeGoals + awayGoals < 3) acc.under25 += score.probability;
+    if (homeGoals > 0 && awayGoals > 0) acc.btts += score.probability;
+    return acc;
+  }, { home: 0, draw: 0, away: 0, under25: 0, btts: 0 });
+
+  return recalculateScoreSummaries({
+    ...probabilities,
+    ...normalizeProbabilityTriplet(summary),
+    under25: summary.under25,
+    over25: 1 - summary.under25,
+    btts: summary.btts,
+    rawBtts: summary.btts,
+    topScoresFull: scores,
+    ...(options.markTrendAdjusted ? { trendAdjusted: true } : {})
+  });
 }
 
 function recalculateScoreSummaries(probabilities) {
@@ -1041,6 +1148,112 @@ function communityTipsterSignal(match) {
     count: rows.length,
     buckets: Object.fromEntries(Object.entries(buckets).map(([key, value]) => [key, roundTo(value, 3)])),
     topText: rows.slice(0, 3).map((tip) => tip.oneliner || tip.pick).filter(Boolean).join("；")
+  };
+}
+
+function isKnockoutMatch(match) {
+  const text = [
+    match?.round,
+    match?.stage,
+    match?.phase,
+    match?.matchday,
+    match?.scheduleStatus,
+    match?.scheduleStatusDetail,
+    match?.manualMarkets?.advance?.source,
+    match?.marketCatalog?.categories?.find((category) => category.key === "advance")?.count ? "advance" : ""
+  ].join(" ").toLowerCase();
+  if (/knockout|round of 32|round of 16|quarter|semi|final|淘汰|晋级|加时|点球|pen|advance/.test(text)) return true;
+  if (match?.manualMarkets?.advance?.available) return true;
+  const kickoffKey = shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal);
+  return Boolean(kickoffKey && KNOCKOUT_PHASE_START_KEY && kickoffKey >= KNOCKOUT_PHASE_START_KEY);
+}
+
+function favoriteProfile(probabilities = {}) {
+  const home = Number(probabilities.home) || 0;
+  const away = Number(probabilities.away) || 0;
+  const key = home >= away ? "home" : "away";
+  const favorite = key === "home" ? home : away;
+  const underdog = key === "home" ? away : home;
+  return {
+    key,
+    favorite,
+    underdog,
+    gap: favorite - underdog
+  };
+}
+
+function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
+  if (!isKnockoutMatch(match) || !probabilities?.topScoresFull?.length) {
+    return { ok: false, deltas: {}, notes: [] };
+  }
+  const trend = match?.tournamentTrend || {};
+  const trendRates = trend.rates || {};
+  const underdogGoalRate = Number(trendRates.underdogGoal);
+  const bttsRate = Number(trendRates.btts);
+  const drawRate = Number(trendRates.draw);
+  const favorite = favoriteProfile(probabilities);
+  const favStrongButNotSafe = favorite.favorite >= 0.5 && favorite.favorite <= 0.72;
+  const balanced = favorite.gap <= 0.42;
+  const contextBtts = Number(contextSignals?.impacts?.bttsDelta) || 0;
+  const homeTournament = contextSignals?.homeTournament;
+  const awayTournament = contextSignals?.awayTournament;
+  const teamBttsSupport = [homeTournament, awayTournament]
+    .filter(Boolean)
+    .some((profile) => Number(profile.bttsRate) >= 0.45 || Number(profile.goalsForPerMatch) >= 1.1);
+
+  let drawBoost = 0.018;
+  let bttsBoost = 0.018;
+  let underdogScoreBoost = 0.012;
+  let favoriteWinPenalty = 0;
+
+  if (Number.isFinite(drawRate) && drawRate >= 0.27) drawBoost += clamp((drawRate - 0.25) * 0.08, 0, 0.018);
+  if (Number.isFinite(bttsRate) && bttsRate >= 0.5) bttsBoost += clamp((bttsRate - 0.48) * 0.08, 0, 0.022);
+  if (Number.isFinite(underdogGoalRate) && underdogGoalRate >= 0.5) {
+    bttsBoost += clamp((underdogGoalRate - 0.48) * 0.07, 0, 0.026);
+    underdogScoreBoost += clamp((underdogGoalRate - 0.48) * 0.05, 0, 0.02);
+  }
+  if (teamBttsSupport) bttsBoost += 0.008;
+  if (contextBtts > 0) bttsBoost += clamp(contextBtts * 0.45, 0, 0.012);
+  if (favStrongButNotSafe) favoriteWinPenalty += 0.012;
+  if (balanced) drawBoost += 0.006;
+
+  drawBoost = clamp(drawBoost, 0.012, 0.055);
+  bttsBoost = clamp(bttsBoost, 0.012, 0.06);
+  underdogScoreBoost = clamp(underdogScoreBoost, 0.006, 0.04);
+  favoriteWinPenalty = clamp(favoriteWinPenalty, 0, 0.025);
+
+  const favoriteKey = favorite.key;
+  const adjusted = reweightScoreDistribution(probabilities, (score) => {
+    const homeGoals = Number(score.homeGoals);
+    const awayGoals = Number(score.awayGoals);
+    let weight = 1;
+    if (homeGoals === awayGoals) {
+      weight += drawBoost;
+      if (homeGoals > 0) weight += bttsBoost * 0.65;
+    }
+    if (homeGoals > 0 && awayGoals > 0) weight += bttsBoost;
+    const underdogScored = favoriteKey === "home" ? awayGoals > 0 : homeGoals > 0;
+    if (underdogScored) weight += underdogScoreBoost;
+    if (favoriteKey === "home" && homeGoals > awayGoals) weight -= favoriteWinPenalty;
+    if (favoriteKey === "away" && awayGoals > homeGoals) weight -= favoriteWinPenalty;
+    return weight;
+  });
+
+  return {
+    ok: true,
+    probabilities: adjusted,
+    deltas: {
+      home: roundTo((adjusted.home || 0) - (probabilities.home || 0), 4),
+      draw: roundTo((adjusted.draw || 0) - (probabilities.draw || 0), 4),
+      away: roundTo((adjusted.away || 0) - (probabilities.away || 0), 4),
+      btts: roundTo((adjusted.btts || 0) - (probabilities.btts || 0), 4),
+      over25: roundTo((adjusted.over25 || 0) - (probabilities.over25 || 0), 4)
+    },
+    notes: [
+      "淘汰赛复盘修正：90分钟胜负与晋级盘分离，平局/加时路径上修。",
+      "近几场强队控场但未打穿，强队90分钟胜和让球不再按场面优势线性外推。",
+      "弱队进球与BTTS样本偏强，BTTS Yes 和 1-1/2-1/1-2路径同步重标定。"
+    ]
   };
 }
 
@@ -1366,21 +1579,9 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   }
 
   const trend = match.tournamentTrend;
-  if (trend?.applied) {
-    const overDelta = clamp((trend.deltas?.over25 || 0) * 0.55, -0.035, 0.035);
-    const bttsDelta = clamp((trend.deltas?.btts || 0) * 0.45, -0.03, 0.035);
-    const totalDelta = overDelta + Math.max(0, bttsDelta);
-    if (totalDelta) {
-      lambdaHome += totalDelta * 0.55;
-      lambdaAway += totalDelta * 0.45;
-      drivers.push({
-        label: "赛会趋势",
-        homeXgDelta: roundTo(totalDelta * 0.55, 3),
-        awayXgDelta: roundTo(totalDelta * 0.45, 3),
-        reason: (trend.notes || []).slice(0, 2).join(" ") || "按本届进球节奏做低权重修正。"
-      });
-    }
-  }
+  const trendDeltas = trend?.applied && trend.deltas
+    ? Object.fromEntries(Object.entries(trend.deltas).map(([key, value]) => [key, Number(value) || 0]))
+    : null;
 
   if (match.groupSituation?.ok && match.groupSituation.modelImpacts?.length) {
     let homeGroupDelta = 0;
@@ -1451,25 +1652,49 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     const over25Delta = clamp(Number(impact.over25Delta) || 0, -0.03, 0.035);
     const drawDelta = clamp(Number(impact.drawDelta) || 0, -0.015, 0.02);
     if (bttsDelta || over25Delta || drawDelta) {
-      const adjustedTriplet = normalizeProbabilityTriplet({
-        home: probabilities.home,
-        draw: probabilities.draw + drawDelta,
-        away: probabilities.away
-      });
-      probabilities = recalculateScoreSummaries({
-        ...probabilities,
-        ...adjustedTriplet,
-        btts: probabilityShift(probabilities.btts, bttsDelta),
-        over25: probabilityShift(probabilities.over25, over25Delta),
-        under25: 1 - probabilityShift(probabilities.over25, over25Delta)
+      probabilities = applyProbabilityDeltasThroughScoreGrid(probabilities, {
+        draw: drawDelta,
+        btts: bttsDelta,
+        over25: over25Delta
       });
       drivers.push({
         label: "衍生市场维度",
         homeXgDelta: 0,
         awayXgDelta: 0,
-        reason: `补充维度对 BTTS ${bttsDelta >= 0 ? "+" : ""}${formatPercent(bttsDelta)}、大2.5 ${over25Delta >= 0 ? "+" : ""}${formatPercent(over25Delta)}、平局 ${drawDelta >= 0 ? "+" : ""}${formatPercent(drawDelta)} 做低权重修正。`
+        reason: `补充维度通过同一比分分布修正 BTTS ${bttsDelta >= 0 ? "+" : ""}${formatPercent(bttsDelta)}、大2.5 ${over25Delta >= 0 ? "+" : ""}${formatPercent(over25Delta)}、平局 ${drawDelta >= 0 ? "+" : ""}${formatPercent(drawDelta)}。`
       });
     }
+  }
+  if (trendDeltas && Object.values(trendDeltas).some((value) => Math.abs(value) >= 0.001)) {
+    const beforeTrend = probabilities;
+    probabilities = applyProbabilityDeltasThroughScoreGrid(probabilities, trendDeltas, { markTrendAdjusted: true });
+    drivers.push({
+      label: "赛会趋势",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: [
+        `通过同一比分分布统一修正：平局 ${formatPercent((probabilities.draw || 0) - (beforeTrend.draw || 0))}，大2.5 ${formatPercent((probabilities.over25 || 0) - (beforeTrend.over25 || 0))}，BTTS ${formatPercent((probabilities.btts || 0) - (beforeTrend.btts || 0))}。`,
+        (trend.notes || []).slice(0, 2).join(" ")
+      ].filter(Boolean).join(" ")
+    });
+  }
+  const knockoutReview = knockoutReviewAdjustment(match, probabilities, contextSignals);
+  if (knockoutReview.ok) {
+    probabilities = knockoutReview.probabilities;
+    match.knockoutReviewAdjustment = {
+      version: "2026.06.30",
+      deltas: knockoutReview.deltas,
+      notes: knockoutReview.notes
+    };
+    drivers.push({
+      label: "淘汰赛复盘修正",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: [
+        `常规时间平局 ${knockoutReview.deltas.draw >= 0 ? "+" : ""}${formatPercent(knockoutReview.deltas.draw)}，BTTS ${knockoutReview.deltas.btts >= 0 ? "+" : ""}${formatPercent(knockoutReview.deltas.btts)}。`,
+        ...knockoutReview.notes.slice(0, 2)
+      ].join(" ")
+    });
   }
   probabilities.lambdaHome = lambdaHome;
   probabilities.lambdaAway = lambdaAway;
@@ -1506,7 +1731,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.06.24",
+    version: "2026.06.30",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -1516,7 +1741,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       lambdaAway
     },
     calibration,
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "补充数据维度"].includes(driver.label)).slice(0, 9),
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 9),
     probabilities
   };
 }
@@ -1539,7 +1764,6 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     drivers: modelV2.drivers,
     topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
   };
-  reapplyStoredTournamentTrend(match, fifaRankings);
   return match;
 }
 
@@ -1896,21 +2120,7 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
     }
   }
 
-  const winTriplet = normalizeProbabilityTriplet({
-    home: match.probabilities.home + deltas.home,
-    draw: match.probabilities.draw + deltas.draw,
-    away: match.probabilities.away + deltas.away
-  });
-  const over25 = probabilityShift(match.probabilities.over25, deltas.over25);
-  const btts = probabilityShift(match.probabilities.btts, deltas.btts);
-  match.probabilities = recalculateScoreSummaries({
-    ...match.probabilities,
-    ...winTriplet,
-    over25,
-    under25: 1 - over25,
-    btts,
-    trendAdjusted: true
-  });
+  match.probabilities = applyProbabilityDeltasThroughScoreGrid(match.probabilities, deltas, { markTrendAdjusted: true });
   match.tournamentTrend = {
     applied: notes.length > 0,
     sampleSize: trend.sampleSize,
@@ -1932,21 +2142,7 @@ function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) 
 function reapplyStoredTournamentTrend(match, fifaRankings = {}) {
   const deltas = match?.tournamentTrend?.deltas;
   if (!match?.probabilities || !deltas || match.probabilities.trendAdjusted) return match;
-  const winTriplet = normalizeProbabilityTriplet({
-    home: match.probabilities.home + (Number(deltas.home) || 0),
-    draw: match.probabilities.draw + (Number(deltas.draw) || 0),
-    away: match.probabilities.away + (Number(deltas.away) || 0)
-  });
-  const over25 = probabilityShift(match.probabilities.over25, Number(deltas.over25) || 0);
-  const btts = probabilityShift(match.probabilities.btts, Number(deltas.btts) || 0);
-  match.probabilities = recalculateScoreSummaries({
-    ...match.probabilities,
-    ...winTriplet,
-    over25,
-    under25: 1 - over25,
-    btts,
-    trendAdjusted: true
-  });
+  match.probabilities = applyProbabilityDeltasThroughScoreGrid(match.probabilities, deltas, { markTrendAdjusted: true });
   attachAdvanceProbabilities(match, fifaRankings);
   return match;
 }
@@ -2193,6 +2389,9 @@ function marketReviewAdjustments(match, rec) {
   const bothTeamsChasing = motivation.homeAttack && motivation.awayAttack;
   const oneTeamChasing = motivation.homeAttack || motivation.awayAttack;
   const openMotivation = bothTeamsChasing || (oneTeamChasing && (motivation.over25Delta || 0) > 0.015);
+  const knockout = isKnockoutMatch(match);
+  const favoriteGap = Math.abs((match?.probabilities?.home || 0) - (match?.probabilities?.away || 0));
+  const knockoutBttsSupport = knockout && (match?.probabilities?.btts || 0) >= 0.43;
 
   if (rec.marketType === "btts" && rec.key === "bttsYes") {
     const oneNilRisk = scoreProbability(match, "1-0") + scoreProbability(match, "0-1");
@@ -2223,6 +2422,16 @@ function marketReviewAdjustments(match, rec) {
       scorePenalty = Math.max(0, scorePenalty - 0.03);
       reasons.push("第三轮抢分/净胜球压力提高弱队进球与追分路径，BTTS 不再只按低比分先验降级。");
     }
+    if (knockoutBttsSupport) {
+      edgePenalty = Math.max(0, edgePenalty - 0.026);
+      scorePenalty = Math.max(0, scorePenalty - 0.052);
+      if (btts >= 0.44) {
+        for (let index = reasons.length - 1; index >= 0; index -= 1) {
+          if (/不作为主推荐|强队控场型优势明显|低比分零封路径/.test(reasons[index])) reasons.splice(index, 1);
+        }
+      }
+      reasons.push("淘汰赛复盘：弱队进球和1-1路径不能被强队零封先验过度压低。");
+    }
     if (motivation.homeControl && motivation.awayControl && btts < 0.55) {
       edgePenalty += 0.018;
       scorePenalty += 0.03;
@@ -2235,6 +2444,11 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.025;
       scorePenalty += 0.045;
       reasons.push("第三轮抢分压力下，BTTS No 要防落后方冒险压上。");
+    }
+    if (knockoutBttsSupport) {
+      edgePenalty += 0.026;
+      scorePenalty += 0.048;
+      reasons.push("淘汰赛复盘：BTTS No 需要更强零封证据，不能只靠强队名气。");
     }
     if (favoriteCleanSheet >= 0.26 && under25 >= 0.59 && !openMotivation) {
       scorePenalty -= 0.012;
@@ -2254,6 +2468,15 @@ function marketReviewAdjustments(match, rec) {
         reasons.push("受让0.5存在强队一球小胜风险，低 edge 不再主推。");
       }
     }
+    const favoriteGivingLine = rec.marketType === "handicap"
+      && ((rec.key.endsWith("-home") && favoriteKey === "home" && rec.handicap.homeLine < 0)
+        || (rec.key.endsWith("-away") && favoriteKey === "away" && rec.handicap.awayLine < 0));
+    const absLine = rec.key.endsWith("-home") ? Math.abs(rec.handicap.homeLine) : Math.abs(rec.handicap.awayLine);
+    if (knockout && favoriteGivingLine && absLine >= 1.5) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.07;
+      reasons.push("淘汰赛复盘：强队赢不等于穿深盘，领先后控节奏风险提高。");
+    }
   }
 
   if (rec.marketType === "moneyline" && rec.key !== favoriteKey && rec.key !== "draw") {
@@ -2262,6 +2485,17 @@ function marketReviewAdjustments(match, rec) {
       scorePenalty += 0.045;
       reasons.push("冷门胜平负 edge 不足，优先降级为观察。");
     }
+  }
+
+  if (knockout && rec.marketType === "moneyline" && rec.key === favoriteKey && rec.modelProbability >= 0.5 && rec.modelProbability <= 0.72) {
+    edgePenalty += favoriteGap < 0.46 ? 0.022 : 0.014;
+    scorePenalty += favoriteGap < 0.46 ? 0.052 : 0.035;
+    reasons.push("淘汰赛复盘：90分钟强队胜要防平局/加时，不和晋级盘混用。");
+  }
+
+  if (knockout && rec.marketType === "moneyline" && rec.key === "draw" && rec.modelProbability >= 0.24) {
+    scorePenalty -= 0.012;
+    reasons.push("淘汰赛复盘：常规时间平局是独立路径，不能按普通小组赛低估。");
   }
 
   if (rec.marketType === "advance") {
@@ -2283,7 +2517,9 @@ function marketReviewAdjustments(match, rec) {
     if (openMotivation || totalThreePlusMass >= 0.43) {
       edgePenalty += 0.028;
       scorePenalty += 0.05;
-      reasons.push("第三轮抢分/净胜球或3球以上路径不低，小球不作为主推荐。");
+      reasons.push(knockout
+        ? "淘汰赛复盘：3球以上和加时前追平路径不低，小球需要更强价格优势。"
+        : "第三轮抢分/净胜球或3球以上路径不低，小球不作为主推荐。");
     }
   }
 
