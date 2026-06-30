@@ -48,10 +48,12 @@ const LIVE_MATCH_PERSIST_ENABLED = process.env.LIVE_MATCH_PERSIST_ENABLED !== "0
 const ESPN_WORLDCUP_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/summary";
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
-const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 360);
-const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || Math.max(360, POLYMARKET_MARKET_LIMIT * 2));
+const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 1600);
+const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 720);
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
-const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = 80;
+const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = Number(process.env.POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT || 180);
+const POLYMARKET_DERIVATIVE_EVENT_LIMIT = Number(process.env.POLYMARKET_DERIVATIVE_EVENT_LIMIT || 100);
+const POLYMARKET_PLAYER_PROP_MARKET_LIMIT_PER_EVENT = Number(process.env.POLYMARKET_PLAYER_PROP_MARKET_LIMIT_PER_EVENT || 40);
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
@@ -6665,7 +6667,7 @@ function marketCatalogCategory(market) {
   if (type.includes("team_to_advance") || /team\s+to\s+advance|to[-_\s]?advance|晋级/.test(text)) {
     return { key: "advance", label: "晋级", labelEn: "To Advance" };
   }
-  if (/correct[-_\s]?score|exact[-_\s]?score|scorecast|比分|球胆/.test(text) || type.includes("correct_score")) {
+  if (/correct[-_\s]?score|exact[-_\s]?score|scorecast|比分|球胆/.test(text) || type.includes("correct_score") || hasCorrectScoreMarketPattern(market)) {
     return { key: "correctScore", label: "球胆 / 正确比分", labelEn: "Correct Score" };
   }
   if (type.includes("first_half") || type.includes("second_half") || /\b1st half\b|\b2nd half\b|first-half|second-half|halftime|half-time/.test(text)) {
@@ -6676,6 +6678,15 @@ function marketCatalogCategory(market) {
   }
   if (type.includes("both_teams_to_score") || text.includes("btts") || text.includes("both teams to score")) {
     return { key: "btts", label: "双方进球", labelEn: "BTTS" };
+  }
+  if (type.includes("corner") || /\bcorners?\b|角球/.test(text)) {
+    return { key: "corners", label: "角球", labelEn: "Corners" };
+  }
+  if (type.includes("player") || /player-props|goalscorer|shots?|assists?|saves?|球员/.test(text)) {
+    return { key: "playerProps", label: "球员数据", labelEn: "Player Props" };
+  }
+  if (type.includes("first_to_score") || /first\s+(team\s+)?to\s+score|to\s+score\s+first|先进球/.test(text)) {
+    return { key: "firstToScore", label: "先进球", labelEn: "First To Score" };
   }
   if (type.includes("spread") || text.includes("spread-") || text.includes("spread:")) {
     return { key: "spreads", label: "让球 / 分差", labelEn: "Spreads" };
@@ -6689,6 +6700,14 @@ function marketCatalogCategory(market) {
   return { key: "other", label: "其他盘口", labelEn: "Other" };
 }
 
+function hasCorrectScoreMarketPattern(market) {
+  const text = `${market?.question || ""} ${market?.slug || ""}`
+    .toLowerCase()
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, " ")
+    .replace(/\b\d+pt\d+\b/g, " ");
+  return /(?:^|[^a-z0-9])\d{1,2}\s*-\s*\d{1,2}(?:[^a-z0-9]|$)/.test(text);
+}
+
 function marketCatalogSortScore(item) {
   const order = {
     advance: 0,
@@ -6697,11 +6716,14 @@ function marketCatalogSortScore(item) {
     totals: 3,
     teamTotals: 4,
     btts: 5,
-    halves: 6,
-    correctScore: 7,
-    other: 8
+    correctScore: 6,
+    halves: 7,
+    firstToScore: 8,
+    corners: 9,
+    playerProps: 10,
+    other: 11
   };
-  return (order[item.category] ?? 9) * 1000000000 - Number(item.volume || 0);
+  return (order[item.category] ?? 99) * 1000000000 - Number(item.volume || 0);
 }
 
 function buildMatchMarketCatalog(match, polymarket) {
@@ -6716,7 +6738,10 @@ function buildMatchMarketCatalog(match, polymarket) {
     { key: "btts", label: "双方进球", labelEn: "BTTS" },
     { key: "correctScore", label: "球胆 / 正确比分", labelEn: "Correct Score" },
     { key: "halves", label: "半场 / 上下半场", labelEn: "Halves" },
+    { key: "firstToScore", label: "先进球", labelEn: "First To Score" },
+    { key: "corners", label: "角球", labelEn: "Corners" },
     { key: "teamTotals", label: "球队进球数", labelEn: "Team Totals" },
+    { key: "playerProps", label: "球员数据", labelEn: "Player Props" },
     { key: "other", label: "其他盘口", labelEn: "Other" }
   ];
   const items = markets
@@ -6776,7 +6801,7 @@ function buildMatchMarketCatalog(match, polymarket) {
     return {
       ...group,
       missing: !group.markets.length,
-      markets: (group.markets || []).slice(0, 24)
+      markets: (group.markets || []).slice(0, expected.key === "playerProps" ? 36 : expected.key === "correctScore" ? 32 : 24)
     };
   }).filter((group) => group.key !== "other" || group.markets.length);
   return {
@@ -8657,14 +8682,20 @@ async function fetchPolymarket(schedule = null) {
 
   const searches = buildPolymarketSearches(schedule);
   const eventSlugSearches = buildPolymarketEventSlugSearches(schedule);
-  const sportsPageSearches = eventSlugSearches.filter((search) => !search.moreMarkets);
+  const sportsPageSearches = eventSlugSearches;
   const [eventSlugResults, sportsPageResults, searchResults] = await Promise.all([
     Promise.all(eventSlugSearches.map((search) => fetchPolymarketEventSlug(search))),
     Promise.all(sportsPageSearches.map((search) => fetchPolymarketSportsPageMarkets(search))),
     Promise.all(searches.map((search) => fetchPolymarketSearch(search)))
   ]);
+  const derivativeResults = await mapLimit(
+    buildPolymarketDerivativeSearches(eventSlugResults),
+    4,
+    (search) => fetchPolymarketDerivativeMarkets(search)
+  );
   const prioritizedResults = [
     ...eventSlugResults,
+    ...derivativeResults,
     ...sportsPageResults,
     ...searchResults.filter((result) => !result.worldCupOnly),
     ...searchResults.filter((result) => result.worldCupOnly)
@@ -8739,11 +8770,90 @@ async function fetchPolymarketEventSlug(search) {
   return {
     label: search.label,
     slug: search.slug,
+    moreMarkets: Boolean(search.moreMarkets),
+    eventId: event?.id || "",
+    eventSlug: event?.slug || search.slug,
+    eventTitle: event?.title || "",
     ok: true,
     latencyMs: result.latencyMs,
     eventCount: event ? 1 : 0,
     markets
   };
+}
+
+function buildPolymarketDerivativeSearches(eventSlugResults) {
+  const seen = new Set();
+  return (eventSlugResults || [])
+    .filter((result) => result?.ok && result.eventId && !result.moreMarkets)
+    .filter((result) => {
+      const key = String(result.eventId || result.eventSlug || result.slug || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((result) => ({
+      label: `${result.label} derivative markets`,
+      slug: result.eventSlug || result.slug,
+      eventId: result.eventId,
+      eventTitle: result.eventTitle || ""
+    }));
+}
+
+async function fetchPolymarketDerivativeMarkets(search) {
+  const params = new URLSearchParams({
+    active: "true",
+    closed: "false",
+    limit: String(POLYMARKET_DERIVATIVE_EVENT_LIMIT),
+    parent_event_id: String(search.eventId),
+    include_children: "true",
+    order: "volume",
+    ascending: "false"
+  });
+  const url = `${POLYMARKET_GAMMA_API_BASE}/events/keyset?${params.toString()}`;
+  const result = await timedFetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS });
+  if (!result.ok) {
+    return {
+      label: search.label,
+      slug: search.slug,
+      ok: false,
+      latencyMs: result.latencyMs,
+      error: translateError(result.error),
+      markets: []
+    };
+  }
+  const events = Array.isArray(result.data?.events)
+    ? result.data.events
+    : Array.isArray(result.data)
+      ? result.data
+      : [];
+  const markets = events
+    .flatMap((event) => {
+      const eventMarkets = Array.isArray(event.markets) ? event.markets : [];
+      const limitedMarkets = limitDerivativeEventMarkets(event, eventMarkets);
+      return limitedMarkets.map((market) => ({
+        ...market,
+        eventTitle: event.title || search.eventTitle || "",
+        eventSlug: event.slug || search.slug || "",
+        parentEventSlug: search.slug || ""
+      }));
+    })
+    .filter(isWorldCupSoccerMarket);
+  return {
+    label: search.label,
+    slug: search.slug,
+    ok: true,
+    latencyMs: result.latencyMs,
+    eventCount: events.length,
+    marketCount: markets.length,
+    markets
+  };
+}
+
+function limitDerivativeEventMarkets(event, markets) {
+  const eventText = `${event?.slug || ""} ${event?.title || ""}`.toLowerCase();
+  const isPlayerProps = eventText.includes("player-props") || markets.some((market) => String(market?.sportsMarketType || "").startsWith("soccer_player_"));
+  if (isPlayerProps) return markets.slice(0, POLYMARKET_PLAYER_PROP_MARKET_LIMIT_PER_EVENT);
+  return markets;
 }
 
 async function fetchPolymarketSportsPageMarkets(search) {
@@ -8759,7 +8869,8 @@ async function fetchPolymarketSportsPageMarkets(search) {
       markets: []
     };
   }
-  const markets = extractSportsPageMarkets(result.text, search.slug)
+  const eventSlugPrefix = search.moreMarkets ? String(search.slug || "").replace(/-more-markets$/, "") : search.slug;
+  const markets = extractSportsPageMarkets(result.text, eventSlugPrefix)
     .filter(isWorldCupSoccerMarket)
     .slice(0, POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT);
   return {

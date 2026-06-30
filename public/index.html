@@ -4958,8 +4958,12 @@
             </div>
           `;
         }
-        const preferred = ["correctScore", "halves", "teamTotals", "totals", "spreads", "btts", "moneyline", "other"];
-        const ordered = [...categories].sort((a, b) => preferred.indexOf(a.key) - preferred.indexOf(b.key));
+        const preferred = ["correctScore", "halves", "firstToScore", "teamTotals", "totals", "spreads", "btts", "corners", "playerProps", "moneyline", "other"];
+        const orderIndex = (key) => {
+          const index = preferred.indexOf(key);
+          return index >= 0 ? index : preferred.length;
+        };
+        const ordered = [...categories].sort((a, b) => orderIndex(a.key) - orderIndex(b.key));
         const activeIndex = Math.max(0, ordered.findIndex((group) => ["correctScore", "halves"].includes(group.key)));
         const tabs = ordered.map((group, index) => `
           <button class="market-catalog-tab ${index === activeIndex ? "active" : ""}" data-market-catalog-tab="${escapeHtml(group.key)}" type="button">
@@ -4990,8 +4994,8 @@
               <div>
                 <div class="market-catalog-title">${escapeHtml(currentLang === "en" ? "Additional Polymarket Markets" : "更多 Polymarket 盘口")}</div>
                 <div class="market-catalog-meta">${escapeHtml(currentLang === "en"
-                  ? "Browse derivative markets such as correct score, halves, team totals, alternate totals, and alternate spreads. These are shown as market data, not model buy recommendations."
-                  : "展示球胆/正确比分、半场、球队进球数、更多大小球和更多让球线。这里只是盘口数据，不等于模型买入建议。")}</div>
+                  ? "Browse derivative markets such as correct score, halves, first-to-score, corners, player props, team totals, alternate totals, and alternate spreads. These are shown as market data, not model buy recommendations."
+                  : "展示球胆/正确比分、半场、先进球、角球、球员数据、球队进球数、更多大小球和更多让球线。这里只是盘口数据，不等于模型买入建议。")}</div>
               </div>
               <div class="market-catalog-meta">${escapeHtml(catalog?.source || "Polymarket")} · ${escapeHtml(catalog?.marketCount || 0)} ${escapeHtml(currentLang === "en" ? "markets" : "个盘口")}</div>
             </div>
