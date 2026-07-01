@@ -1394,6 +1394,98 @@
         gap: 8px;
       }
 
+      .live-score-path-card {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid #dfe6df;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .live-score-path-head {
+        display: grid;
+        grid-template-columns: minmax(130px, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+      }
+
+      .live-score-path-score {
+        color: var(--ink);
+        font-size: 22px;
+        font-weight: 860;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .live-score-path-meta,
+      .live-score-path-summary {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .live-score-path-metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .live-score-path-metrics span {
+        display: grid;
+        gap: 3px;
+        padding: 7px;
+        border-radius: 6px;
+        background: #f6f8f5;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .live-score-path-metrics strong {
+        color: var(--ink);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .live-plan-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .live-plan-block {
+        padding: 9px;
+        border: 1px solid #e7ebe5;
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .live-plan-block strong {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--ink);
+        font-size: 12px;
+      }
+
+      .live-plan-block ul {
+        margin: 0;
+        padding-left: 16px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .live-plan-block li + li {
+        margin-top: 3px;
+      }
+
+      @media (max-width: 760px) {
+        .live-score-path-head,
+        .live-score-path-metrics,
+        .live-plan-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
       .live-section-title {
         display: flex;
         align-items: center;
@@ -3182,6 +3274,51 @@
         return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
       };
 
+      function translateLivePlanText(text) {
+        if (currentLang !== "en" || !text) return text || "";
+        return String(text)
+          .replace(/实时球胆观察/g, "Live correct-score watch")
+          .replace(/已到目标，先止盈/g, "Target reached, take profit first")
+          .replace(/强队落后压制，可分批/g, "Strong side trails but controls play; scale in only in parts")
+          .replace(/压制路径，小注观察/g, "Pressure path; tiny watch")
+          .replace(/有 edge，小注观察/g, "Positive edge; tiny watch")
+          .replace(/观察，不主动补/g, "Watch, do not add proactively")
+          .replace(/时间不够，不追/g, "Too little time, do not chase")
+          .replace(/路径太长/g, "Path is too long")
+          .replace(/价格偏贵/g, "Price too expensive")
+          .replace(/等待现场统计/g, "Wait for live stats")
+          .replace(/不追/g, "Do not chase")
+          .replace(/当前已经是/g, "Current score is already")
+          .replace(/这不是新买点/g, "this is not a new entry")
+          .replace(/优先卖出\/对冲/g, "prioritize selling/hedging")
+          .replace(/至少回收本金/g, "at least recover stake")
+          .replace(/还需要/g, "needs")
+          .replace(/还差/g, "still needs")
+          .replace(/剩余约/g, "about")
+          .replace(/分钟/g, "minutes left")
+          .replace(/当前价/g, "current price")
+          .replace(/建议上限/g, "limit")
+          .replace(/只在当前价 <=/g, "Only consider if current price <=")
+          .replace(/且现场状态继续支持时考虑/g, "and live state still supports it")
+          .replace(/超过上限不追/g, "do not chase above the limit")
+          .replace(/把单场球胆预算分成 3-4 份/g, "split the match correct-score budget into 3-4 units")
+          .replace(/先 1 份/g, "start with 1 unit")
+          .replace(/再加 1 份/g, "then add 1 unit")
+          .replace(/最多先用 1 份/g, "use at most 1 unit first")
+          .replace(/不要因为赔率变大就摊平/g, "do not average down just because odds get bigger")
+          .replace(/进球后不要继续加仓/g, "do not keep adding after the goal")
+          .replace(/改成止盈或对冲/g, "switch to taking profit or hedging")
+          .replace(/到达中间比分或目标比分时/g, "when an intermediate or target score is reached")
+          .replace(/先卖出一部分回本金/g, "sell part first to recover stake")
+          .replace(/连续 10-12 分钟没有射正\/危险进攻/g, "if there are no shots on target/dangerous attacks for 10-12 minutes")
+          .replace(/停止补仓/g, "stop adding")
+          .replace(/不再加/g, "do not add anymore")
+          .replace(/若一个进球后主路径价格大涨/g, "if one goal makes the main path price jump")
+          .replace(/优先把本金锁回来/g, "prioritize locking back the stake")
+          .replace(/过程交易只能降低路径风险，不能保证盈利/g, "Path trading can reduce path risk, not guarantee profit")
+          .replace(/必须按价格上限、分批和止损执行/g, "follow limits, scaling and stop rules");
+      }
+
       function formatWorldRanking(team) {
         const ranking = team?.worldRanking;
         if (!ranking?.rank) return ranking?.note || "未同步";
@@ -4702,6 +4839,56 @@
         return `${format(homeValue)} / ${format(awayValue)}`;
       }
 
+      function renderPlanList(items = []) {
+        return items.length
+          ? `<ul>${items.slice(0, 4).map((item) => `<li>${escapeHtml(translateLivePlanText(item))}</li>`).join("")}</ul>`
+          : `<ul><li>${escapeHtml(currentLang === "en" ? "No extra rule." : "暂无额外规则。")}</li></ul>`;
+      }
+
+      function renderLiveCorrectScoreCard(rec) {
+        const plan = rec.pathPlan || {};
+        const stance = plan.stance || {};
+        const metrics = [
+          [currentLang === "en" ? "Live model" : "实时模型", fmtPct(rec.liveProbability)],
+          [currentLang === "en" ? "Price" : "当前价", fmtPrice(rec.marketPrice)],
+          ["Edge", fmtEdge(rec.edge)],
+          [currentLang === "en" ? "Limit" : "建议上限", fmtPrice(rec.maxBuyPrice)]
+        ];
+        const planBlocks = [
+          [currentLang === "en" ? "Now" : "现在怎么做", plan.entry || []],
+          [currentLang === "en" ? "Scale-in trigger" : "补仓触发", plan.add || []],
+          [currentLang === "en" ? "Take profit" : "止盈", plan.takeProfit || []],
+          [currentLang === "en" ? "Stop / no chase" : "止损 / 禁止", [...(plan.stopLoss || []), ...(plan.forbidden || []).slice(0, 2)]],
+          [currentLang === "en" ? "Hedge" : "对冲", plan.hedge || []],
+          [currentLang === "en" ? "Evidence" : "证据", [...(plan.evidence || []), ...(plan.warnings || [])]]
+        ];
+        return `
+          <article class="live-score-path-card">
+            <div class="live-score-path-head">
+              <div>
+                <div class="live-score-path-score">${escapeHtml(rec.score || rec.name || "-")}</div>
+                <div class="live-score-path-meta">${escapeHtml(currentLang === "en" ? "Correct score path" : "球胆路径")} · ${escapeHtml(rec.strategy?.tier || "-")} · ${escapeHtml(rec.source || "-")}</div>
+              </div>
+              <span class="live-chip ${escapeHtml(liveActionClass(rec.action))} live-market-action">${escapeHtml(translateLivePlanText(stance.label || rec.label || rec.action || "-"))}</span>
+            </div>
+            <div class="live-score-path-summary">${escapeHtml(translateLivePlanText(plan.summary || ""))}</div>
+            <div class="live-score-path-metrics">
+              ${metrics.map(([label, value]) => `<span>${escapeHtml(label)}<strong>${escapeHtml(value)}</strong></span>`).join("")}
+            </div>
+            <div class="live-plan-grid">
+              ${planBlocks.map(([title, items]) => `
+                <div class="live-plan-block">
+                  <strong>${escapeHtml(title)}</strong>
+                  ${renderPlanList(items)}
+                </div>
+              `).join("")}
+            </div>
+            ${(rec.risks || []).length ? `<div class="decision-note">${escapeHtml((rec.risks || []).slice(0, 4).map(translateLivePlanText).join("；"))}</div>` : ""}
+            ${plan.disclaimer ? `<div class="decision-note">${escapeHtml(translateLivePlanText(plan.disclaimer))}</div>` : ""}
+          </article>
+        `;
+      }
+
       function renderLivePlaceholder(match) {
         return `
           <div class="live-panel" data-live-match="${escapeHtml(match.id)}">
@@ -4746,17 +4933,7 @@
         const correctScores = payload.correctScoreRecommendations || [];
         const scoreText = `${payload.homeName || ""} ${score.home ?? "-"} - ${score.away ?? "-"} ${payload.awayName || ""}`;
         const correctScoreRows = correctScores.length
-          ? correctScores.slice(0, 6).map((rec) => `
-            <div class="live-market-row">
-              <div><strong>${escapeHtml(rec.score || rec.name || "-")}</strong><span>${escapeHtml(currentLang === "en" ? "Correct score" : "球胆")} · ${escapeHtml(rec.strategy?.tier || "")}</span></div>
-              <span>${escapeHtml(currentLang === "en" ? "Live" : "实时")} ${escapeHtml(fmtPct(rec.liveProbability))}</span>
-              <span>${escapeHtml(currentLang === "en" ? "Price" : "当前价")} ${escapeHtml(fmtPrice(rec.marketPrice))}</span>
-              <span>Edge ${escapeHtml(fmtEdge(rec.edge))}</span>
-              <span>${escapeHtml(currentLang === "en" ? "Limit" : "上限")} ${escapeHtml(fmtPrice(rec.maxBuyPrice))}</span>
-              <span class="live-chip ${escapeHtml(liveActionClass(rec.action))} live-market-action">${escapeHtml(rec.label || rec.action || "-")}</span>
-              ${(rec.risks || []).length ? `<div class="decision-note" style="grid-column: 1 / -1;">${escapeHtml((rec.risks || []).slice(0, 3).join("；"))}</div>` : ""}
-            </div>
-          `).join("")
+          ? correctScores.slice(0, 6).map(renderLiveCorrectScoreCard).join("")
           : `<div class="live-summary-card"><div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No correct-score candidate is available right now." : "当前没有可用的实时球胆候选。")}</div></div>`;
         const rows = recommendations.length
           ? recommendations.slice(0, 6).map((rec) => `
@@ -4799,7 +4976,7 @@
               <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Possession" : "控球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.possession, stats.away?.possession, "%"))}</strong></div>
             </div>
             <div class="live-correct-score">
-              <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Live Correct Score Picks" : "实时球胆推荐")}<span>${escapeHtml(currentLang === "en" ? "score-gated by current match state" : "按当前比分自动过滤")}</span></div>
+              <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Live Correct Score Path Trading" : "实时球胆观察 / 过程交易")}<span>${escapeHtml(currentLang === "en" ? "entry, scale-in, hedge, take-profit and stop rules" : "买入 / 补仓 / 对冲 / 止盈 / 止损")}</span></div>
               ${correctScoreRows}
             </div>
             <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Other Live Markets" : "其他实时盘口")}<span>${escapeHtml(currentLang === "en" ? "moneyline / totals / BTTS / handicap" : "胜平负 / 大小球 / 双进 / 让球")}</span></div>
