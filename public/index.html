@@ -1539,6 +1539,57 @@
         gap: 10px;
       }
 
+      .market-catalog-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .market-catalog-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 28px;
+        padding: 0 9px;
+        border: 1px solid #dfe6e1;
+        border-radius: 999px;
+        background: #fbfcfa;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .market-catalog-chip strong {
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .market-catalog-toggle {
+        justify-self: start;
+        min-height: 34px;
+        padding: 0 12px;
+        border: 1px solid rgba(18, 124, 91, 0.36);
+        border-radius: 8px;
+        background: #eaf5f0;
+        color: var(--green);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 820;
+      }
+
+      .market-catalog-toggle:hover {
+        background: #def0e8;
+      }
+
+      .market-catalog-details {
+        display: none;
+        gap: 10px;
+      }
+
+      .market-catalog.expanded .market-catalog-details {
+        display: grid;
+      }
+
       .market-catalog-title {
         font-size: 15px;
         font-weight: 850;
@@ -5245,7 +5296,6 @@
             <div class="odds-board-tabs" role="tablist" aria-label="盘口切换">${tabs}</div>
             <div class="odds-board-meta">${escapeHtml(currentLang === "en" ? "A Live tab has matched Polymarket history. A Local tab means Polymarket has not returned that single-match market yet." : "标签里的“实时”表示该类盘口已匹配 Polymarket 历史曲线；“本地”表示 Polymarket 当前未返回对应单场盘口。")}</div>
             ${panels}
-            ${renderMarketCatalog(match.marketCatalog)}
           </section>
         `;
       }
@@ -5283,6 +5333,9 @@
         };
         const ordered = [...categories].sort((a, b) => orderIndex(a.key) - orderIndex(b.key));
         const activeIndex = Math.max(0, ordered.findIndex((group) => ["correctScore", "halves"].includes(group.key)));
+        const summary = ordered.map((group) => `
+          <span class="market-catalog-chip">${escapeHtml(marketCatalogCategoryLabel(group))}<strong>${escapeHtml(group.count || group.markets.length || 0)}</strong></span>
+        `).join("");
         const tabs = ordered.map((group, index) => `
           <button class="market-catalog-tab ${index === activeIndex ? "active" : ""}" data-market-catalog-tab="${escapeHtml(group.key)}" type="button">
             ${escapeHtml(marketCatalogCategoryLabel(group))} · ${escapeHtml(group.count || group.markets.length)}
@@ -5312,13 +5365,17 @@
               <div>
                 <div class="market-catalog-title">${escapeHtml(currentLang === "en" ? "Additional Polymarket Markets" : "更多 Polymarket 盘口")}</div>
                 <div class="market-catalog-meta">${escapeHtml(currentLang === "en"
-                  ? "Browse derivative markets such as correct score, halves, first-to-score, corners, player props, team totals, alternate totals, and alternate spreads. These are shown as market data, not model buy recommendations."
-                  : "展示球胆/正确比分、半场、先进球、角球、球员数据、球队进球数、更多大小球和更多让球线。这里只是盘口数据，不等于模型买入建议。")}</div>
+                  ? "Compact by default. Open only when you need the full derivative market catalog; recommendations stay in the Live and Advice tabs."
+                  : "默认收起。需要查完整球胆、半场、角球、球员等盘口时再展开；推荐仍看“实时买点”和“建议”。")}</div>
               </div>
               <div class="market-catalog-meta">${escapeHtml(catalog?.source || "Polymarket")} · ${escapeHtml(catalog?.marketCount || 0)} ${escapeHtml(currentLang === "en" ? "markets" : "个盘口")}</div>
             </div>
-            <div class="market-catalog-tabs">${tabs}</div>
-            ${panels}
+            <div class="market-catalog-summary">${summary}</div>
+            <button class="market-catalog-toggle" type="button" data-market-catalog-toggle>${escapeHtml(currentLang === "en" ? "Show full market list" : "展开完整盘口清单")}</button>
+            <div class="market-catalog-details">
+              <div class="market-catalog-tabs">${tabs}</div>
+              ${panels}
+            </div>
           </div>
         `;
       }
@@ -5920,6 +5977,15 @@
           });
         });
         document.querySelectorAll(".market-catalog").forEach((catalog) => {
+          const toggle = catalog.querySelector("[data-market-catalog-toggle]");
+          if (toggle) {
+            toggle.addEventListener("click", () => {
+              const expanded = catalog.classList.toggle("expanded");
+              toggle.textContent = expanded
+                ? (currentLang === "en" ? "Hide full market list" : "收起完整盘口清单")
+                : (currentLang === "en" ? "Show full market list" : "展开完整盘口清单");
+            });
+          }
           catalog.querySelectorAll(".market-catalog-tab").forEach((tab) => {
             tab.addEventListener("click", () => {
               const target = tab.dataset.marketCatalogTab;
