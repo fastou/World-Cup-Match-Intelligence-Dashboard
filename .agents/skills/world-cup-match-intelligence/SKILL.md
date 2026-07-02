@@ -191,6 +191,8 @@ Important dashboard updates should be archived so later strategy analysis can co
 - opportunity radar runs and candidate items, including strict candidates, observation candidates, price, edge, max informational entry price, confidence, expiry time, and AI/rule rationale
 - final match result
 
+Keep history storage bounded. By default, archive structured fields needed for review but do not persist full dashboard payload JSON, every chart price point, or the global Polymarket holder pool on each timer run. Enable `WORLDCUP_ARCHIVE_FULL_PAYLOADS=1`, `WORLDCUP_ARCHIVE_PRICE_POINTS=1`, or `WORLDCUP_ARCHIVE_GLOBAL_HOLDERS=1` only for short diagnostic captures, then compact or prune the SQLite database afterward.
+
 When adding fields that affect model evaluation, update `scripts/history-store.js` and verify `npm run archive:dashboard`.
 
 ## Validation Commands

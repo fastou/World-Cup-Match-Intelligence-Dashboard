@@ -561,6 +561,15 @@ function runId(prefix, date = new Date()) {
   return `${prefix}-${date.toISOString().replace(/[:.]/g, "-")}`;
 }
 
+const EMPTY_JSON = "{}";
+const ARCHIVE_FULL_PAYLOADS = process.env.WORLDCUP_ARCHIVE_FULL_PAYLOADS === "1";
+const ARCHIVE_PRICE_POINTS = process.env.WORLDCUP_ARCHIVE_PRICE_POINTS === "1";
+const ARCHIVE_GLOBAL_HOLDERS = process.env.WORLDCUP_ARCHIVE_GLOBAL_HOLDERS === "1";
+
+function archivedJson(value) {
+  return ARCHIVE_FULL_PAYLOADS ? json(value) : EMPTY_JSON;
+}
+
 async function recordDashboardSnapshot(payload, options = {}) {
   if (!payload || !Array.isArray(payload.matches)) return null;
   await ensureHistorySchema();
@@ -568,7 +577,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
   const id = options.runId || runId("dashboard", new Date(capturedAt));
   const operations = [{
     sql: "INSERT OR REPLACE INTO dashboard_runs (run_id, generated_at, source, payload_json) VALUES (?, ?, ?, ?);",
-    params: [id, capturedAt, options.source || "dashboard", json(payload)]
+    params: [id, capturedAt, options.source || "dashboard", archivedJson(payload)]
   }];
 
   for (const match of payload.matches) {
@@ -649,7 +658,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
         textOrNull(groupSituation.away?.status),
         numberOrNull(groupImpact.homeXgDelta),
         numberOrNull(groupImpact.awayXgDelta),
-        json(match)
+        archivedJson(match)
       ]
     });
 
@@ -680,7 +689,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
         textOrNull(h2h.impact),
         textOrNull(h2h.allTimeNote),
         textOrNull(h2h.updatedAt),
-        json(h2h)
+        archivedJson(h2h)
       ]
     });
 
@@ -710,7 +719,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
           numberOrNull(summary.losses),
           numberOrNull(summary.goalsFor),
           numberOrNull(summary.goalsAgainst),
-          json(record)
+          archivedJson(record)
         ]
       });
     }
@@ -744,7 +753,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
           numberOrNull(record.goalsAgainst),
           textOrNull(record.bestFinish),
           numberOrNull(record.titles),
-          json(record)
+          archivedJson(record)
         ]
       });
     }
@@ -790,7 +799,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
           numberOrNull(lineScore(groups.MF, { height: 0.12, caps: 0.28, tier: 0.6 })),
           numberOrNull(lineScore(groups.FW, { height: 0.15, caps: 0.25, tier: 0.6 })),
           textOrNull(profile.marketValue?.status),
-          json(profile)
+          archivedJson(profile)
         ]
       });
     }
@@ -811,7 +820,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
         textOrNull(humanMatchup.summary),
         textOrNull(humanMatchup.aiRead?.source),
         textOrNull(humanMatchup.aiRead?.summary),
-        json(humanMatchup)
+        archivedJson(humanMatchup)
       ]
     });
 
@@ -836,7 +845,7 @@ async function recordDashboardSnapshot(payload, options = {}) {
         numberOrNull(contextSignalImpacts.drawDelta),
         numberOrNull(contextSignalImpacts.tiebreakHomeDelta),
         json(contextSignals.missing || []),
-        json(contextSignals)
+        archivedJson(contextSignals)
       ]
     });
 
@@ -866,48 +875,50 @@ async function recordDashboardSnapshot(payload, options = {}) {
         numberOrNull(trader.winRateEstimate),
         numberOrNull(trader.overallPnl),
         numberOrNull(trader.overallVolume),
-        json(trader)
+        archivedJson(trader)
       ]
     });
   }
 
-  operations.push({
-    sql: "DELETE FROM polymarket_holder_snapshots WHERE run_id = ?;",
-    params: [id]
-  });
-  for (const market of payload.polymarket?.markets || []) {
-    for (const token of market.tokens || []) {
-      for (const holder of token.topHolders || []) {
-        operations.push({
-          sql:
-          `INSERT INTO polymarket_holder_snapshots
-           (run_id, condition_id, token_id, market_question, market_slug, token_label, proxy_wallet,
-            user_name, holder_rank, outcome, avg_price, current_value, total_bought, size,
-            is_elite, trader_rank, soccer_pnl, win_rate_estimate, soccer_settled_positions, payload_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          params: [
-            id,
-            market.conditionId || "",
-            token.tokenId || "",
-            market.question || "",
-            market.slug || "",
-            token.label || "",
-            holder.proxyWallet || "",
-            holder.userName || "",
-            numberOrNull(holder.holderRank),
-            holder.outcome || token.label || "",
-            numberOrNull(holder.avgPrice),
-            numberOrNull(holder.currentValue),
-            numberOrNull(holder.totalBought),
-            numberOrNull(holder.size),
-            holder.isElite ? 1 : 0,
-            numberOrNull(holder.traderRank),
-            numberOrNull(holder.soccerPnl),
-            numberOrNull(holder.winRateEstimate),
-            numberOrNull(holder.soccerSettledPositions),
-            json(holder)
-          ]
-        });
+  if (ARCHIVE_GLOBAL_HOLDERS) {
+    operations.push({
+      sql: "DELETE FROM polymarket_holder_snapshots WHERE run_id = ?;",
+      params: [id]
+    });
+    for (const market of payload.polymarket?.markets || []) {
+      for (const token of market.tokens || []) {
+        for (const holder of token.topHolders || []) {
+          operations.push({
+            sql:
+            `INSERT INTO polymarket_holder_snapshots
+             (run_id, condition_id, token_id, market_question, market_slug, token_label, proxy_wallet,
+              user_name, holder_rank, outcome, avg_price, current_value, total_bought, size,
+              is_elite, trader_rank, soccer_pnl, win_rate_estimate, soccer_settled_positions, payload_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            params: [
+              id,
+              market.conditionId || "",
+              token.tokenId || "",
+              market.question || "",
+              market.slug || "",
+              token.label || "",
+              holder.proxyWallet || "",
+              holder.userName || "",
+              numberOrNull(holder.holderRank),
+              holder.outcome || token.label || "",
+              numberOrNull(holder.avgPrice),
+              numberOrNull(holder.currentValue),
+              numberOrNull(holder.totalBought),
+              numberOrNull(holder.size),
+              holder.isElite ? 1 : 0,
+              numberOrNull(holder.traderRank),
+              numberOrNull(holder.soccerPnl),
+              numberOrNull(holder.winRateEstimate),
+              numberOrNull(holder.soccerSettledPositions),
+              archivedJson(holder)
+            ]
+          });
+        }
       }
     }
   }
@@ -944,27 +955,29 @@ function pushMarketSnapshotOps(operations, snapshotId, matchId, rec) {
       numberOrNull(rec.eliteSummary?.count),
       numberOrNull(rec.eliteSummary?.totalCurrentValue),
       numberOrNull(rec.eliteSummary?.totalBought),
-      json(rec)
+      archivedJson(rec)
     ]
   });
 
-  for (const point of rec.chart?.history || []) {
-    operations.push({
-      sql:
-      `INSERT OR IGNORE INTO price_points
-       (snapshot_id, match_id, recommendation_key, token_id, condition_id, source, point_time, price)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-      params: [
-        snapshotId,
-        matchId,
-        rec.key,
-        rec.chart?.tokenId || "",
-        rec.chart?.conditionId || "",
-        rec.chart?.source || "",
-        numberOrNull(point.t),
-        numberOrNull(point.p)
-      ]
-    });
+  if (ARCHIVE_PRICE_POINTS) {
+    for (const point of rec.chart?.history || []) {
+      operations.push({
+        sql:
+        `INSERT OR IGNORE INTO price_points
+         (snapshot_id, match_id, recommendation_key, token_id, condition_id, source, point_time, price)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+        params: [
+          snapshotId,
+          matchId,
+          rec.key,
+          rec.chart?.tokenId || "",
+          rec.chart?.conditionId || "",
+          rec.chart?.source || "",
+          numberOrNull(point.t),
+          numberOrNull(point.p)
+        ]
+      });
+    }
   }
 
   for (const signal of rec.eliteSignals || []) {
@@ -993,7 +1006,7 @@ function pushMarketSnapshotOps(operations, snapshotId, matchId, rec) {
         textOrNull(signal.recentBuy?.isoTime),
         numberOrNull(signal.recentBuy?.price),
         numberOrNull(signal.recentBuy?.usdcSize),
-        json(signal)
+        archivedJson(signal)
       ]
     });
   }
@@ -1023,7 +1036,7 @@ function pushMarketSnapshotOps(operations, snapshotId, matchId, rec) {
         numberOrNull(holder.soccerPnl),
         numberOrNull(holder.winRateEstimate),
         numberOrNull(holder.soccerSettledPositions),
-        json(holder)
+        archivedJson(holder)
       ]
     });
   }
