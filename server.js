@@ -9544,6 +9544,8 @@ function polymarketTeamSlugCandidates(code) {
     HAI: ["hai", "hti", "haiti"],
     CIV: ["civ", "ivc", "cote-divoire", "ivory-coast"],
     POR: ["prt", "por"],
+    CRO: ["hrv", "cro"],
+    SUI: ["che", "sui", "swi"],
     COD: ["cdr", "cod", "drc", "cgo"],
     KOR: ["kr", "kor"]
   };
@@ -10537,7 +10539,12 @@ function isWorldCupSoccerMarket(market) {
     "nfl",
     "bitcoin",
     "ethereum",
-    "crypto"
+    "crypto",
+    "announcer",
+    "announcers",
+    "commentator",
+    "commentators",
+    "broadcast phrase"
   ];
   return positive.some((word) => text.includes(word)) && !negative.some((word) => text.includes(word));
 }
@@ -11955,7 +11962,7 @@ function compactArray(value, limit) {
   return Array.isArray(value) ? value.slice(0, limit) : [];
 }
 
-function compactPriceHistory(history, limit = 96) {
+function compactPriceHistory(history, limit = 48) {
   if (!Array.isArray(history)) return [];
   return history.slice(Math.max(0, history.length - limit)).map((point) => {
     if (Array.isArray(point)) return point.slice(0, 2);
@@ -12022,18 +12029,38 @@ function compactChart(chart = null) {
     marketQuestion: chart.marketQuestion,
     label: chart.label,
     currentPrice: chart.currentPrice,
-    topHolders: compactArray(chart.topHolders, 20).map(compactHolder),
+    topHolders: compactArray(chart.topHolders, 8).map(compactHolder),
     history: compactPriceHistory(chart.history)
   };
 }
 
 function compactRecommendation(rec = {}) {
   return {
-    ...rec,
+    key: rec.key,
+    marketType: rec.marketType,
+    marketTypeLabel: rec.marketTypeLabel,
+    name: rec.name,
+    shortName: rec.shortName,
+    side: rec.side,
+    aliases: compactArray(rec.aliases, 4),
+    modelProbability: rec.modelProbability,
+    pushProbability: rec.pushProbability,
+    marketPrice: rec.marketPrice,
+    edge: rec.edge,
+    maxBuyPrice: rec.maxBuyPrice,
+    disciplinedEdge: rec.disciplinedEdge,
+    odds: rec.odds,
+    handicap: rec.handicap,
+    baseDecision: rec.baseDecision,
+    decision: rec.decision,
+    reviewDiscipline: rec.reviewDiscipline,
+    holderSummary: rec.holderSummary,
+    eliteSummary: rec.eliteSummary,
+    watchlistSummary: rec.watchlistSummary,
     chart: compactChart(rec.chart),
-    topHolders: compactArray(rec.topHolders, 25).map(compactHolder),
-    eliteSignals: compactArray(rec.eliteSignals, 12).map(compactTraderSignal),
-    watchlistSignals: compactArray(rec.watchlistSignals, 12).map(compactTraderSignal)
+    topHolders: compactArray(rec.topHolders, 8).map(compactHolder),
+    eliteSignals: compactArray(rec.eliteSignals, 6).map(compactTraderSignal),
+    watchlistSignals: compactArray(rec.watchlistSignals, 6).map(compactTraderSignal)
   };
 }
 
