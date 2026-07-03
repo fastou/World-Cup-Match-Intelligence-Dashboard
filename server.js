@@ -3157,7 +3157,8 @@ function correctScoreDecision(row, match) {
   };
 }
 
-function buildCorrectScoreRecommendations(match) {
+function buildCorrectScoreRecommendations(match, options = {}) {
+  const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Number(options.limit)) : 10;
   const correctScoreCategory = (match?.marketCatalog?.categories || []).find((category) => category.key === "correctScore");
   const markets = Array.isArray(correctScoreCategory?.markets) ? correctScoreCategory.markets : [];
   const scoreRows = Array.isArray(match?.probabilities?.topScoresFull) ? match.probabilities.topScoresFull : [];
@@ -3247,8 +3248,8 @@ function buildCorrectScoreRecommendations(match) {
     source: "Polymarket Correct Score + xG score grid",
     updatedAt: sourceUpdatedAt,
     available: markets.length,
-    shown: Math.min(rows.length, 10),
-    rows: rows.slice(0, 10),
+    shown: Math.min(rows.length, limit),
+    rows: rows.slice(0, limit),
     missingReason: rows.length ? "" : "已返回球胆盘口，但未能解析出可匹配模型比分的 Yes 价格。"
   };
 }
@@ -4555,6 +4556,10 @@ function isActualNumber(value) {
   return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 }
 
+function liveScoreNumber(value) {
+  return isActualNumber(value) ? Number(value) : null;
+}
+
 function normalizeLiveStats(summary, match) {
   const homeBox = boxscoreTeamForMatch(summary, match, "home");
   const awayBox = boxscoreTeamForMatch(summary, match, "away");
@@ -4660,8 +4665,8 @@ function liveProbabilityModel(match, live) {
   const base = match.probabilities || { home: 0.33, draw: 0.34, away: 0.33, over25: 0.5, under25: 0.5, btts: 0.5 };
   const elapsed = elapsedMinuteFromLive(live, match);
   const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0, 1);
-  const homeScore = Number(live?.score?.home);
-  const awayScore = Number(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   const hasScore = Number.isFinite(homeScore) && Number.isFinite(awayScore);
   const goalDiff = hasScore ? homeScore - awayScore : 0;
   const totalGoals = hasScore ? homeScore + awayScore : 0;
@@ -4773,14 +4778,42 @@ function liveRemainingGoalModel(match, live) {
   const momentumWeight = Math.sqrt(remaining) * 0.35;
   let homeLambda = baseHomeLambda * remaining + Math.max(0, momentum.home || 0) * momentumWeight;
   let awayLambda = baseAwayLambda * remaining + Math.max(0, momentum.away || 0) * momentumWeight;
-  const homeScore = Number(live?.score?.home);
-  const awayScore = Number(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   const notes = [];
+  const stats = live?.stats || {};
 
   if (Number.isFinite(homeScore) && Number.isFinite(awayScore) && homeScore === awayScore && elapsed >= 75) {
     homeLambda *= 0.88;
     awayLambda *= 0.88;
     notes.push(`${elapsed}' 平局，淘汰赛/后段比赛更容易进入谨慎节奏，深盘进球需求降权。`);
+  }
+  if (Number.isFinite(homeScore) && Number.isFinite(awayScore) && elapsed >= 55) {
+    const goalDiff = homeScore - awayScore;
+    const shotDiff = statDiff(stats.home?.shots, stats.away?.shots);
+    const sotDiff = statDiff(stats.home?.shotsOnTarget, stats.away?.shotsOnTarget);
+    if (goalDiff >= 2) {
+      const leadingPressure = shotDiff >= 8 || sotDiff >= 3;
+      homeLambda *= leadingPressure ? 0.92 : 0.78;
+      awayLambda *= 1.08;
+      notes.push(`${elapsed}' ${match.homeName} 已领先 ${goalDiff} 球，领先方节奏管理；除非射门/射正继续压制，否则继续进球率降权。`);
+    } else if (goalDiff <= -2) {
+      const leadingPressure = shotDiff <= -8 || sotDiff <= -3;
+      awayLambda *= leadingPressure ? 0.92 : 0.78;
+      homeLambda *= 1.08;
+      notes.push(`${elapsed}' ${match.awayName} 已领先 ${Math.abs(goalDiff)} 球，领先方节奏管理；除非射门/射正继续压制，否则继续进球率降权。`);
+    } else if (goalDiff !== 0 && elapsed >= 75) {
+      const leaderSide = goalDiff > 0 ? "home" : "away";
+      const trailingSide = goalDiff > 0 ? "away" : "home";
+      const trailingSot = Number(stats[trailingSide]?.shotsOnTarget);
+      if (leaderSide === "home") homeLambda *= 0.86;
+      else awayLambda *= 0.86;
+      if (Number.isFinite(trailingSot) && trailingSot === 0) {
+        if (trailingSide === "home") homeLambda *= 0.82;
+        else awayLambda *= 0.82;
+        notes.push(`${elapsed}' 落后一方仍 0 射正，追回路径降权。`);
+      }
+    }
   }
 
   const awaySaves = Number(live?.stats?.away?.saves);
@@ -4815,8 +4848,8 @@ function liveRemainingGoalModel(match, live) {
 
 function liveHandicapProbabilityForRecommendation(rec, match, live) {
   if (rec?.marketType !== "handicap" || !rec.handicap) return null;
-  const homeScore = Number(live?.score?.home);
-  const awayScore = Number(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
 
   const side = String(rec.key || "").endsWith("-home") ? "home" : "away";
@@ -4862,22 +4895,16 @@ function liveHandicapProbabilityForRecommendation(rec, match, live) {
 }
 
 function liveCorrectScoreProbability(row, match, live, liveModel) {
-  const homeScore = Number(live?.score?.home);
-  const awayScore = Number(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return row.modelProbability;
   if (homeScore > row.homeGoals || awayScore > row.awayGoals) return 0;
   if (live?.completed) return homeScore === row.homeGoals && awayScore === row.awayGoals ? 1 : 0;
 
-  const elapsed = elapsedMinuteFromLive(live, match);
-  const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0.02, 1);
   const homeAdditional = row.homeGoals - homeScore;
   const awayAdditional = row.awayGoals - awayScore;
-  const baseHomeLambda = Number(match?.dynamicModel?.adjusted?.lambdaHome || match?.model?.lambdaHome || 1.1);
-  const baseAwayLambda = Number(match?.dynamicModel?.adjusted?.lambdaAway || match?.model?.lambdaAway || 1.1);
-  const momentumHome = liveMomentumScore(live).home || 0;
-  const homeLambda = clamp(baseHomeLambda * remaining + Math.max(0, momentumHome) * 0.6, 0.01, 3.2);
-  const awayLambda = clamp(baseAwayLambda * remaining + Math.max(0, -momentumHome) * 0.6, 0.01, 3.2);
-  let probability = poisson(homeLambda, homeAdditional) * poisson(awayLambda, awayAdditional);
+  const remaining = liveRemainingGoalModel(match, live);
+  let probability = poisson(remaining.homeLambda, homeAdditional) * poisson(remaining.awayLambda, awayAdditional);
 
   const side = scoreOutcomeSide(row);
   if (side === "home") probability *= clamp((liveModel.home || row.modelProbability) / Math.max(0.05, match.probabilities?.home || 0.33), 0.45, 1.9);
@@ -4887,9 +4914,32 @@ function liveCorrectScoreProbability(row, match, live, liveModel) {
   return clamp(probability, 0.001, 0.98);
 }
 
+function remainingScoreProbabilityFromModel(remainingModel, homeAdditional, awayAdditional) {
+  if (!Number.isInteger(homeAdditional) || !Number.isInteger(awayAdditional)) return 0;
+  if (homeAdditional < 0 || awayAdditional < 0) return 0;
+  return poisson(remainingModel.homeLambda, homeAdditional) * poisson(remainingModel.awayLambda, awayAdditional);
+}
+
+function liveCorrectScoreFairProbability(row, match, live, liveModel, remainingModel = null) {
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return row.liveProbability ?? row.modelProbability ?? 0;
+  if (homeScore > row.homeGoals || awayScore > row.awayGoals) return 0;
+  if (live?.completed) return homeScore === row.homeGoals && awayScore === row.awayGoals ? 1 : 0;
+  const remaining = remainingModel || liveRemainingGoalModel(match, live);
+  const raw = remainingScoreProbabilityFromModel(remaining, Number(row.homeGoals) - homeScore, Number(row.awayGoals) - awayScore);
+  const side = scoreOutcomeSide(row);
+  const sideMultiplier = side === "home"
+    ? clamp((liveModel.home || row.modelProbability || 0.33) / Math.max(0.05, match.probabilities?.home || 0.33), 0.55, 1.55)
+    : side === "away"
+      ? clamp((liveModel.away || row.modelProbability || 0.33) / Math.max(0.05, match.probabilities?.away || 0.33), 0.55, 1.55)
+      : clamp((liveModel.draw || row.modelProbability || 0.28) / Math.max(0.05, match.probabilities?.draw || 0.28), 0.55, 1.55);
+  return clamp(raw * sideMultiplier, 0.001, 0.98);
+}
+
 function liveScorePathContext(row, match, live, liveModel) {
-  const homeScore = numberOrNull(live?.score?.home);
-  const awayScore = numberOrNull(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   const elapsed = elapsedMinuteFromLive(live, match);
   const remainingMinutes = Math.max(0, 90 - Math.min(elapsed, 90));
   const scoreKnown = Number.isFinite(homeScore) && Number.isFinite(awayScore);
@@ -4920,8 +4970,16 @@ function liveScorePathContext(row, match, live, liveModel) {
   const awaySot = Number(stats.away?.shotsOnTarget);
   const homeShots = Number(stats.home?.shots);
   const awayShots = Number(stats.away?.shots);
+  const homeCorners = Number(stats.home?.corners);
+  const awayCorners = Number(stats.away?.corners);
+  const homePossession = Number(stats.home?.possession);
+  const awayPossession = Number(stats.away?.possession);
   const sotDiff = Number.isFinite(homeSot) && Number.isFinite(awaySot) ? homeSot - awaySot : 0;
   const shotDiff = Number.isFinite(homeShots) && Number.isFinite(awayShots) ? homeShots - awayShots : 0;
+  const cornerDiff = Number.isFinite(homeCorners) && Number.isFinite(awayCorners) ? homeCorners - awayCorners : 0;
+  const possessionDiff = Number.isFinite(homePossession) && Number.isFinite(awayPossession) ? homePossession - awayPossession : 0;
+  const pressureScoreHome = clamp(shotDiff * 0.035 + sotDiff * 0.09 + cornerDiff * 0.028 + possessionDiff * 0.004, -1, 1);
+  const pressureSide = pressureScoreHome > 0.18 ? "home" : pressureScoreHome < -0.18 ? "away" : "";
   const dominantSide = targetMomentum > 0.08 ? targetSide
     : strongerMomentum > 0.08 ? strongerSide
       : Math.abs(sotDiff) >= 3 ? sotDiff > 0 ? "home" : "away"
@@ -4955,6 +5013,13 @@ function liveScorePathContext(row, match, live, liveModel) {
     dominantSide,
     keeperWallSide,
     targetHasRedRisk,
+    pressureScore: roundTo(targetSide === "home" ? pressureScoreHome : targetSide === "away" ? -pressureScoreHome : Math.abs(pressureScoreHome), 3),
+    pressureScoreHome: roundTo(pressureScoreHome, 3),
+    pressureSide,
+    shotDiff,
+    sotDiff,
+    cornerDiff,
+    possessionDiff: roundTo(possessionDiff, 1),
     scoreKnown,
     statsReady: hasUsefulLiveStats(stats),
     scoreText: scoreKnown ? `${safeHomeScore}-${safeAwayScore}` : "比分待同步",
@@ -4964,12 +5029,30 @@ function liveScorePathContext(row, match, live, liveModel) {
 
 function pathTradingStance(row, context, liveEdge, dataQuality) {
   if (!context.scoreKnown) return { action: "WAIT", label: "等待比分", severity: "warn" };
-  if (context.targetReached) return { action: "TAKE_PROFIT", label: "已到目标，先止盈", severity: "profit" };
+  const price = Number(row.marketPrice);
+  const fair = Number(row.liveProbability);
+  const edgeValue = Number.isFinite(fair) && Number.isFinite(price) ? fair - price : liveEdge;
+  const edgeKnown = Number.isFinite(edgeValue);
+  if (context.targetReached) {
+    if (edgeKnown && edgeValue >= 0.045 && context.remainingMinutes >= 18 && context.pressureSide !== (context.goalDiff >= 0 ? "home" : "away")) {
+      return { action: "HOLD_TRIM", label: "已到目标，卖一半留尾仓", severity: "profit" };
+    }
+    if (edgeKnown && edgeValue <= -0.035) {
+      return { action: "TAKE_PROFIT_FAST", label: "已到目标，价格偏高先锁利", severity: "profit" };
+    }
+    return { action: "TAKE_PROFIT", label: "已到目标，先止盈", severity: "profit" };
+  }
   if (row.excluded || row.currentScoreGate?.blocked) return { action: "NO_TRADE", label: "已失效", severity: "bad" };
   if (dataQuality.status !== "synced") return { action: "WAIT", label: "等待现场统计", severity: "warn" };
   if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1) return { action: "NO_CHASE", label: "时间不够，不追", severity: "bad" };
   if (context.goalsNeeded >= 3 && context.elapsed >= 55) return { action: "NO_CHASE", label: "路径太长", severity: "bad" };
   if (context.targetHasRedRisk) return { action: "NO_TRADE", label: "红牌风险，不追", severity: "bad" };
+  if (context.goalsNeeded === 1 && context.remainingMinutes >= 18 && edgeKnown && edgeValue >= 0.03 && context.pressureSide && (
+    (context.homeNeeded > 0 && context.pressureSide === "home")
+    || (context.awayNeeded > 0 && context.pressureSide === "away")
+  )) {
+    return { action: "PATH_ADD", label: "只差一球且压制，分批观察", severity: "good" };
+  }
   if (Number.isFinite(row.marketPrice) && Number.isFinite(row.maxBuyPrice) && row.marketPrice > row.maxBuyPrice + 0.03) {
     return { action: "WAIT_PRICE", label: "价格偏贵", severity: "warn" };
   }
@@ -4984,6 +5067,224 @@ function pathTradingStance(row, context, liveEdge, dataQuality) {
   }
   if (liveEdge >= 0.015) return { action: "WATCH", label: "观察，不主动补", severity: "warn" };
   return { action: "NO_CHASE", label: "不追", severity: "neutral" };
+}
+
+function scorePathPositionAdvice(row, context) {
+  const price = Number(row.marketPrice);
+  const fair = Number(row.liveProbability);
+  const edgeValue = Number.isFinite(price) && Number.isFinite(fair) ? fair - price : null;
+  const timePressure = context.remainingMinutes <= 15 ? "late" : context.remainingMinutes <= 35 ? "mid" : "early";
+  let trimPct = 0;
+  let keepPct = 0;
+  let addPct = 0;
+  let label = "不主动处理";
+  const reasons = [];
+
+  if (!context.scoreKnown || !Number.isFinite(price) || !Number.isFinite(fair)) {
+    return {
+      label: "等待价格/比分",
+      trimPct,
+      keepPct,
+      addPct,
+      edge: edgeValue,
+      timePressure,
+      reasons: ["缺少当前价或比分，无法计算卖出/保留价值。"]
+    };
+  }
+
+  if (context.targetReached) {
+    const killRisk = clamp(1 - Math.exp(-((Number(row.nextGoalHazard) || 0))), 0, 0.92);
+    if (edgeValue <= -0.04 || killRisk >= 0.55) {
+      trimPct = 70;
+      keepPct = 30;
+      label = "价格/下一球风险偏高：先锁大部分";
+    } else if (edgeValue >= 0.04 && timePressure !== "late") {
+      trimPct = 35;
+      keepPct = 65;
+      label = "模型仍支持：卖一部分，保留时间衰减价值";
+    } else if (timePressure === "late") {
+      trimPct = 25;
+      keepPct = 75;
+      label = "临近终场：保留比分时间衰减";
+    } else {
+      trimPct = 50;
+      keepPct = 50;
+      label = "已到目标：回收本金，留尾仓";
+    }
+    reasons.push(`当前比分已是 ${context.targetText}，继续持有赚的是“无下一球”的时间衰减。`);
+    reasons.push(`下一球杀死该比分的风险约 ${formatPercent(killRisk)}，edge ${formatPercent(edgeValue)}。`);
+    return {
+      label,
+      trimPct,
+      keepPct,
+      addPct,
+      edge: Number.isFinite(edgeValue) ? roundTo(edgeValue, 4) : null,
+      timePressure,
+      nextGoalKillRisk: roundTo(killRisk, 4),
+      reasons
+    };
+  }
+
+  if (context.goalsNeeded === 1 && edgeValue >= 0.04 && context.remainingMinutes >= 18) {
+    addPct = context.pressureSide ? 25 : 15;
+    label = context.pressureSide ? "可以用小仓等下一球路径" : "只小仓观察";
+    reasons.push(`还差 1 球，若目标方下一球出现，价格通常快速重估；但进球后动作要切换成止盈。`);
+  } else if (context.goalsNeeded === 2 && edgeValue >= 0.07 && context.remainingMinutes >= 30) {
+    addPct = 12;
+    label = "两球路径，仅极小试探";
+    reasons.push("还差 2 球，需要连续事件，不能摊平，只能用很小仓位。");
+  } else {
+    label = edgeValue > 0 ? "有价格差但不补仓" : "不追";
+    reasons.push(edgeValue > 0 ? "edge 未覆盖路径风险和时间成本。" : "市场价格不低于模型公允，追买没有优势。");
+  }
+  if (context.remainingMinutes <= 12 && context.goalsNeeded >= 1) {
+    addPct = 0;
+    label = "时间不足，不追";
+    reasons.push("剩余时间太短，进球路径赔率变大不等于价值变高。");
+  }
+  return {
+    label,
+    trimPct,
+    keepPct,
+    addPct,
+    edge: Number.isFinite(edgeValue) ? roundTo(edgeValue, 4) : null,
+    timePressure,
+    reasons: [...new Set(reasons)].slice(0, 4)
+  };
+}
+
+function correctScoreRowMarketUrl(row) {
+  if (row?.marketSlug) return `https://polymarket.com/event/${row.marketSlug}`;
+  if (row?.eventSlug) return `https://polymarket.com/event/${row.eventSlug}`;
+  return "";
+}
+
+function buildLiveScorePathCandidates(baseRows, match, live, liveModel, currentRow, remainingModel) {
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return [];
+  return (baseRows || [])
+    .filter((row) => row && row.score && row !== currentRow)
+    .map((row) => {
+      const homeAdditional = Number(row.homeGoals) - homeScore;
+      const awayAdditional = Number(row.awayGoals) - awayScore;
+      if (homeAdditional < 0 || awayAdditional < 0) return null;
+      const liveProbability = liveCorrectScoreFairProbability(row, match, live, liveModel, remainingModel);
+      const marketPrice = Number(row.marketPrice);
+      const edgeValue = Number.isFinite(marketPrice) ? liveProbability - marketPrice : null;
+      const goalsNeeded = homeAdditional + awayAdditional;
+      const pathType = homeAdditional === 0 && awayAdditional === 0 ? "current"
+        : homeAdditional === 1 && awayAdditional === 0 ? "homeNext"
+          : homeAdditional === 0 && awayAdditional === 1 ? "awayNext"
+            : homeAdditional === 1 && awayAdditional === 1 ? "bothNext"
+              : goalsNeeded === 1 ? "oneGoal"
+                : "longer";
+      const nextGoalImpact = homeAdditional === 0 && awayAdditional === 0
+        ? "任意下一球会杀死该比分"
+        : homeAdditional > 0 && awayAdditional === 0
+          ? `${match.homeName} 下一球增强，${match.awayName} 下一球杀死`
+          : awayAdditional > 0 && homeAdditional === 0
+            ? `${match.awayName} 下一球增强，${match.homeName} 下一球杀死`
+            : "双方都还要进球，路径更长";
+      return {
+        score: row.score,
+        marketPrice: Number.isFinite(marketPrice) ? marketPrice : null,
+        liveProbability: roundTo(liveProbability, 4),
+        edge: Number.isFinite(edgeValue) ? roundTo(edgeValue, 4) : null,
+        homeNeeded: homeAdditional,
+        awayNeeded: awayAdditional,
+        goalsNeeded,
+        pathType,
+        nextGoalImpact,
+        action: Number.isFinite(edgeValue) && edgeValue >= 0.045 && goalsNeeded <= 1 ? "轮动候选"
+          : Number.isFinite(edgeValue) && edgeValue >= 0.02 && goalsNeeded <= 2 ? "观察"
+            : "不追",
+        url: correctScoreRowMarketUrl(row)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const pathRank = { current: 0, homeNext: 1, awayNext: 1, oneGoal: 2, bothNext: 3, longer: 4 };
+      const rankDiff = (pathRank[a.pathType] ?? 9) - (pathRank[b.pathType] ?? 9);
+      if (rankDiff) return rankDiff;
+      return (b.edge ?? -9) - (a.edge ?? -9);
+    })
+    .slice(0, 6);
+}
+
+function livePathTimeDecay(row, context, remainingModel) {
+  const noGoalProbability5 = Math.exp(-Math.max(0, (remainingModel.homeLambda + remainingModel.awayLambda) * Math.min(5, context.remainingMinutes) / Math.max(1, context.remainingMinutes)));
+  const noGoalProbability10 = Math.exp(-Math.max(0, (remainingModel.homeLambda + remainingModel.awayLambda) * Math.min(10, context.remainingMinutes) / Math.max(1, context.remainingMinutes)));
+  const totalHazard = Math.max(0, remainingModel.homeLambda + remainingModel.awayLambda);
+  const direction = context.targetReached
+    ? "no-goal-benefits"
+    : context.goalsNeeded === 1
+      ? "needs-next-goal"
+      : "multi-event";
+  const notes = [];
+  if (context.targetReached) {
+    notes.push(`5分钟无进球概率约 ${formatPercent(noGoalProbability5)}，10分钟无进球概率约 ${formatPercent(noGoalProbability10)}；无进球会抬高当前比分。`);
+  } else if (context.goalsNeeded === 1) {
+    notes.push(`路径还差 1 球，时间流逝会压低该比分；必须依赖目标方下一球。`);
+  } else {
+    notes.push(`路径还差 ${context.goalsNeeded} 球，时间每过 5-10 分钟都会明显侵蚀公允价。`);
+  }
+  notes.push(`剩余进球强度约 xG ${remainingModel.homeLambda.toFixed(2)}-${remainingModel.awayLambda.toFixed(2)}，总 hazard ${totalHazard.toFixed(2)}。`);
+  return {
+    direction,
+    noGoal5: roundTo(noGoalProbability5, 4),
+    noGoal10: roundTo(noGoalProbability10, 4),
+    totalHazard: roundTo(totalHazard, 4),
+    notes
+  };
+}
+
+function buildScorePathTradeState(row, match, live, liveModel, dataQuality, baseRows = []) {
+  const remainingModel = liveRemainingGoalModel(match, live);
+  const context = liveScorePathContext(row, match, live, liveModel);
+  const nextGoalHazard = remainingModel.homeLambda + remainingModel.awayLambda;
+  row.nextGoalHazard = nextGoalHazard;
+  const positionAdvice = scorePathPositionAdvice(row, context);
+  const rotation = buildLiveScorePathCandidates(baseRows, match, live, liveModel, row, remainingModel);
+  const timeDecay = livePathTimeDecay(row, context, remainingModel);
+  const currentValue = {
+    fair: roundTo(row.liveProbability || 0, 4),
+    price: Number.isFinite(Number(row.marketPrice)) ? roundTo(Number(row.marketPrice), 4) : null,
+    edge: Number.isFinite(Number(row.edge)) ? roundTo(Number(row.edge), 4) : null,
+    maxBuyPrice: Number.isFinite(Number(row.maxBuyPrice)) ? roundTo(Number(row.maxBuyPrice), 4) : null,
+    sellSignal: positionAdvice.trimPct >= 50 ? "trim-heavy"
+      : positionAdvice.trimPct > 0 ? "trim-part"
+        : positionAdvice.addPct > 0 ? "scale-small"
+          : "hold-watch"
+  };
+  const nextGoal = [];
+  if (context.scoreKnown) {
+    if (context.targetReached) {
+      nextGoal.push(`${match.homeName} 或 ${match.awayName} 下一球都会让 ${context.targetText} 失效；持有的是“无下一球”路径。`);
+    } else {
+      if (context.homeNeeded > 0) nextGoal.push(`${match.homeName} 下一球：${context.targetText} 路径增强。`);
+      else nextGoal.push(`${match.homeName} 下一球：${context.targetText} 路径被杀死。`);
+      if (context.awayNeeded > 0) nextGoal.push(`${match.awayName} 下一球：${context.targetText} 路径增强。`);
+      else nextGoal.push(`${match.awayName} 下一球：${context.targetText} 路径被杀死。`);
+    }
+  }
+  return {
+    context,
+    remainingModel: {
+      homeLambda: roundTo(remainingModel.homeLambda, 3),
+      awayLambda: roundTo(remainingModel.awayLambda, 3),
+      notes: remainingModel.notes
+    },
+    currentValue,
+    positionAdvice,
+    rotation,
+    timeDecay,
+    nextGoal,
+    dataLimits: [
+      dataQuality.status !== "synced" ? "现场统计不足时，只能做比分时间模型，不能强补仓。" : "",
+      "页面不知道你的真实持仓成本；止盈比例按通用仓位纪律给出，需要结合你的实际成本。"
+    ].filter(Boolean)
+  };
 }
 
 function scorePathNextTriggers(row, context, match) {
@@ -5007,10 +5308,12 @@ function scorePathNextTriggers(row, context, match) {
 }
 
 function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, action) {
-  const context = liveScorePathContext(row, match, live, liveModel);
+  const tradeState = row.tradeState || buildScorePathTradeState(row, match, live, liveModel, dataQuality, []);
+  const context = tradeState.context || liveScorePathContext(row, match, live, liveModel);
   const stance = pathTradingStance(row, context, row.edge, dataQuality);
   const unit = "把单场球胆预算分成 3-4 份";
   const entry = [];
+  const position = [];
   const add = [];
   const takeProfit = [];
   const stopLoss = [];
@@ -5018,17 +5321,29 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
   const evidence = [];
   const warnings = [];
   const forbidden = [];
+  const rotation = [];
+  const timeDecay = [];
+  const nextGoal = [];
 
   if (context.targetReached) {
-    entry.push(`当前已经是 ${context.targetText}，这不是新买点；优先卖出/对冲，至少回收本金。`);
-    takeProfit.push("价格跳升后先卖 50%-70%，剩余仓位只留作终场命中的彩票尾巴。");
+    entry.push(`当前已经是 ${context.targetText}，这不是新买点；核心问题是卖多少、留多少。`);
+    const trim = tradeState.positionAdvice?.trimPct || 0;
+    const keep = tradeState.positionAdvice?.keepPct || 0;
+    if (trim || keep) position.push(`持仓处理：先卖 ${trim}% 左右，保留 ${keep}% 左右吃时间衰减；不要一次全卖或全留。`);
+    position.push(...(tradeState.positionAdvice?.reasons || []));
+    takeProfit.push("价格跳升后先卖一部分回本金，剩余仓位只留作终场命中的尾仓。");
     hedge.push("如果反向比分或下一球盘口能覆盖本金，优先做 green book，而不是继续押同一比分。");
   } else {
     entry.push(`${context.scoreText} 到 ${context.targetText} 还需要 ${context.goalsNeeded} 球：${context.homeNeeded > 0 ? `${match.homeName} +${context.homeNeeded}` : ""}${context.homeNeeded > 0 && context.awayNeeded > 0 ? "，" : ""}${context.awayNeeded > 0 ? `${match.awayName} +${context.awayNeeded}` : ""}。`);
     entry.push(`只在当前价 <= ${formatCents(row.maxBuyPrice)} 且现场状态继续支持时考虑；超过上限不追。`);
+    const addPct = tradeState.positionAdvice?.addPct || 0;
+    if (addPct) position.push(`未持有/想补仓：最多动用该场球胆预算 ${addPct}% 左右，等待下一次刷新确认。`);
+    position.push(...(tradeState.positionAdvice?.reasons || []));
   }
 
-  if (stance.action === "ADD_ON_PRESSURE") {
+  if (stance.action === "PATH_ADD") {
+    add.push(`只差 1 球且目标方压制，最多先用 ${unit} 中的 1 份；进球后立刻从买入切到止盈/对冲。`);
+  } else if (stance.action === "ADD_ON_PRESSURE") {
     add.push(`强队${context.strongerSide === "home" ? match.homeName : match.awayName}落后/未领先但场面压制，可用 ${unit}：先 1 份，5-8 分钟后仍有射门/射正优势再加 1 份。`);
   } else if (stance.action === "ADD_SMALL" || stance.action === "OPEN_SMALL") {
     add.push(`${unit}，最多先用 1 份；只有价格没上穿上限且射正/角球继续增加时才加第 2 份。`);
@@ -5036,6 +5351,11 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
     add.push("当前不满足补仓条件；不要因为赔率变大就摊平。");
   }
   add.push(...scorePathNextTriggers(row, context, match));
+  nextGoal.push(...(tradeState.nextGoal || []));
+  timeDecay.push(...(tradeState.timeDecay?.notes || []));
+  rotation.push(...(tradeState.rotation || []).map((item) =>
+    `${item.score}: ${item.action}，公允 ${formatPercent(item.liveProbability)}，当前 ${formatCents(item.marketPrice)}，edge ${formatPercent(item.edge)}；${item.nextGoalImpact}`
+  ));
 
   takeProfit.push(`到达中间比分或目标比分时，若价格较买入价上涨 60%-100%，先卖出一部分回本金。`);
   takeProfit.push(`如果已经形成 ${context.targetText}，不要再把它当买点；改看是否能对冲下一球风险。`);
@@ -5058,6 +5378,9 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
   } else {
     warnings.push("现场技术统计不足，不能把补仓建议升为强信号。");
   }
+  if (tradeState.remainingModel?.notes?.length) {
+    evidence.push(...tradeState.remainingModel.notes.slice(0, 2));
+  }
   if (context.favoriteTrailing) {
     evidence.push(`强队落后/未领先场景：如果强队持续压制，市场可能过度惩罚强队追回路径。`);
   }
@@ -5072,12 +5395,17 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
     mode: "correct-score-path-trading",
     stance,
     context,
-    summary: `${stance.label}：${context.scoreText} -> ${context.targetText}，还差 ${context.goalsNeeded} 球，剩余约 ${context.remainingMinutes} 分钟。`,
+    tradeState,
+    summary: `${stance.label}：${context.scoreText} -> ${context.targetText}，还差 ${context.goalsNeeded} 球，剩余约 ${context.remainingMinutes} 分钟；${tradeState.positionAdvice?.label || "按路径管理"}。`,
     entry: [...new Set(entry)].slice(0, 4),
+    position: [...new Set(position.filter(Boolean))].slice(0, 5),
     add: [...new Set(add)].slice(0, 5),
     takeProfit: [...new Set(takeProfit)].slice(0, 4),
     stopLoss: [...new Set(stopLoss)].slice(0, 4),
     hedge: [...new Set(hedge)].slice(0, 4),
+    nextGoal: [...new Set(nextGoal.filter(Boolean))].slice(0, 4),
+    timeDecay: [...new Set(timeDecay.filter(Boolean))].slice(0, 4),
+    rotation: [...new Set(rotation.filter(Boolean))].slice(0, 6),
     evidence: [...new Set(evidence.filter(Boolean))].slice(0, 4),
     warnings: [...new Set(warnings.filter(Boolean))].slice(0, 4),
     forbidden: [...new Set(forbidden.filter(Boolean))].slice(0, 5),
@@ -5111,8 +5439,8 @@ function parseTotalLineFromRecommendation(rec) {
 }
 
 function impossibleByCurrentScore(rec, live) {
-  const homeScore = Number(live?.score?.home);
-  const awayScore = Number(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
   const totalGoals = homeScore + awayScore;
   const totalLine = parseTotalLineFromRecommendation(rec);
@@ -5159,8 +5487,8 @@ function impossibleByCurrentScore(rec, live) {
 }
 
 function longTailByCurrentScore(rec, live, liveProbability) {
-  const homeScore = Number(live?.score?.home);
-  const awayScore = Number(live?.score?.away);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
   if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return null;
   if (rec.marketType !== "moneyline") return null;
   const elapsed = elapsedMinuteFromLive(live, null);
@@ -5278,8 +5606,10 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
 }
 
 function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality) {
-  const baseRows = match.correctScoreRecommendations?.rows || buildCorrectScoreRecommendations(match).rows || [];
-  if (!baseRows.length || dataQuality.status === "missing") return [];
+  const fullCorrectScore = buildCorrectScoreRecommendations(match, { limit: 32 });
+  const cachedRows = match.correctScoreRecommendations?.rows || [];
+  const baseRows = fullCorrectScore.rows?.length ? fullCorrectScore.rows : cachedRows;
+  if (!baseRows.length || dataQuality.status === "missing" || dataQuality.status === "pre") return [];
   return baseRows
     .map((row) => {
       const currentScoreGate = matchCurrentScoreGate({
@@ -5347,9 +5677,15 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
         excluded: Boolean(currentScoreGate?.blocked || strategy.tier === "avoid"),
         excludedReason: currentScoreGate?.reason || "",
         source: row.source || "Polymarket Correct Score",
+        marketSlug: row.marketSlug || "",
+        eventSlug: row.eventSlug || "",
+        marketId: row.marketId || "",
+        conditionId: row.conditionId || "",
+        tokenId: row.tokenId || "",
         strategy,
         risks
       };
+      liveRow.tradeState = buildScorePathTradeState(liveRow, match, live, liveModel, dataQuality, baseRows);
       liveRow.pathPlan = buildCorrectScorePathPlan(liveRow, match, live, liveModel, dataQuality, action);
       liveRow.risks = [
         ...(liveRow.pathPlan?.warnings || []),
@@ -5359,6 +5695,12 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
     })
     .filter((row) => typeof row.liveProbability === "number")
     .sort((a, b) => {
+      const aCtx = a.tradeState?.context || {};
+      const bCtx = b.tradeState?.context || {};
+      const currentDiff = Number(Boolean(bCtx.targetReached)) - Number(Boolean(aCtx.targetReached));
+      if (currentDiff) return currentDiff;
+      const neededDiff = (aCtx.goalsNeeded ?? 9) - (bCtx.goalsNeeded ?? 9);
+      if (neededDiff) return neededDiff;
       const actionScore = Number(b.canConsider) - Number(a.canConsider);
       if (actionScore) return actionScore;
       const excludedScore = Number(a.excluded) - Number(b.excluded);
@@ -5397,19 +5739,24 @@ function buildLiveRecommendationSummary(match, live, recommendations, dataQualit
       reasons: dataQuality.reasons || []
     };
   }
-  const correctScoreActionable = correctScoreRecommendations.find((rec) => rec.canConsider);
-  if (correctScoreActionable) {
-    const plan = correctScoreActionable.pathPlan || {};
+  const correctScoreFocus = correctScoreRecommendations.find((rec) => rec.pathPlan?.context?.targetReached)
+    || correctScoreRecommendations.find((rec) => rec.canConsider)
+    || correctScoreRecommendations.find((rec) => rec.pathPlan?.tradeState?.positionAdvice?.addPct > 0)
+    || null;
+  if (correctScoreFocus) {
+    const plan = correctScoreFocus.pathPlan || {};
     return {
       action: "watch",
-      title: `实时球胆观察：${correctScoreActionable.score}`,
-      summary: `${plan.summary || `${correctScoreActionable.score} 当前 ${formatCents(correctScoreActionable.marketPrice)}，实时模型 ${formatPercent(correctScoreActionable.liveProbability)}，edge ${formatPercent(correctScoreActionable.edge)}，建议上限 ${formatCents(correctScoreActionable.maxBuyPrice)}。`} 当前价 ${formatCents(correctScoreActionable.marketPrice)}，建议上限 ${formatCents(correctScoreActionable.maxBuyPrice)}。`,
+      title: `实时球胆路径：${correctScoreFocus.score}`,
+      summary: `${plan.summary || `${correctScoreFocus.score} 当前 ${formatCents(correctScoreFocus.marketPrice)}，实时模型 ${formatPercent(correctScoreFocus.liveProbability)}，edge ${formatPercent(correctScoreFocus.edge)}，建议上限 ${formatCents(correctScoreFocus.maxBuyPrice)}。`} 当前价 ${formatCents(correctScoreFocus.marketPrice)}，建议上限 ${formatCents(correctScoreFocus.maxBuyPrice)}。`,
       reasons: [
         ...(plan.entry || []).slice(0, 1),
+        ...(plan.position || []).slice(0, 1),
+        ...(plan.nextGoal || []).slice(0, 1),
         ...(plan.add || []).slice(0, 1),
         ...(plan.takeProfit || []).slice(0, 1),
         ...(liveModel.notes || []).slice(0, 2),
-        ...(correctScoreActionable.risks || []).slice(0, 2)
+        ...(correctScoreFocus.risks || []).slice(0, 2)
       ].filter(Boolean).slice(0, 5)
     };
   }

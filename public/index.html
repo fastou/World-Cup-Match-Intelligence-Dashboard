@@ -1446,6 +1446,52 @@
         font-variant-numeric: tabular-nums;
       }
 
+      .live-path-position {
+        display: grid;
+        grid-template-columns: 1.2fr repeat(3, minmax(70px, 0.45fr));
+        gap: 6px;
+      }
+
+      .live-path-position span {
+        display: grid;
+        gap: 3px;
+        padding: 8px;
+        border: 1px solid #e7ebe5;
+        border-radius: 8px;
+        background: #fbfcfa;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .live-path-position strong {
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .live-path-rotation {
+        display: grid;
+        gap: 6px;
+      }
+
+      .live-path-rotation-row {
+        display: grid;
+        grid-template-columns: 52px repeat(3, minmax(0, 1fr)) 1.2fr;
+        gap: 6px;
+        align-items: center;
+        padding: 7px;
+        border: 1px solid #e7ebe5;
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .live-path-rotation-row strong {
+        color: var(--ink);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+
       .live-plan-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1481,6 +1527,8 @@
       @media (max-width: 760px) {
         .live-score-path-head,
         .live-score-path-metrics,
+        .live-path-position,
+        .live-path-rotation-row,
         .live-plan-grid {
           grid-template-columns: 1fr;
         }
@@ -3329,7 +3377,21 @@
         if (currentLang !== "en" || !text) return text || "";
         return String(text)
           .replace(/实时球胆观察/g, "Live correct-score watch")
+          .replace(/实时球胆路径/g, "Live correct-score path")
+          .replace(/已到目标，卖一半留尾仓/g, "Target reached: sell part, keep a tail")
+          .replace(/已到目标，价格偏高先锁利/g, "Target reached and price rich; lock profit first")
           .replace(/已到目标，先止盈/g, "Target reached, take profit first")
+          .replace(/只差一球且压制，分批观察/g, "One-goal path with pressure; scale only in parts")
+          .replace(/可以用小仓等下一球路径/g, "Tiny stake can wait for the next-goal path")
+          .replace(/只小仓观察/g, "Tiny watch only")
+          .replace(/两球路径，仅极小试探/g, "Two-goal path; tiny probe only")
+          .replace(/有价格差但不补仓/g, "Positive spread but do not add")
+          .replace(/时间不足，不追/g, "Too little time, do not chase")
+          .replace(/价格\/下一球风险偏高：先锁大部分/g, "Price/next-goal risk is high: lock most of it")
+          .replace(/模型仍支持：卖一部分，保留时间衰减价值/g, "Model still supports it: trim part, keep time-decay value")
+          .replace(/临近终场：保留比分时间衰减/g, "Late game: keep scoreline time-decay value")
+          .replace(/已到目标：回收本金，留尾仓/g, "Target reached: recover stake, keep a tail")
+          .replace(/不主动处理/g, "No proactive action")
           .replace(/强队落后压制，可分批/g, "Strong side trails but controls play; scale in only in parts")
           .replace(/压制路径，小注观察/g, "Pressure path; tiny watch")
           .replace(/有 edge，小注观察/g, "Positive edge; tiny watch")
@@ -3340,9 +3402,19 @@
           .replace(/等待现场统计/g, "Wait for live stats")
           .replace(/不追/g, "Do not chase")
           .replace(/当前已经是/g, "Current score is already")
+          .replace(/核心问题是卖多少、留多少/g, "the key is how much to sell and how much to keep")
           .replace(/这不是新买点/g, "this is not a new entry")
           .replace(/优先卖出\/对冲/g, "prioritize selling/hedging")
           .replace(/至少回收本金/g, "at least recover stake")
+          .replace(/持仓处理/g, "Position handling")
+          .replace(/先卖/g, "sell")
+          .replace(/左右/g, "approximately")
+          .replace(/保留/g, "keep")
+          .replace(/吃时间衰减/g, "to benefit from time decay")
+          .replace(/不要一次全卖或全留/g, "do not sell all or hold all at once")
+          .replace(/未持有\/想补仓/g, "If not holding / considering add")
+          .replace(/最多动用该场球胆预算/g, "use at most this share of the match correct-score budget")
+          .replace(/等待下一次刷新确认/g, "wait for the next refresh to confirm")
           .replace(/还需要/g, "needs")
           .replace(/还差/g, "still needs")
           .replace(/剩余约/g, "about")
@@ -3359,6 +3431,19 @@
           .replace(/不要因为赔率变大就摊平/g, "do not average down just because odds get bigger")
           .replace(/进球后不要继续加仓/g, "do not keep adding after the goal")
           .replace(/改成止盈或对冲/g, "switch to taking profit or hedging")
+          .replace(/下一球/g, "next goal")
+          .replace(/路径增强/g, "strengthens the path")
+          .replace(/路径被杀死/g, "kills the path")
+          .replace(/任意/g, "any")
+          .replace(/都会让/g, "will make")
+          .replace(/失效/g, "invalid")
+          .replace(/持有的是“无下一球”路径/g, "you are holding the no-next-goal path")
+          .replace(/无进球概率约/g, "no-goal probability around")
+          .replace(/无进球会抬高当前比分/g, "no goal lifts the current scoreline")
+          .replace(/时间流逝会压低该比分/g, "time decay lowers this scoreline")
+          .replace(/必须依赖目标方/g, "it depends on the target side's")
+          .replace(/剩余进球强度约/g, "remaining goal intensity around")
+          .replace(/总 hazard/g, "total hazard")
           .replace(/到达中间比分或目标比分时/g, "when an intermediate or target score is reached")
           .replace(/先卖出一部分回本金/g, "sell part first to recover stake")
           .replace(/连续 10-12 分钟没有射正\/危险进攻/g, "if there are no shots on target/dangerous attacks for 10-12 minutes")
@@ -4896,17 +4981,62 @@
           : `<ul><li>${escapeHtml(currentLang === "en" ? "No extra rule." : "暂无额外规则。")}</li></ul>`;
       }
 
+      function fmtPctInt(value) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        return `${Math.round(value)}%`;
+      }
+
+      function renderLivePathPosition(tradeState = {}) {
+        const advice = tradeState.positionAdvice || {};
+        return `
+          <div class="live-path-position">
+            <span>${escapeHtml(currentLang === "en" ? "Position action" : "持仓动作")}<strong>${escapeHtml(translateLivePlanText(advice.label || "-"))}</strong></span>
+            <span>${escapeHtml(currentLang === "en" ? "Trim" : "卖出")}<strong>${escapeHtml(fmtPctInt(advice.trimPct))}</strong></span>
+            <span>${escapeHtml(currentLang === "en" ? "Keep" : "保留")}<strong>${escapeHtml(fmtPctInt(advice.keepPct))}</strong></span>
+            <span>${escapeHtml(currentLang === "en" ? "Add cap" : "补仓上限")}<strong>${escapeHtml(fmtPctInt(advice.addPct))}</strong></span>
+          </div>
+        `;
+      }
+
+      function renderLivePathRotation(tradeState = {}) {
+        const rows = (tradeState.rotation || []).slice(0, 4);
+        if (!rows.length) return "";
+        return `
+          <div class="live-path-rotation">
+            ${rows.map((row) => `
+              <div class="live-path-rotation-row">
+                <strong>${escapeHtml(row.score || "-")}</strong>
+                <span>${escapeHtml(currentLang === "en" ? "Fair" : "公允")} ${escapeHtml(fmtPct(row.liveProbability))}</span>
+                <span>${escapeHtml(currentLang === "en" ? "Price" : "当前")} ${escapeHtml(fmtPrice(row.marketPrice))}</span>
+                <span>Edge ${escapeHtml(fmtEdge(row.edge))}</span>
+                <span>${escapeHtml(translateLivePlanText(row.nextGoalImpact || row.action || ""))}</span>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
       function renderLiveCorrectScoreCard(rec) {
         const plan = rec.pathPlan || {};
         const stance = plan.stance || {};
+        const tradeState = plan.tradeState || rec.tradeState || {};
+        const remainingModel = tradeState.remainingModel || {};
+        const timeDecay = tradeState.timeDecay || {};
         const metrics = [
           [currentLang === "en" ? "Live model" : "实时模型", fmtPct(rec.liveProbability)],
           [currentLang === "en" ? "Price" : "当前价", fmtPrice(rec.marketPrice)],
           ["Edge", fmtEdge(rec.edge)],
-          [currentLang === "en" ? "Limit" : "建议上限", fmtPrice(rec.maxBuyPrice)]
+          [currentLang === "en" ? "Limit" : "建议上限", fmtPrice(rec.maxBuyPrice)],
+          [currentLang === "en" ? "Rem xG" : "剩余xG", `${fmtNumber(remainingModel.homeLambda, 2)}-${fmtNumber(remainingModel.awayLambda, 2)}`],
+          [currentLang === "en" ? "No goal 5m" : "5分钟无球", fmtPct(timeDecay.noGoal5)],
+          [currentLang === "en" ? "No goal 10m" : "10分钟无球", fmtPct(timeDecay.noGoal10)],
+          [currentLang === "en" ? "Path" : "路径", `${tradeState.context?.scoreText || "-"} → ${tradeState.context?.targetText || rec.score || "-"}`]
         ];
         const planBlocks = [
-          [currentLang === "en" ? "Now" : "现在怎么做", plan.entry || []],
+          [currentLang === "en" ? "If already holding" : "如果已持有", plan.position || []],
+          [currentLang === "en" ? "New entry" : "未持有/新买", plan.entry || []],
+          [currentLang === "en" ? "Next goal impact" : "下一球冲击", plan.nextGoal || []],
+          [currentLang === "en" ? "Time decay" : "时间衰减", plan.timeDecay || []],
           [currentLang === "en" ? "Scale-in trigger" : "补仓触发", plan.add || []],
           [currentLang === "en" ? "Take profit" : "止盈", plan.takeProfit || []],
           [currentLang === "en" ? "Stop / no chase" : "止损 / 禁止", [...(plan.stopLoss || []), ...(plan.forbidden || []).slice(0, 2)]],
@@ -4926,6 +5056,8 @@
             <div class="live-score-path-metrics">
               ${metrics.map(([label, value]) => `<span>${escapeHtml(label)}<strong>${escapeHtml(value)}</strong></span>`).join("")}
             </div>
+            ${renderLivePathPosition(tradeState)}
+            ${renderLivePathRotation(tradeState)}
             <div class="live-plan-grid">
               ${planBlocks.map(([title, items]) => `
                 <div class="live-plan-block">

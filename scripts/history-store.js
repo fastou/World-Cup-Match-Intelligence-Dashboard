@@ -1163,7 +1163,11 @@ async function recordLiveMatchSnapshot(payload) {
   if (!liveSnapshotId) return { liveSnapshotId: null };
 
   const recOps = [];
-  for (const rec of payload.recommendations || []) {
+  const liveRecommendations = [
+    ...(payload.recommendations || []),
+    ...(payload.correctScoreRecommendations || [])
+  ];
+  for (const rec of liveRecommendations) {
     recOps.push({
       sql:
       `INSERT INTO inplay_recommendation_snapshots
