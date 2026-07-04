@@ -3,7 +3,7 @@
 Target URL:
 
 ```text
-http://3.252.137.211/worldcup/
+http://38.180.28.12/worldcup/
 ```
 
 The app is ready to run under `/worldcup`:
@@ -100,6 +100,6 @@ Health checks:
 
 ```bash
 curl http://127.0.0.1:4174/worldcup/api/health
-curl http://3.252.137.211/worldcup/api/health
-curl 'http://3.252.137.211/worldcup/api/dashboard?force=1'
+curl http://38.180.28.12/worldcup/api/health
+curl 'http://38.180.28.12/worldcup/api/dashboard?force=1'
 ```

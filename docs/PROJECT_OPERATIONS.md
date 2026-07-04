@@ -1,5 +1,7 @@
 # World Cup Match Intelligence Dashboard - 项目与部署说明
 
+> 历史旧版文档：这份文档保留早期 AWS 部署记录，里面的 `54.154.222.197` 已不是生产服务器。当前生产服务器是 `38.180.28.12`，请优先查看 `docs/PROJECT_OPERATIONS_ZH.md`。
+
 最后核验时间：2026-06-12 23:51 Asia/Shanghai  
 当前线上地址：http://54.154.222.197/worldcup/
 

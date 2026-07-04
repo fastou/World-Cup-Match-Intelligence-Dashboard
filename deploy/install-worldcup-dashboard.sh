@@ -47,4 +47,4 @@ echo "Next: paste deploy/nginx-worldcup.conf into the active nginx server block,
 echo "  sudo nginx -t && sudo systemctl reload nginx"
 echo
 echo "Target:"
-echo "  http://3.252.137.211/worldcup/"
+echo "  http://38.180.28.12/worldcup/"
