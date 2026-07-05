@@ -1580,6 +1580,21 @@
         line-height: 1.45;
       }
 
+      .position-status {
+        min-height: 18px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .position-status.good {
+        color: var(--green);
+      }
+
+      .position-status.bad {
+        color: #a33a33;
+      }
+
       .position-list {
         display: grid;
         gap: 8px;
@@ -5479,9 +5494,70 @@
               <button class="position-add" type="button" data-position-add="${escapeHtml(match.id)}">${escapeHtml(currentLang === "en" ? "Add" : "添加")}</button>
             </div>
             <div class="position-hint">${escapeHtml(currentLang === "en" ? "Tip: use decimal prices such as 0.545. The tool reads live score, stats and current market prices when available." : "提示：价格填 0.545 这种小数。工具会结合实时比分、攻防统计和当前盘口价给出持有/止盈/减仓/补仓上限。")}</div>
+            <div class="position-status" data-position-status="${escapeHtml(match.id)}"></div>
             <div class="position-list">${cards}</div>
           </section>
         `;
+      }
+
+      function setPositionStatus(manager, message, tone = "") {
+        const status = manager?.querySelector("[data-position-status]");
+        if (!status) return;
+        status.textContent = message || "";
+        status.classList.toggle("good", tone === "good");
+        status.classList.toggle("bad", tone === "bad");
+      }
+
+      function currentPositionFormState(manager) {
+        const matchId = manager?.dataset.positionManager;
+        const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
+        const select = manager?.querySelector("[data-position-market]");
+        const entryInput = manager?.querySelector("[data-position-entry]");
+        const amountInput = manager?.querySelector("[data-position-amount]");
+        const market = match ? availablePositionMarkets(match).find((item) => item.key === select?.value) : null;
+        const entryPrice = Number(entryInput?.value);
+        const amount = Number(amountInput?.value);
+        return { matchId, match, select, entryInput, amountInput, market, entryPrice, amount };
+      }
+
+      function addUserPositionFromManager(manager, button = null) {
+        const { matchId, match, entryInput, amountInput, market, entryPrice, amount } = currentPositionFormState(manager);
+        if (!matchId || !match) {
+          setPositionStatus(manager, currentLang === "en" ? "Match data is not loaded yet." : "比赛数据还没有加载完成。", "bad");
+          return false;
+        }
+        if (!market) {
+          setPositionStatus(manager, currentLang === "en" ? "Please choose a market." : "请选择一个盘口。", "bad");
+          return false;
+        }
+        if (!Number.isFinite(entryPrice) || entryPrice <= 0 || entryPrice > 1.5) {
+          setPositionStatus(manager, currentLang === "en" ? "Entry price must be a decimal such as 0.545." : "买入价要填 0.545 这种小数。", "bad");
+          return false;
+        }
+        if (!Number.isFinite(amount) || amount <= 0) {
+          setPositionStatus(manager, currentLang === "en" ? "Stake must be greater than 0." : "投入金额必须大于 0。", "bad");
+          return false;
+        }
+        const position = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          marketKey: market.key,
+          marketType: market.type,
+          marketName: compactMarketLabel(market),
+          score: market.type === "correctScore" ? market.name : "",
+          entryPrice,
+          amount,
+          createdAt: new Date().toISOString()
+        };
+        setUserPositionsForMatch(matchId, [...userPositionsForMatch(matchId), position]);
+        if (entryInput) entryInput.value = "";
+        if (amountInput) amountInput.value = "";
+        setPositionStatus(manager, currentLang === "en" ? "Added. Recalculating live management..." : "已添加，正在重算持仓建议。", "good");
+        if (button) {
+          button.textContent = currentLang === "en" ? "Added" : "已添加";
+          setTimeout(() => { button.textContent = currentLang === "en" ? "Add" : "添加"; }, 900);
+        }
+        updateLivePanel(matchId);
+        return true;
       }
 
       function renderLiveCorrectScoreCard(rec) {
@@ -6551,51 +6627,36 @@
             }
           });
         });
-        document.querySelectorAll("[data-position-add]").forEach((button) => {
-          if (button.dataset.positionWired === "1") return;
-          button.dataset.positionWired = "1";
-          button.addEventListener("click", () => {
-            const manager = button.closest("[data-position-manager]");
-            const matchId = manager?.dataset.positionManager || button.dataset.positionAdd;
-            const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
-            if (!match) return;
-            const select = manager?.querySelector("[data-position-market]");
-            const entryInput = manager?.querySelector("[data-position-entry]");
-            const amountInput = manager?.querySelector("[data-position-amount]");
-            const market = availablePositionMarkets(match).find((item) => item.key === select?.value);
-            const entryPrice = Number(entryInput?.value);
-            const amount = Number(amountInput?.value);
-            if (!market || !Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(amount) || amount <= 0) {
-              button.textContent = currentLang === "en" ? "Check input" : "检查输入";
-              setTimeout(() => { button.textContent = currentLang === "en" ? "Add" : "添加"; }, 1200);
-              return;
-            }
-            const position = {
-              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              marketKey: market.key,
-              marketType: market.type,
-              marketName: compactMarketLabel(market),
-              score: market.type === "correctScore" ? market.name : "",
-              entryPrice,
-              amount,
-              createdAt: new Date().toISOString()
-            };
-            setUserPositionsForMatch(matchId, [...userPositionsForMatch(matchId), position]);
-            if (entryInput) entryInput.value = "";
-            if (amountInput) amountInput.value = "";
-            updateLivePanel(matchId);
-          });
-        });
-        document.querySelectorAll("[data-position-remove]").forEach((button) => {
-          if (button.dataset.positionWired === "1") return;
-          button.dataset.positionWired = "1";
-          button.addEventListener("click", () => {
-            const card = button.closest("[data-position-manager]");
-            const matchId = card?.dataset.positionManager;
+      }
+
+      function wirePositionManagerDelegates() {
+        if (document.body.dataset.positionDelegatesWired === "1") return;
+        document.body.dataset.positionDelegatesWired = "1";
+        document.addEventListener("click", (event) => {
+          const addButton = event.target.closest?.("[data-position-add]");
+          if (addButton) {
+            event.preventDefault();
+            addUserPositionFromManager(addButton.closest("[data-position-manager]"), addButton);
+            return;
+          }
+          const removeButton = event.target.closest?.("[data-position-remove]");
+          if (removeButton) {
+            event.preventDefault();
+            const manager = removeButton.closest("[data-position-manager]");
+            const matchId = manager?.dataset.positionManager;
             if (!matchId) return;
-            setUserPositionsForMatch(matchId, userPositionsForMatch(matchId).filter((item) => item.id !== button.dataset.positionRemove));
+            setUserPositionsForMatch(matchId, userPositionsForMatch(matchId).filter((item) => item.id !== removeButton.dataset.positionRemove));
             updateLivePanel(matchId);
-          });
+          }
+        });
+        document.addEventListener("change", (event) => {
+          const select = event.target.closest?.("[data-position-market]");
+          if (!select) return;
+          const manager = select.closest("[data-position-manager]");
+          const { market, entryInput } = currentPositionFormState(manager);
+          if (entryInput && market && typeof market.marketPrice === "number" && !entryInput.value) {
+            entryInput.value = market.marketPrice.toFixed(3);
+          }
         });
       }
 
@@ -6708,6 +6769,7 @@
         renderEliteTradersPanel(data.eliteTraders);
         document.getElementById("matches").innerHTML = renderMatchTabs(data.matches);
         translateRenderedContent(document.body);
+        wirePositionManagerDelegates();
         wireMatchTabs();
         wireTabs();
         wireLivePanels();
