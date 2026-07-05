@@ -31,6 +31,7 @@ const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const LIGHT_CACHE_TTL_MS = 60 * 1000;
 const LIGHT_CACHE_STABILITY_MAX_AGE_MS = Number(process.env.LIGHT_CACHE_STABILITY_MAX_AGE_MS || 30 * 60 * 1000);
+const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 8000);
 const FETCH_TIMEOUT_MS = 6500;
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 4000);
@@ -12841,6 +12842,44 @@ function payloadCacheAgeMs(payload) {
   return Number.isFinite(generatedAt) ? Math.max(0, Date.now() - generatedAt) : Infinity;
 }
 
+function decorateCachedDashboard(payload, { fallbackMode = false } = {}) {
+  const generatedAt = Date.parse(payload?.meta?.generatedAt || "") || 0;
+  const staleMs = generatedAt ? Date.now() - generatedAt : Infinity;
+  return {
+    ...payload,
+    meta: {
+      ...(payload?.meta || {}),
+      servedFromCache: true,
+      fallbackMode: Boolean(fallbackMode),
+      backgroundRefresh: Boolean(backgroundRefreshPromise),
+      cacheAgeSeconds: generatedAt ? Math.max(0, Math.round(staleMs / 1000)) : null
+    }
+  };
+}
+
+function pendingDashboardPayload({ error = "" } = {}) {
+  return {
+    meta: {
+      ok: false,
+      tournament: "2026 FIFA 世界杯",
+      generatedAt: new Date().toISOString(),
+      lightMode: true,
+      servedFromCache: false,
+      fallbackMode: true,
+      backgroundRefresh: Boolean(backgroundRefreshPromise),
+      error: error || "Dashboard data is refreshing. Try again shortly."
+    },
+    sources: [{
+      source: "dashboard-cache",
+      ok: false,
+      error: error || "数据正在刷新，暂时没有可用缓存。"
+    }],
+    matches: [],
+    schedule: { ok: false, error: "数据正在刷新" },
+    polymarket: { ok: false, error: "数据正在刷新" }
+  };
+}
+
 function shouldKeepExistingLightCache(nextPayload, previousPayload) {
   if (!previousPayload?.matches?.length || !nextPayload?.matches?.length) return false;
   if (payloadCacheAgeMs(previousPayload) > LIGHT_CACHE_STABILITY_MAX_AGE_MS) return false;
@@ -13549,31 +13588,32 @@ const server = http.createServer(async (req, res) => {
       const force = url.searchParams.get("force") === "1";
       const light = url.searchParams.get("light") === "1";
       const recordHistory = url.searchParams.get("skipHistory") !== "1";
-      if (light && !force) {
+      if (!force) {
         const cached = await getPersistedLightCache();
         if (cached) {
           const generatedAt = Date.parse(cached.meta?.generatedAt || "") || 0;
           const staleMs = Date.now() - generatedAt;
           if (staleMs > LIGHT_CACHE_TTL_MS) scheduleBackgroundLightRefresh();
-          jsonResponse(res, 200, {
-            ...cached,
-            meta: {
-              ...(cached.meta || {}),
-              servedFromCache: true,
-              backgroundRefresh: Boolean(backgroundRefreshPromise),
-              cacheAgeSeconds: generatedAt ? Math.max(0, Math.round(staleMs / 1000)) : null
-            }
-          });
+          jsonResponse(res, 200, decorateCachedDashboard(cached));
           return;
         }
       }
-      jsonResponse(res, 200, await buildDashboard({
+      const dashboardResult = await withTimeout(buildDashboard({
         force,
         recordHistory: recordHistory && !light,
         includeElite: !light,
         includeOpenAi: !light,
         light
-      }));
+      }), DASHBOARD_REQUEST_TIMEOUT_MS, "dashboard build");
+      if (dashboardResult?.ok === false && dashboardResult?.error) {
+        scheduleBackgroundLightRefresh();
+        const cached = await getPersistedLightCache();
+        jsonResponse(res, cached ? 200 : 202, cached
+          ? decorateCachedDashboard(cached, { fallbackMode: true })
+          : pendingDashboardPayload({ error: translateError(dashboardResult.error) }));
+        return;
+      }
+      jsonResponse(res, 200, dashboardResult);
       return;
     }
     if (pathname === "/api/opportunities") {
