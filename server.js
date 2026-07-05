@@ -2850,7 +2850,7 @@ function buildRecommendations(match, probabilities) {
       };
     })
     .map((row) => applyReviewDiscipline(row, match))
-    .sort((a, b) => (b.edge ?? -9) - (a.edge ?? -9));
+    .sort((a, b) => ((b.disciplinedEdge ?? b.edge) ?? -9) - ((a.disciplinedEdge ?? a.edge) ?? -9));
 }
 
 function parseCorrectScoreMarket(market) {
@@ -3542,14 +3542,25 @@ function probabilityRows(match) {
       marketPrice: match.manualMarkets?.moneyline?.away
     }
   );
-  return rows.map((row) => ({
-    ...row,
-    marketType: row.marketType || recommendationsByKey.get(row.key)?.marketType || "",
-    marketTypeLabel: row.marketTypeLabel || recommendationsByKey.get(row.key)?.marketTypeLabel || "",
-    marketPrice: recommendationsByKey.get(row.key)?.chart?.currentPrice ?? recommendationsByKey.get(row.key)?.marketPrice ?? row.marketPrice,
-    marketSource: recommendationsByKey.get(row.key)?.chart?.source || "",
-    edge: edge(row.probability, recommendationsByKey.get(row.key)?.chart?.currentPrice ?? recommendationsByKey.get(row.key)?.marketPrice ?? row.marketPrice)
-  }));
+  return rows.map((row) => {
+    const recommendation = recommendationsByKey.get(row.key);
+    const marketPrice = recommendation?.chart?.currentPrice ?? recommendation?.marketPrice ?? row.marketPrice;
+    const rawEdge = edge(row.probability, marketPrice);
+    const disciplinedEdge = typeof recommendation?.disciplinedEdge === "number"
+      ? recommendation.disciplinedEdge
+      : null;
+    return {
+      ...row,
+      marketType: row.marketType || recommendation?.marketType || "",
+      marketTypeLabel: row.marketTypeLabel || recommendation?.marketTypeLabel || "",
+      marketPrice,
+      marketSource: recommendation?.chart?.source || "",
+      edge: rawEdge,
+      disciplinedEdge,
+      displayEdge: typeof disciplinedEdge === "number" ? disciplinedEdge : rawEdge,
+      reviewDiscipline: recommendation?.reviewDiscipline || null
+    };
+  });
 }
 
 function teamRankLabel(team, fallbackCode = "") {
@@ -3582,27 +3593,31 @@ function aiPredictionMarketRead(top, rows) {
   if (top?.marketType === "advance") {
     const regulationRows = rows.filter((row) => row.marketType === "moneyline");
     const regulationTop = regulationRows.sort((a, b) => b.probability - a.probability)[0];
+    const topEdge = typeof top.displayEdge === "number" ? top.displayEdge : top.edge;
     const advanceText = typeof top.marketPrice === "number"
-      ? `${top.label} 晋级价 ${formatPercent(top.marketPrice)}，edge ${formatPercent(top.edge)}`
+      ? `${top.label} 晋级价 ${formatPercent(top.marketPrice)}，纪律后 edge ${formatPercent(topEdge)}`
       : `${top.label} 晋级实时价格缺失`;
     return `${advanceText}。注意：晋级盘包含加时/点球；90分钟胜平负最高项是 ${regulationTop?.label || "-"} ${formatPercent(regulationTop?.probability)}，不能直接互相替代。`;
   }
   if (!top || typeof top.marketPrice !== "number") {
     return "对应胜平负实时价格缺失，盘口只作为概率展示，不给价格判断。";
   }
-  if (typeof top.edge !== "number") {
+  const topEdge = typeof top.displayEdge === "number" ? top.displayEdge : top.edge;
+  if (typeof topEdge !== "number") {
     return `${top.label} 价格 ${formatPercent(top.marketPrice)}，edge 暂不可算。`;
   }
-  if (top.edge >= 0.035) {
-    return `市场价格支持模型方向：${top.label} 模型 ${formatPercent(top.probability)}，价格 ${formatPercent(top.marketPrice)}，edge ${formatPercent(top.edge)}。`;
+  if (topEdge >= 0.035) {
+    return `市场价格支持模型方向：${top.label} 模型 ${formatPercent(top.probability)}，价格 ${formatPercent(top.marketPrice)}，纪律后 edge ${formatPercent(topEdge)}。`;
   }
-  if (top.edge > 0) {
-    return `市场略低估模型方向，但优势很薄：${top.label} edge ${formatPercent(top.edge)}。`;
+  if (topEdge > 0) {
+    return `市场略低估模型方向，但优势很薄：${top.label} 纪律后 edge ${formatPercent(topEdge)}。`;
   }
-  const betterRows = rows.filter((row) => typeof row.edge === "number" && row.edge > 0).sort((a, b) => b.edge - a.edge);
+  const betterRows = rows
+    .filter((row) => typeof (row.displayEdge ?? row.edge) === "number" && (row.displayEdge ?? row.edge) > 0)
+    .sort((a, b) => (b.displayEdge ?? b.edge) - (a.displayEdge ?? a.edge));
   if (betterRows.length) {
     const best = betterRows[0];
-    return `模型最看好 ${top.label}，但当前价格不便宜（edge ${formatPercent(top.edge)}）；相对价格更友好的是 ${best.label}，edge ${formatPercent(best.edge)}。`;
+    return `模型最看好 ${top.label}，但当前价格不便宜（纪律后 edge ${formatPercent(topEdge)}）；相对价格更友好的是 ${best.label}，纪律后 edge ${formatPercent(best.displayEdge ?? best.edge)}。`;
   }
   return `模型最看好 ${top.label}，但当前胜平负价格没有明显正 edge。`;
 }
@@ -3816,7 +3831,9 @@ function buildAiPrediction(match) {
   if (modelSummary) reasons.push(modelSummary);
   reasons.push(aiPredictionCalibrationSummary(match));
   if (topRecommendation && typeof topRecommendation.edge === "number") {
-    reasons.push(`对应盘口 edge 为 ${(topRecommendation.edge * 100).toFixed(1)}%，当前动作：${topRecommendation.decision?.label || "观察"}。`);
+    const effectiveEdge = typeof topRecommendation.disciplinedEdge === "number" ? topRecommendation.disciplinedEdge : topRecommendation.edge;
+    const rawEdgeText = effectiveEdge !== topRecommendation.edge ? `（原始 ${(topRecommendation.edge * 100).toFixed(1)}%）` : "";
+    reasons.push(`对应盘口纪律后 edge 为 ${(effectiveEdge * 100).toFixed(1)}%${rawEdgeText}，当前动作：${topRecommendation.decision?.label || "观察"}。`);
   }
   if (context.aiAnalysis?.summary) {
     reasons.push(context.aiAnalysis.summary);
@@ -7194,8 +7211,11 @@ function buildRuleTradePlan(match) {
   const primaryCandidates = sortedPrimaryRecommendations(match);
   const actionable = sortedActionableRecommendations(match);
   const avoidRows = [...(match.recommendations || [])]
-    .filter((rec) => rec.decision?.action === "AVOID_OR_SELL" || (typeof rec.edge === "number" && rec.edge < -0.035))
-    .sort((a, b) => (a.edge || 0) - (b.edge || 0));
+    .filter((rec) => {
+      const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
+      return rec.decision?.action === "AVOID_OR_SELL" || (typeof edgeValue === "number" && edgeValue < -0.035);
+    })
+    .sort((a, b) => ((a.disciplinedEdge ?? a.edge) || 0) - ((b.disciplinedEdge ?? b.edge) || 0));
   const primary = primaryCandidates[0] || null;
   const secondary = actionable.filter((rec) => rec !== primary).slice(0, 3);
   const headline = primary
@@ -7241,6 +7261,8 @@ function buildRuleTradePlan(match) {
       marketPrice: primary.marketPrice,
       modelProbability: primary.modelProbability,
       edge: primary.edge,
+      disciplinedEdge: primary.disciplinedEdge,
+      reviewDiscipline: primary.reviewDiscipline,
       maxBuyPrice: primary.maxBuyPrice,
       decisionLabel: primary.decision?.label || "观察",
       source: primary.chart?.source || match.manualMarkets?.source || ""
@@ -7252,6 +7274,8 @@ function buildRuleTradePlan(match) {
       marketPrice: rec.marketPrice,
       modelProbability: rec.modelProbability,
       edge: rec.edge,
+      disciplinedEdge: rec.disciplinedEdge,
+      reviewDiscipline: rec.reviewDiscipline,
       maxBuyPrice: rec.maxBuyPrice,
       decisionLabel: rec.decision?.label || "观察"
     })),
@@ -7261,12 +7285,14 @@ function buildRuleTradePlan(match) {
       marketPrice: rec.marketPrice,
       modelProbability: rec.modelProbability,
       edge: rec.edge,
+      disciplinedEdge: rec.disciplinedEdge,
+      reviewDiscipline: rec.reviewDiscipline,
       reason: rec.decision?.label || "回避"
     })),
     summary: headline,
     entryText,
     rationale: primary ? [
-      `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，edge ${formatPercent(primary.edge)}${typeof primary.disciplinedEdge === "number" && primary.disciplinedEdge !== primary.edge ? `，复盘纪律后 ${formatPercent(primary.disciplinedEdge)}` : ""}。`,
+      `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，纪律后 edge ${formatPercent(primary.disciplinedEdge ?? primary.edge)}${typeof primary.disciplinedEdge === "number" && primary.disciplinedEdge !== primary.edge ? `（原始 ${formatPercent(primary.edge)}）` : ""}。`,
       ...(primary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
       primary.holderSummary?.count ? `该盘口公开持仓 ${primary.holderSummary.count} 人，Top holder ${primary.holderSummary.topHolder || "-"}。` : "",

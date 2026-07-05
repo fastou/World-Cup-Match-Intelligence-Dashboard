@@ -3057,6 +3057,7 @@
         "正向信号": "Positive signal",
         "强正向信号": "Strong positive signal",
         "AI综合预测": "AI Forecast",
+        "修正Edge": "Disciplined Edge",
         "盘口": "Public price",
         "参考": "Reference",
         "盘口缺失": "Price missing",
@@ -3371,6 +3372,20 @@
       const fmtEdge = (value) => {
         if (typeof value !== "number") return "-";
         return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
+      };
+
+      const effectiveEdge = (item) => {
+        if (!item || typeof item !== "object") return null;
+        return typeof item.disciplinedEdge === "number" ? item.disciplinedEdge : item.displayEdge ?? item.edge;
+      };
+
+      const edgeDetailText = (item) => {
+        const value = effectiveEdge(item);
+        if (typeof value !== "number") return "Edge -";
+        const changed = typeof item.edge === "number" && Math.abs(value - item.edge) > 0.0005;
+        const label = currentLang === "en" ? "Disciplined Edge" : "修正Edge";
+        const raw = currentLang === "en" ? "raw" : "原始";
+        return changed ? `${label} ${fmtEdge(value)} (${raw} ${fmtEdge(item.edge)})` : `Edge ${fmtEdge(value)}`;
       };
 
       function translateLivePlanText(text) {
@@ -4691,7 +4706,7 @@
         const selectedRow = rows.find((row) => row.key === prediction.key) || rows[0] || {};
         const marketPrefix = match.manualMarkets?.sourceType === "auto-baseline" ? "参考价" : "盘口";
         const selectedMarket = typeof selectedRow.marketPrice === "number" ? `${marketPrefix} ${fmtPct(selectedRow.marketPrice)}` : "盘口缺失";
-        const selectedEdge = typeof selectedRow.edge === "number" ? `Edge ${fmtPct(selectedRow.edge)}` : "Edge 缺失";
+        const selectedEdge = typeof effectiveEdge(selectedRow) === "number" ? edgeDetailText(selectedRow) : "Edge 缺失";
         const selectedSource = selectedRow.marketSource ? ` · ${selectedRow.marketSource}` : "";
         const restrictionText = prediction.restrictions?.length
           ? `限制：${prediction.restrictions.join("、")}`
@@ -4742,7 +4757,7 @@
                     <span class="prediction-row-label">${escapeHtml(row.marketTypeLabel ? `${row.marketTypeLabel} · ${row.label}` : row.label)}</span>
                     <strong>AI ${fmtPct(row.probability)}</strong>
                     <span class="prediction-market-line">${escapeHtml(row.marketSource === "Polymarket" ? "盘口" : marketPrefix)} ${fmtPct(row.marketPrice)}${row.marketSource ? ` · ${escapeHtml(row.marketSource)}` : ""}</span>
-                    <span class="prediction-edge ${typeof row.edge === "number" && row.edge > 0 ? "good" : typeof row.edge === "number" && row.edge < 0 ? "bad" : ""}">Edge ${fmtPct(row.edge)}</span>
+                    <span class="prediction-edge ${typeof effectiveEdge(row) === "number" && effectiveEdge(row) > 0 ? "good" : typeof effectiveEdge(row) === "number" && effectiveEdge(row) < 0 ? "bad" : ""}">${escapeHtml(edgeDetailText(row))}</span>
                   </div>
                 `).join("")}
               </div>
@@ -4824,7 +4839,7 @@
 
       function renderTradeRecLine(rec) {
         if (!rec) return "";
-        return `${rec.name || "-"} · 价格 ${fmtPrice(rec.marketPrice)} · 模型 ${fmtPct(rec.modelProbability)} · Edge ${fmtPct(rec.edge)} · 上限 ${fmtPrice(rec.maxBuyPrice)}`;
+        return `${rec.name || "-"} · 价格 ${fmtPrice(rec.marketPrice)} · 模型 ${fmtPct(rec.modelProbability)} · ${edgeDetailText(rec)} · 上限 ${fmtPrice(rec.maxBuyPrice)}`;
       }
 
       function renderAiTradePlan(match) {
@@ -4856,7 +4871,7 @@
               <div class="trade-plan-box">
                 <strong>次选/回避</strong>
                 <span>${secondary.length ? secondary.map(renderTradeRecLine).map(escapeHtml).join(" / ") : "无明确次选"}</span>
-                ${avoid.length ? `<div class="confidence-note">回避：${avoid.map((item) => `${item.name || "-"} ${fmtPrice(item.marketPrice)}，Edge ${fmtPct(item.edge)}`).map(escapeHtml).join(" / ")}</div>` : ""}
+                ${avoid.length ? `<div class="confidence-note">回避：${avoid.map((item) => `${item.name || "-"} ${fmtPrice(item.marketPrice)}，${edgeDetailText(item)}`).map(escapeHtml).join(" / ")}</div>` : ""}
               </div>
               <div class="trade-plan-box">
                 <strong>为什么</strong>
@@ -5365,6 +5380,7 @@
           ...group,
           rows: match.recommendations.filter((rec) => rec.marketType === group.type)
         })).filter((group) => group.rows.length).map((group) => {
+          group.rows.sort((a, b) => ((effectiveEdge(b) ?? -9) - (effectiveEdge(a) ?? -9)));
           const liveCount = group.rows.filter((rec) => rec.chart?.source === "Polymarket" && Array.isArray(rec.chart?.history) && rec.chart.history.length >= 2).length;
           return {
             ...group,
@@ -5404,7 +5420,7 @@
                   <div class="odds-pill">
                     <div class="odds-pill-name">${escapeHtml(rec.name)}</div>
                     <div class="odds-pill-price">${Math.round((rec.marketPrice || 0) * 100)}¢</div>
-                    <div class="odds-pill-detail">模型 ${fmtPct(rec.modelProbability)} · Edge ${fmtPct(rec.edge)} · ${fmtOdds(rec.odds)} · ${escapeHtml(rec.decision?.label || "观察")} · ${escapeHtml(rec.chart?.source || "无曲线")}</div>
+                    <div class="odds-pill-detail">模型 ${fmtPct(rec.modelProbability)} · ${escapeHtml(edgeDetailText(rec))} · ${fmtOdds(rec.odds)} · ${escapeHtml(rec.decision?.label || "观察")} · ${escapeHtml(rec.chart?.source || "无曲线")}</div>
                   </div>
                 `).join("")}
               </div>
@@ -5813,7 +5829,9 @@
       }
 
       function renderMatch(match) {
-        const rows = match.recommendations.map((rec, index) => {
+        const sortedRecommendations = [...(match.recommendations || [])]
+          .sort((a, b) => ((effectiveEdge(b) ?? -9) - (effectiveEdge(a) ?? -9)));
+        const rows = sortedRecommendations.map((rec, index) => {
           const detailId = `rec-detail-${escapeHtml(match.id)}-${index}`;
           const hasEliteSignals = Boolean(rec.eliteSummary?.count);
           const hasHolderSignals = Boolean(rec.holderSummary?.count);
@@ -5831,6 +5849,11 @@
               : rec.chart?.source === "本地盘口快照"
                 ? (currentLang === "en" ? "No Polymarket single-match market yet; local reference" : "Polymarket 暂无单场盘，显示本地参考价")
                 : (currentLang === "en" ? "No Polymarket live curve yet" : "Polymarket 暂无实时曲线");
+          const disciplineReasons = rec.reviewDiscipline?.reasons || [];
+          const decisionNotes = [
+            ...(rec.decision?.reasons || []),
+            ...disciplineReasons
+          ];
           return `
           <tr class="recommendation-main-row ${hasExpandableSignals ? "expandable" : ""}" data-detail-id="${detailId}" aria-expanded="false" ${hasExpandableSignals ? 'tabindex="0"' : ""}>
             <td>${escapeHtml(rec.marketTypeLabel || "-")}</td>
@@ -5846,7 +5869,7 @@
             <td class="numeric">${fmtPct(rec.pushProbability)}</td>
             <td class="numeric">${escapeHtml(priceLabel)}</td>
             <td>${escapeHtml(fmtOdds(rec.odds))}</td>
-            <td class="numeric">${fmtPct(rec.edge)}</td>
+            <td class="numeric">${escapeHtml(edgeDetailText(rec))}</td>
             <td class="numeric">${escapeHtml(advicePriceLabel)}</td>
             <td class="chart-cell">
               <canvas class="sparkline market-sparkline" width="148" height="38" data-series="${encodeURIComponent(JSON.stringify(hasLiveChart ? rec.chart.history : []))}" aria-label="${escapeHtml(rec.name)} 价格曲线"></canvas>
@@ -5854,7 +5877,7 @@
             </td>
             <td>
               <span class="decision ${rec.decision.action}">${escapeHtml(rec.decision.label)}</span>
-              ${rec.decision.reasons?.length ? `<div class="decision-note">${escapeHtml(rec.decision.reasons.join("；"))}</div>` : ""}
+              ${decisionNotes.length ? `<div class="decision-note">${escapeHtml([...new Set(decisionNotes)].join("；"))}</div>` : ""}
             </td>
           </tr>
           ${hasExpandableSignals ? `<tr class="recommendation-detail-row" id="${detailId}" hidden>
@@ -5914,7 +5937,7 @@
                       <th class="numeric">走水</th>
                       <th class="numeric">盘口</th>
                       <th>传统赔率</th>
-                      <th class="numeric">Edge</th>
+                      <th class="numeric">修正Edge</th>
                       <th class="numeric">建议买价≤</th>
                       <th>曲线</th>
                       <th>动作</th>
