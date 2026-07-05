@@ -1524,12 +1524,160 @@
         margin-top: 3px;
       }
 
+      .position-manager {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .position-form {
+        display: grid;
+        grid-template-columns: minmax(220px, 1.4fr) repeat(2, minmax(96px, 0.55fr)) auto;
+        gap: 8px;
+        align-items: end;
+      }
+
+      .position-field {
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+      }
+
+      .position-field select,
+      .position-field input {
+        min-height: 36px;
+        width: 100%;
+        border: 1px solid #dfe6df;
+        border-radius: 8px;
+        background: #fbfcfa;
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 680;
+        padding: 0 9px;
+      }
+
+      .position-add {
+        min-height: 36px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--green);
+        color: #fff;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 820;
+      }
+
+      .position-hint {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .position-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .position-card {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+        border: 1px solid #e3e9e3;
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .position-card.good {
+        border-color: #b9dbc8;
+        background: #f3fbf7;
+      }
+
+      .position-card.warn {
+        border-color: #ead8ae;
+        background: #fffaf0;
+      }
+
+      .position-card.bad {
+        border-color: #efc0ba;
+        background: #fff7f5;
+      }
+
+      .position-head {
+        display: grid;
+        grid-template-columns: minmax(160px, 1fr) auto;
+        gap: 8px;
+        align-items: start;
+      }
+
+      .position-title {
+        color: var(--ink);
+        font-size: 14px;
+        font-weight: 860;
+      }
+
+      .position-subtitle,
+      .position-advice,
+      .position-rule-list {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .position-remove {
+        min-height: 28px;
+        padding: 0 8px;
+        border: 1px solid #dfe6df;
+        border-radius: 7px;
+        background: #fff;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .position-metrics {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .position-metrics span {
+        display: grid;
+        gap: 3px;
+        padding: 7px;
+        border-radius: 6px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .position-metrics strong {
+        color: var(--ink);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .position-rule-list {
+        margin: 0;
+        padding-left: 16px;
+      }
+
       @media (max-width: 760px) {
         .live-score-path-head,
         .live-score-path-metrics,
         .live-path-position,
         .live-path-rotation-row,
-        .live-plan-grid {
+        .live-plan-grid,
+        .position-form,
+        .position-head,
+        .position-metrics {
           grid-template-columns: 1fr;
         }
       }
@@ -3281,6 +3429,8 @@
       const opportunityChecks = new Map();
       const liveMatchStates = new Map();
       const liveMatchLoading = new Set();
+      const USER_POSITIONS_STORAGE_KEY = "worldcup-user-positions-v1";
+      let userPositions = loadUserPositions();
 
       function translateText(text) {
         if (currentLang !== "en" || !text) return text;
@@ -3378,6 +3528,38 @@
         if (!item || typeof item !== "object") return null;
         return typeof item.disciplinedEdge === "number" ? item.disciplinedEdge : item.displayEdge ?? item.edge;
       };
+
+      function loadUserPositions() {
+        try {
+          const raw = localStorage.getItem(USER_POSITIONS_STORAGE_KEY);
+          const parsed = raw ? JSON.parse(raw) : {};
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveUserPositions() {
+        localStorage.setItem(USER_POSITIONS_STORAGE_KEY, JSON.stringify(userPositions));
+      }
+
+      function userPositionsForMatch(matchId) {
+        return Array.isArray(userPositions[matchId]) ? userPositions[matchId] : [];
+      }
+
+      function setUserPositionsForMatch(matchId, positions) {
+        userPositions[matchId] = positions;
+        saveUserPositions();
+      }
+
+      function compactMarketLabel(market = {}) {
+        return market.displayName || market.name || market.title || market.score || market.key || "-";
+      }
+
+      function cssEscape(value) {
+        if (window.CSS?.escape) return CSS.escape(String(value));
+        return String(value).replace(/["\\]/g, "\\$&");
+      }
 
       const edgeDetailText = (item) => {
         const value = effectiveEdge(item);
@@ -3863,6 +4045,12 @@
         if (abs >= 1000000) return `${sign}$${(abs / 1000000).toFixed(2)}M`;
         if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
         return `${sign}$${abs.toFixed(0)}`;
+      };
+
+      const fmtSmallMoney = (value) => {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        const sign = value < 0 ? "-" : "";
+        return `${sign}$${Math.abs(value).toFixed(2)}`;
       };
 
       const fmtShares = (value) => {
@@ -5031,6 +5219,271 @@
         `;
       }
 
+      function correctScorePriceMap(match) {
+        const map = new Map();
+        const categories = Array.isArray(match?.marketCatalog?.categories)
+          ? match.marketCatalog.categories
+          : Object.values(match?.marketCatalog?.categories || {});
+        for (const category of categories) {
+          if (category.key !== "correctScore") continue;
+          for (const market of category.markets || []) {
+            const title = market.title || market.question || market.name || "";
+            const scoreMatch = title.match(/(\d+)\s*-\s*(\d+)/);
+            const slugMatch = String(market.slug || "").match(/exact-score-(\d+)-(\d+)/i);
+            const score = scoreMatch ? `${scoreMatch[1]}-${scoreMatch[2]}` : slugMatch ? `${slugMatch[1]}-${slugMatch[2]}` : market.score;
+            if (!score) continue;
+            const yes = (market.outcomes || []).find((item) => String(item.label).toLowerCase() === "yes");
+            map.set(score, {
+              key: `correct:${score}`,
+              type: "correctScore",
+              name: `${score}`,
+              displayName: `${score} ${currentLang === "en" ? "correct score" : "球胆"}`,
+              marketPrice: yes?.price,
+              modelProbability: (match.probabilities?.topScoresFull || []).find((item) => item.score === score)?.probability,
+              source: "Polymarket"
+            });
+          }
+        }
+        return map;
+      }
+
+      function availablePositionMarkets(match) {
+        const markets = [];
+        for (const rec of match.recommendations || []) {
+          markets.push({
+            key: `rec:${rec.key}`,
+            type: rec.marketType,
+            name: rec.name,
+            displayName: rec.name,
+            marketPrice: rec.marketPrice,
+            modelProbability: rec.modelProbability,
+            maxBuyPrice: rec.maxBuyPrice,
+            edge: effectiveEdge(rec),
+            source: rec.chart?.source || rec.source || "Polymarket"
+          });
+        }
+        const scoreMap = correctScorePriceMap(match);
+        const preferredScores = new Set([
+          ...(match.probabilities?.topScores || []).map((item) => item.score),
+          ...(match.correctScoreRecommendations?.rows || []).map((item) => item.score)
+        ]);
+        for (const score of preferredScores) {
+          if (scoreMap.has(score)) markets.push(scoreMap.get(score));
+        }
+        for (const item of scoreMap.values()) {
+          if (markets.length >= 48) break;
+          if (!markets.some((market) => market.key === item.key)) markets.push(item);
+        }
+        return markets.filter((market) => market.name && market.key);
+      }
+
+      function findPositionMarket(match, position, livePayload = null) {
+        const markets = availablePositionMarkets(match);
+        let market = markets.find((item) => item.key === position.marketKey);
+        if (!market && position.marketType === "correctScore" && position.score) {
+          market = correctScorePriceMap(match).get(position.score);
+        }
+        if (!market) market = { key: position.marketKey, type: position.marketType, name: position.marketName || "-", displayName: position.marketName || "-" };
+        const liveRecs = [
+          ...(livePayload?.recommendations || []),
+          ...(livePayload?.correctScoreRecommendations || [])
+        ];
+        const live = liveRecs.find((item) => {
+          if (position.marketType === "correctScore") return item.score && position.score && item.score === position.score;
+          return item.key && position.marketKey && (`rec:${item.key}` === position.marketKey || item.key === position.marketKey);
+        });
+        return {
+          ...market,
+          live,
+          currentPrice: live?.marketPrice ?? market.marketPrice,
+          liveProbability: live?.liveProbability ?? market.modelProbability,
+          liveAction: live?.action,
+          liveLabel: live?.label,
+          liveEdge: live?.edge ?? market.edge,
+          liveMaxBuyPrice: live?.maxBuyPrice ?? market.maxBuyPrice
+        };
+      }
+
+      function liveScoreContext(livePayload = {}) {
+        const live = livePayload.live || {};
+        const score = live.score || {};
+        const minute = livePayload.liveModel?.elapsedMinute;
+        return {
+          home: typeof score.home === "number" ? score.home : null,
+          away: typeof score.away === "number" ? score.away : null,
+          minute: typeof minute === "number" ? minute : null,
+          status: live.status || live.statusDetail || "",
+          pre: livePayload.dataQuality?.status === "pre" || livePayload.live?.status === "pre"
+        };
+      }
+
+      function positionSettlementState(position, market, context) {
+        if (context.home === null || context.away === null) return { state: "unknown", label: currentLang === "en" ? "Waiting for score" : "等待比分" };
+        if (position.marketType !== "correctScore" || !position.score) return { state: "open", label: currentLang === "en" ? "Open path" : "路径仍开放" };
+        const [targetHome, targetAway] = position.score.split("-").map(Number);
+        if (!Number.isFinite(targetHome) || !Number.isFinite(targetAway)) return { state: "open", label: currentLang === "en" ? "Open path" : "路径仍开放" };
+        if (context.home > targetHome || context.away > targetAway) {
+          return { state: "dead", label: currentLang === "en" ? "Score passed" : "比分已打穿" };
+        }
+        if (context.home === targetHome && context.away === targetAway) {
+          return { state: "target", label: currentLang === "en" ? "Target reached" : "已到目标比分" };
+        }
+        const goalsNeeded = (targetHome - context.home) + (targetAway - context.away);
+        return {
+          state: goalsNeeded <= 1 ? "near" : "open",
+          label: currentLang === "en" ? `${goalsNeeded} goal(s) needed` : `还差 ${goalsNeeded} 球`
+        };
+      }
+
+      function positionManagementAdvice(position, market, livePayload) {
+        const amount = Number(position.amount) || 0;
+        const entryPrice = Number(position.entryPrice) || 0;
+        const currentPrice = typeof market.currentPrice === "number" ? market.currentPrice : null;
+        const shares = entryPrice > 0 ? amount / entryPrice : 0;
+        const currentValue = currentPrice !== null ? shares * currentPrice : null;
+        const pnl = currentValue !== null ? currentValue - amount : null;
+        const pnlPct = amount > 0 && pnl !== null ? pnl / amount : null;
+        const context = liveScoreContext(livePayload);
+        const path = positionSettlementState(position, market, context);
+        const minute = context.minute;
+        const rules = [];
+        let action = currentLang === "en" ? "Hold" : "持有观察";
+        let tone = "warn";
+        let trimPct = 0;
+        let keepPct = 100;
+        let addPct = 0;
+
+        if (currentPrice === null) {
+          action = currentLang === "en" ? "Wait for live price" : "等待实时价格";
+          rules.push(currentLang === "en" ? "No current market price, so only path risk can be judged." : "当前没有实时盘口价，只能判断路径风险，不能算止盈比例。");
+        } else if (path.state === "dead") {
+          action = currentLang === "en" ? "Do not rescue" : "不要救单";
+          tone = "bad";
+          trimPct = 0;
+          keepPct = 0;
+          rules.push(currentLang === "en" ? "The correct-score path has already been crossed by the current score." : "球胆路径已被当前比分打穿，不要因为价格低继续摊平。");
+        } else if (path.state === "target") {
+          tone = "good";
+          if ((minute ?? 0) >= 75) {
+            action = currentLang === "en" ? "Lock most profit" : "锁大部分利润";
+            trimPct = 70;
+            keepPct = 30;
+          } else if ((minute ?? 0) >= 55) {
+            action = currentLang === "en" ? "Trim and keep tail" : "卖一半留尾仓";
+            trimPct = 50;
+            keepPct = 50;
+          } else {
+            action = currentLang === "en" ? "Recover stake first" : "先回收本金";
+            trimPct = 35;
+            keepPct = 65;
+          }
+          rules.push(currentLang === "en" ? "Target score is live; the main decision is how much to lock before the next goal changes the payout." : "已经到目标比分，重点不是加仓，而是下一球前先锁多少利润。");
+        } else if (position.marketType === "correctScore" && path.state === "near") {
+          action = currentLang === "en" ? "Hold, tiny add only with pressure" : "持有，仅压制时小补";
+          tone = "warn";
+          addPct = (minute ?? 0) < 65 ? 15 : 0;
+          rules.push(currentLang === "en" ? "One-goal path remains; add only if live stats support the needed team scoring." : "只差一球，只有现场射正/危险进攻支持目标方时，才允许极小补仓。");
+        } else if (position.marketType === "correctScore" && (minute ?? 0) >= 70) {
+          action = currentLang === "en" ? "No more add" : "停止补仓";
+          tone = "warn";
+          rules.push(currentLang === "en" ? "Late correct-score paths decay fast; avoid averaging down." : "70分钟后球胆路径时间衰减很快，不要继续摊平。");
+        } else if (pnlPct !== null && pnlPct >= 0.8) {
+          action = currentLang === "en" ? "Take partial profit" : "分批止盈";
+          tone = "good";
+          trimPct = 35;
+          keepPct = 65;
+          rules.push(currentLang === "en" ? "Price has moved far above entry; recover part of the stake and keep upside." : "当前价相对买入价已经明显上涨，先回收部分本金，保留上行。");
+        } else if (pnlPct !== null && pnlPct <= -0.45 && (minute ?? 0) >= 60) {
+          action = currentLang === "en" ? "Cut or stop adding" : "减仓/禁止补仓";
+          tone = "bad";
+          trimPct = 25;
+          keepPct = 75;
+          rules.push(currentLang === "en" ? "Late losing position needs fresh live evidence; do not rescue solely because the price is cheaper." : "后段亏损仓必须有新的现场证据才考虑留，不能只因便宜去救。");
+        } else if (market.liveAction === "avoid") {
+          action = currentLang === "en" ? "Do not add" : "不补仓";
+          tone = "bad";
+          rules.push(currentLang === "en" ? "The live model does not support a new entry at current price." : "实时模型不支持按当前价新买，已有仓位只做管理。");
+        } else if (market.liveAction === "watch" || market.liveAction === "buy") {
+          action = currentLang === "en" ? "Hold" : "继续持有";
+          tone = "good";
+          rules.push(currentLang === "en" ? "Live model still supports the path; avoid over-adding unless price is below limit." : "实时模型仍支持路径，但除非价格低于上限且现场压制，否则不要过度加仓。");
+        } else {
+          rules.push(currentLang === "en" ? "No strong live trigger; keep the pre-defined stake plan." : "暂无强实时触发，按原仓位计划持有。");
+        }
+
+        if (position.marketType === "correctScore") {
+          rules.push(currentLang === "en" ? "Correct-score positions should usually lock profit after the target score appears." : "球胆到目标比分后通常要先锁利润，不要等终场才处理。");
+        } else {
+          rules.push(currentLang === "en" ? "Main-market positions are less fragile than correct scores; manage them by live probability and price, not by one score path." : "主盘口比球胆不脆弱，按实时概率和价格管理，不要被单一比分带偏。");
+        }
+
+        return { action, tone, trimPct, keepPct, addPct, currentValue, pnl, pnlPct, shares, path, rules };
+      }
+
+      function renderPositionManager(match, livePayload = null) {
+        const positions = userPositionsForMatch(match.id);
+        const markets = availablePositionMarkets(match);
+        const options = markets.map((market) => `<option value="${escapeHtml(market.key)}">${escapeHtml(compactMarketLabel(market))} ${typeof market.marketPrice === "number" ? `@ ${fmtPrice(market.marketPrice)}` : ""}</option>`).join("");
+        const cards = positions.length ? positions.map((position) => {
+          const market = findPositionMarket(match, position, livePayload);
+          const advice = positionManagementAdvice(position, market, livePayload || {});
+          const amount = Number(position.amount) || 0;
+          const entryPrice = Number(position.entryPrice) || 0;
+          const metrics = [
+            [currentLang === "en" ? "Stake" : "投入", fmtSmallMoney(amount)],
+            [currentLang === "en" ? "Entry" : "买入价", fmtPrice(entryPrice)],
+            [currentLang === "en" ? "Now" : "当前价", fmtPrice(market.currentPrice)],
+            [currentLang === "en" ? "Value" : "当前价值", advice.currentValue === null ? "-" : fmtSmallMoney(advice.currentValue)],
+            ["PnL", advice.pnl === null ? "-" : `${advice.pnl >= 0 ? "+" : ""}${fmtSmallMoney(advice.pnl)} (${fmtEdge(advice.pnlPct)})`]
+          ];
+          return `
+            <article class="position-card ${escapeHtml(advice.tone)}">
+              <div class="position-head">
+                <div>
+                  <div class="position-title">${escapeHtml(position.marketName || compactMarketLabel(market))}</div>
+                  <div class="position-subtitle">${escapeHtml(advice.path.label)} · ${escapeHtml(currentLang === "en" ? "Source" : "来源")} ${escapeHtml(market.source || "-")} · ${escapeHtml(currentLang === "en" ? "Added" : "记录")} ${escapeHtml(fmtDateTime(position.createdAt))}</div>
+                </div>
+                <button class="position-remove" type="button" data-position-remove="${escapeHtml(position.id)}">${escapeHtml(currentLang === "en" ? "Remove" : "删除")}</button>
+              </div>
+              <div class="position-metrics">
+                ${metrics.map(([label, value]) => `<span>${escapeHtml(label)}<strong>${escapeHtml(value)}</strong></span>`).join("")}
+              </div>
+              <div class="live-path-position">
+                <span>${escapeHtml(currentLang === "en" ? "Suggested action" : "建议动作")}<strong>${escapeHtml(advice.action)}</strong></span>
+                <span>${escapeHtml(currentLang === "en" ? "Trim" : "卖出")}<strong>${escapeHtml(`${advice.trimPct}%`)}</strong></span>
+                <span>${escapeHtml(currentLang === "en" ? "Keep" : "保留")}<strong>${escapeHtml(`${advice.keepPct}%`)}</strong></span>
+                <span>${escapeHtml(currentLang === "en" ? "Add cap" : "补仓上限")}<strong>${escapeHtml(`${advice.addPct}%`)}</strong></span>
+              </div>
+              <ul class="position-rule-list">
+                ${advice.rules.slice(0, 4).map((rule) => `<li>${escapeHtml(rule)}</li>`).join("")}
+              </ul>
+            </article>
+          `;
+        }).join("") : `<div class="position-hint">${escapeHtml(currentLang === "en" ? "No position has been added for this match yet." : "还没有添加这场的持仓。")}</div>`;
+        return `
+          <section class="position-manager" data-position-manager="${escapeHtml(match.id)}">
+            <div class="live-section-title">${escapeHtml(currentLang === "en" ? "My Position Manager" : "我的持仓管理")}<span>${escapeHtml(currentLang === "en" ? "manual input, live decision support only" : "手动录入，仅做实时决策辅助")}</span></div>
+            <div class="position-form">
+              <label class="position-field">
+                ${escapeHtml(currentLang === "en" ? "Market" : "我买的盘口")}
+                <select data-position-market="${escapeHtml(match.id)}">${options}</select>
+              </label>
+              <label class="position-field">
+                ${escapeHtml(currentLang === "en" ? "Entry price" : "买入价")}
+                <input data-position-entry="${escapeHtml(match.id)}" inputmode="decimal" placeholder="0.545" />
+              </label>
+              <label class="position-field">
+                ${escapeHtml(currentLang === "en" ? "Stake $" : "投入 $")}
+                <input data-position-amount="${escapeHtml(match.id)}" inputmode="decimal" placeholder="15" />
+              </label>
+              <button class="position-add" type="button" data-position-add="${escapeHtml(match.id)}">${escapeHtml(currentLang === "en" ? "Add" : "添加")}</button>
+            </div>
+            <div class="position-hint">${escapeHtml(currentLang === "en" ? "Tip: use decimal prices such as 0.545. The tool reads live score, stats and current market prices when available." : "提示：价格填 0.545 这种小数。工具会结合实时比分、攻防统计和当前盘口价给出持有/止盈/减仓/补仓上限。")}</div>
+            <div class="position-list">${cards}</div>
+          </section>
+        `;
+      }
+
       function renderLiveCorrectScoreCard(rec) {
         const plan = rec.pathPlan || {};
         const stance = plan.stance || {};
@@ -5101,6 +5554,7 @@
               <div class="live-summary-title">${escapeHtml(currentLang === "en" ? "Waiting for live check" : "等待实时复核")}</div>
               <div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No in-play recommendation is shown until the live source returns score, stats and a current market price." : "实时源返回比分、技术统计和当前价之前，不显示入场建议。")}</div>
             </div>
+            ${renderPositionManager(match, null)}
           </div>
         `;
       }
@@ -5173,6 +5627,7 @@
               <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Corners" : "角球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.corners, stats.away?.corners))}</strong></div>
               <div class="live-stat"><span>${escapeHtml(currentLang === "en" ? "Possession" : "控球")}</span><strong>${escapeHtml(fmtLiveStatPair(stats.home?.possession, stats.away?.possession, "%"))}</strong></div>
             </div>
+            ${renderPositionManager((currentDashboard?.matches || []).find((item) => item.id === matchId) || {}, payload)}
             <div class="live-correct-score">
               <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Live Correct Score Path Trading" : "实时球胆观察 / 过程交易")}<span>${escapeHtml(currentLang === "en" ? "entry, scale-in, hedge, take-profit and stop rules" : "买入 / 补仓 / 对冲 / 止盈 / 止损")}</span></div>
               ${correctScoreRows}
@@ -6077,6 +6532,59 @@
         document.querySelectorAll("[data-live-refresh]").forEach((button) => {
           button.addEventListener("click", () => {
             refreshLiveMatch(button.dataset.liveRefresh, true);
+          });
+        });
+        document.querySelectorAll("[data-position-market]").forEach((select) => {
+          select.addEventListener("change", () => {
+            const matchId = select.dataset.positionMarket;
+            const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
+            if (!match) return;
+            const market = availablePositionMarkets(match).find((item) => item.key === select.value);
+            const input = document.querySelector(`[data-position-entry="${cssEscape(matchId)}"]`);
+            if (input && market && typeof market.marketPrice === "number" && !input.value) {
+              input.value = market.marketPrice.toFixed(3);
+            }
+          });
+        });
+        document.querySelectorAll("[data-position-add]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const matchId = button.dataset.positionAdd;
+            const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
+            if (!match) return;
+            const select = document.querySelector(`[data-position-market="${cssEscape(matchId)}"]`);
+            const entryInput = document.querySelector(`[data-position-entry="${cssEscape(matchId)}"]`);
+            const amountInput = document.querySelector(`[data-position-amount="${cssEscape(matchId)}"]`);
+            const market = availablePositionMarkets(match).find((item) => item.key === select?.value);
+            const entryPrice = Number(entryInput?.value);
+            const amount = Number(amountInput?.value);
+            if (!market || !Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(amount) || amount <= 0) {
+              button.textContent = currentLang === "en" ? "Check input" : "检查输入";
+              setTimeout(() => { button.textContent = currentLang === "en" ? "Add" : "添加"; }, 1200);
+              return;
+            }
+            const position = {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              marketKey: market.key,
+              marketType: market.type,
+              marketName: compactMarketLabel(market),
+              score: market.type === "correctScore" ? market.name : "",
+              entryPrice,
+              amount,
+              createdAt: new Date().toISOString()
+            };
+            setUserPositionsForMatch(matchId, [...userPositionsForMatch(matchId), position]);
+            if (entryInput) entryInput.value = "";
+            if (amountInput) amountInput.value = "";
+            updateLivePanel(matchId);
+          });
+        });
+        document.querySelectorAll("[data-position-remove]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const card = button.closest("[data-position-manager]");
+            const matchId = card?.dataset.positionManager;
+            if (!matchId) return;
+            setUserPositionsForMatch(matchId, userPositionsForMatch(matchId).filter((item) => item.id !== button.dataset.positionRemove));
+            updateLivePanel(matchId);
           });
         });
       }
