@@ -1551,6 +1551,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   const drivers = [];
   let lambdaHome = baseHome;
   let lambdaAway = baseAway;
+  let goalkeeperAgeAdjustment = null;
 
   const homeRank = rankingNumber(match.home, fifaRankings) || match.homeTeam?.worldRanking?.rank;
   const awayRank = rankingNumber(match.away, fifaRankings) || match.awayTeam?.worldRanking?.rank;
@@ -1605,6 +1606,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     let homeHumanDelta = 0;
     let awayHumanDelta = 0;
     for (const insight of match.humanMatchup.insights.slice(0, 5)) {
+      if (insight.key === "age-profile") continue;
       const weight = insight.label === "锋线" || insight.label === "中场" ? 0.025 : 0.015;
       if (insight.side === "home") homeHumanDelta += weight;
       if (insight.side === "away") awayHumanDelta += weight;
@@ -1617,6 +1619,23 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
         homeXgDelta: roundTo(homeHumanDelta, 3),
         awayXgDelta: roundTo(awayHumanDelta, 3),
         reason: "身高、年龄、国家队经验、俱乐部层级等静态画像只做小幅先验修正。"
+      });
+    }
+  }
+
+  goalkeeperAgeAdjustment = buildGoalkeeperAgeModelAdjustment(match, fifaRankings);
+  if (goalkeeperAgeAdjustment.ok) {
+    const impact = goalkeeperAgeAdjustment.impacts || {};
+    const homeGkAgeDelta = clamp(Number(impact.homeXgDelta) || 0, -0.08, 0.08);
+    const awayGkAgeDelta = clamp(Number(impact.awayXgDelta) || 0, -0.08, 0.08);
+    if (homeGkAgeDelta || awayGkAgeDelta) {
+      lambdaHome += homeGkAgeDelta;
+      lambdaAway += awayGkAgeDelta;
+      drivers.push({
+        label: "门将/年龄结构",
+        homeXgDelta: roundTo(homeGkAgeDelta, 3),
+        awayXgDelta: roundTo(awayGkAgeDelta, 3),
+        reason: goalkeeperAgeAdjustment.signals.slice(0, 3).map((item) => item.reason).join(" ")
       });
     }
   }
@@ -1689,6 +1708,25 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   lambdaHome = roundTo(clamp(lambdaHome, 0.18, 4.8), 3);
   lambdaAway = roundTo(clamp(lambdaAway, 0.18, 4.8), 3);
   let probabilities = scoreModel(lambdaHome, lambdaAway);
+  if (goalkeeperAgeAdjustment?.ok) {
+    const deltas = goalkeeperAgeAdjustment.probabilityDeltas || {};
+    const bttsDelta = clamp(Number(deltas.btts) || 0, -0.025, 0.025);
+    const over25Delta = clamp(Number(deltas.over25) || 0, -0.025, 0.025);
+    const drawDelta = clamp(Number(deltas.draw) || 0, -0.015, 0.015);
+    if (bttsDelta || over25Delta || drawDelta) {
+      probabilities = applyProbabilityDeltasThroughScoreGrid(probabilities, {
+        btts: bttsDelta,
+        over25: over25Delta,
+        draw: drawDelta
+      });
+      drivers.push({
+        label: "门将/年龄衍生修正",
+        homeXgDelta: 0,
+        awayXgDelta: 0,
+        reason: `门将与年龄结构通过同一比分分布修正 BTTS ${bttsDelta >= 0 ? "+" : ""}${formatPercent(bttsDelta)}、大2.5 ${over25Delta >= 0 ? "+" : ""}${formatPercent(over25Delta)}。`
+      });
+    }
+  }
   if (contextSignals?.ok) {
     const impact = contextSignals.impacts || {};
     const bttsDelta = clamp(Number(impact.bttsDelta) || 0, -0.035, 0.035);
@@ -1784,7 +1822,8 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       lambdaAway
     },
     calibration,
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 9),
+    goalkeeperAgeAdjustment,
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 10),
     probabilities
   };
 }
@@ -3735,6 +3774,15 @@ function aiPredictionEvidence(match, top, rows) {
       .slice(0, 2)
       .map((item) => `${item.label}：${item.zh || item.en}`);
     drivers.push(...strongInsights);
+  }
+  const gkAgeDriver = (match.modelV2?.drivers || []).find((driver) => driver.label === "门将/年龄结构");
+  if (gkAgeDriver) {
+    evidence.push({
+      label: "门将/年龄结构",
+      status: "synced",
+      detail: gkAgeDriver.reason
+    });
+    drivers.push(`${gkAgeDriver.label}：${gkAgeDriver.reason}`);
   }
   if (context.weather?.summary) {
     evidence.push({
@@ -8714,9 +8762,33 @@ function avgCaps(group) {
   return value === null ? 0 : value;
 }
 
+function avgAge(group) {
+  const value = safeNum(group?.avgAge);
+  return value === null ? 0 : value;
+}
+
 function avgHeight(group) {
   const value = safeNum(group?.avgHeightCm);
   return value === null ? 0 : value;
+}
+
+function weightedGroupAverage(groups, keys, valueFn) {
+  let total = 0;
+  let weight = 0;
+  for (const key of keys) {
+    const group = groups?.[key];
+    const value = Number(valueFn(group));
+    const groupWeight = Number(group?.players) || 0;
+    if (Number.isFinite(value) && value > 0 && groupWeight > 0) {
+      total += value * groupWeight;
+      weight += groupWeight;
+    }
+  }
+  return weight ? roundTo(total / weight, 2) : 0;
+}
+
+function outfieldAge(profile) {
+  return weightedGroupAverage(profile?.groups, ["DF", "MF", "FW"], avgAge);
 }
 
 function lineStrengthScore(group, weights = {}) {
@@ -8731,6 +8803,154 @@ function lineStrengthScore(group, weights = {}) {
     + capsScore * (weights.caps ?? 0.25)
     + tier * (weights.tier ?? 0.5)
   ), 1);
+}
+
+function goalkeeperProxyScore(profile) {
+  return lineStrengthScore(profile?.groups?.GK, { height: 0.25, caps: 0.45, tier: 0.3 });
+}
+
+function squadAgeProfile(profile) {
+  const groups = profile?.groups || {};
+  return {
+    squadAge: avgAge(groups.all),
+    outfieldAge: outfieldAge(profile),
+    defenceAge: avgAge(groups.DF),
+    goalkeeperAge: avgAge(groups.GK),
+    goalkeeperCaps: avgCaps(groups.GK),
+    goalkeeperProxy: goalkeeperProxyScore(profile)
+  };
+}
+
+function defensiveEvidenceMultiplier(evidence) {
+  if (!evidence?.ok) return 0.82;
+  const cleanSheets = Number(evidence.cleanSheets) || 0;
+  const gaAvg = Number(evidence.gaAvg);
+  if (cleanSheets >= 2 && Number.isFinite(gaAvg) && gaAvg <= 1.1) return 1.08;
+  if (Number.isFinite(gaAvg) && gaAvg >= 1.9) return 0.68;
+  return 0.92;
+}
+
+function buildGoalkeeperAgeModelAdjustment(match, fifaRankings = {}) {
+  const homeProfile = match.homeTeam?.squadProfile;
+  const awayProfile = match.awayTeam?.squadProfile;
+  if (!homeProfile?.ok || !awayProfile?.ok) {
+    return {
+      ok: false,
+      status: "missing",
+      reason: "阵容年龄/门将 profile 未覆盖两队。"
+    };
+  }
+
+  const homeAge = squadAgeProfile(homeProfile);
+  const awayAge = squadAgeProfile(awayProfile);
+  const homeEvidence = formEvidence(match, "home", fifaRankings);
+  const awayEvidence = formEvidence(match, "away", fifaRankings);
+  const impacts = {
+    homeXgDelta: 0,
+    awayXgDelta: 0,
+    bttsDelta: 0,
+    over25Delta: 0,
+    drawDelta: 0
+  };
+  const signals = [];
+
+  if (Number.isFinite(homeAge.goalkeeperProxy) && Number.isFinite(awayAge.goalkeeperProxy)) {
+    const proxyDiff = homeAge.goalkeeperProxy - awayAge.goalkeeperProxy;
+    const scaled = clamp(proxyDiff / 60, -1, 1);
+    const baseImpact = clamp(Math.abs(scaled) * 0.065, 0, 0.055);
+    if (Math.abs(proxyDiff) >= 7 && baseImpact > 0) {
+      if (proxyDiff > 0) {
+        const impact = roundTo(baseImpact * defensiveEvidenceMultiplier(homeEvidence), 3);
+        impacts.awayXgDelta -= impact;
+        impacts.bttsDelta -= clamp(impact * 0.12, 0, 0.008);
+        impacts.over25Delta -= clamp(impact * 0.10, 0, 0.007);
+      } else {
+        const impact = roundTo(baseImpact * defensiveEvidenceMultiplier(awayEvidence), 3);
+        impacts.homeXgDelta -= impact;
+        impacts.bttsDelta -= clamp(impact * 0.12, 0, 0.008);
+        impacts.over25Delta -= clamp(impact * 0.10, 0, 0.007);
+      }
+      const side = proxyDiff > 0 ? match.homeName : match.awayName;
+      signals.push({
+        label: "门将代理能力",
+        status: "synced",
+        side: proxyDiff > 0 ? "home" : "away",
+        reason: `${side} 门将代理分 ${proxyDiff > 0 ? homeAge.goalkeeperProxy : awayAge.goalkeeperProxy}，高于对手 ${roundTo(Math.abs(proxyDiff), 1)}；结合近期零封/失球证据，小幅压低对手 xG。`
+      });
+    }
+  }
+
+  const homeOldOutfield = Math.max(0, (homeAge.outfieldAge || 0) - 29);
+  const awayOldOutfield = Math.max(0, (awayAge.outfieldAge || 0) - 29);
+  const homeOldDefence = Math.max(0, (homeAge.defenceAge || 0) - 29.5);
+  const awayOldDefence = Math.max(0, (awayAge.defenceAge || 0) - 29.5);
+  const homeYoungOutfield = Math.max(0, 26 - (homeAge.outfieldAge || 99));
+  const awayYoungOutfield = Math.max(0, 26 - (awayAge.outfieldAge || 99));
+  const homeAgeRisk = Math.max(homeOldOutfield, homeOldDefence * 0.85);
+  const awayAgeRisk = Math.max(awayOldOutfield, awayOldDefence * 0.85);
+
+  if (homeAgeRisk >= 0.7) {
+    const impact = clamp(homeAgeRisk * 0.018, 0.01, 0.04);
+    impacts.awayXgDelta += impact;
+    impacts.bttsDelta += clamp(homeAgeRisk * 0.004, 0, 0.012);
+    signals.push({
+      label: "年龄/体能结构",
+      status: "synced",
+      side: "away",
+      reason: `${match.homeName} 外场均龄 ${homeAge.outfieldAge || "-"}、后防均龄 ${homeAge.defenceAge || "-"}；高节奏和回追阶段给 ${match.awayName} 反击/后段进球小幅加权。`
+    });
+  }
+  if (awayAgeRisk >= 0.7) {
+    const impact = clamp(awayAgeRisk * 0.018, 0.01, 0.04);
+    impacts.homeXgDelta += impact;
+    impacts.bttsDelta += clamp(awayAgeRisk * 0.004, 0, 0.012);
+    signals.push({
+      label: "年龄/体能结构",
+      status: "synced",
+      side: "home",
+      reason: `${match.awayName} 外场均龄 ${awayAge.outfieldAge || "-"}、后防均龄 ${awayAge.defenceAge || "-"}；高节奏和回追阶段给 ${match.homeName} 反击/后段进球小幅加权。`
+    });
+  }
+
+  const youthVolatility = Math.max(homeYoungOutfield, awayYoungOutfield);
+  if (youthVolatility >= 0.8) {
+    impacts.over25Delta += clamp(youthVolatility * 0.004, 0.003, 0.012);
+    impacts.bttsDelta += clamp(youthVolatility * 0.003, 0.002, 0.009);
+    signals.push({
+      label: "年轻阵容波动",
+      status: "synced",
+      reason: `至少一方外场均龄低于 26 岁，冲刺和转换更多，但防守选择波动也更大；只小幅抬高总进球/BTTS 分布。`
+    });
+  }
+
+  if ((homeAge.goalkeeperAge >= 32 && homeAge.goalkeeperCaps >= 45) || (awayAge.goalkeeperAge >= 32 && awayAge.goalkeeperCaps >= 45)) {
+    if (homeAge.goalkeeperAge >= 32 && homeAge.goalkeeperCaps >= 45) impacts.awayXgDelta -= 0.012;
+    if (awayAge.goalkeeperAge >= 32 && awayAge.goalkeeperCaps >= 45) impacts.homeXgDelta -= 0.012;
+    signals.push({
+      label: "门将经验",
+      status: "synced",
+      reason: `老门将不直接等于更强，但 32 岁以上且国家队经验充足时，定位球指挥和比赛管理作为低权重防守代理。`
+    });
+  }
+
+  const roundedImpacts = Object.fromEntries(Object.entries(impacts).map(([key, value]) => [key, roundTo(clamp(value, key.endsWith("Delta") && key.includes("Xg") ? -0.08 : -0.025, key.endsWith("Delta") && key.includes("Xg") ? 0.08 : 0.025), 3)]));
+  const totalImpact = Object.values(roundedImpacts).reduce((sum, value) => sum + Math.abs(Number(value) || 0), 0);
+  return {
+    ok: signals.length > 0 && totalImpact > 0,
+    status: "synced",
+    source: homeProfile.source || awayProfile.source || "squad profile",
+    updatedAt: homeProfile.updatedAt || awayProfile.updatedAt || new Date().toISOString(),
+    home: homeAge,
+    away: awayAge,
+    impacts: roundedImpacts,
+    probabilityDeltas: {
+      btts: roundedImpacts.bttsDelta,
+      over25: roundedImpacts.over25Delta,
+      draw: roundedImpacts.drawDelta
+    },
+    signals,
+    summary: signals.map((item) => item.reason).join(" ")
+  };
 }
 
 function lineupAdvantage(homeValue, awayValue, threshold, higherIsBetter = true) {
@@ -8914,6 +9134,42 @@ function buildHumanMatchup(match, fifaRankings = {}) {
       evidenceEn: [homeEvidence.summaryEn, awayEvidence.summaryEn].filter(Boolean)
     }));
   }
+
+  const homeAgeProfile = squadAgeProfile(homeProfile);
+  const awayAgeProfile = squadAgeProfile(awayProfile);
+  const outAgeDiff = (homeAgeProfile.outfieldAge && awayAgeProfile.outfieldAge)
+    ? roundTo(homeAgeProfile.outfieldAge - awayAgeProfile.outfieldAge, 1)
+    : 0;
+  const olderSide = Math.abs(outAgeDiff) >= 1.8 ? (outAgeDiff > 0 ? "home" : "away") : "even";
+  const youngerSide = olderSide === "home" ? "away" : olderSide === "away" ? "home" : "even";
+  const olderName = advantageTeamName(match, olderSide);
+  const youngerName = advantageTeamName(match, youngerSide);
+  insights.push(matchupInsight({
+    key: "age-profile",
+    label: "年龄/体能",
+    labelEn: "Age and fatigue",
+    side: "even",
+    valueText: `外场 ${homeAgeProfile.outfieldAge || "-"} vs ${awayAgeProfile.outfieldAge || "-"} · 后防 ${homeAgeProfile.defenceAge || "-"} vs ${awayAgeProfile.defenceAge || "-"} · 门将 ${homeAgeProfile.goalkeeperAge || "-"} vs ${awayAgeProfile.goalkeeperAge || "-"}`,
+    valueTextEn: `outfield ${homeAgeProfile.outfieldAge || "-"} vs ${awayAgeProfile.outfieldAge || "-"} · defence ${homeAgeProfile.defenceAge || "-"} vs ${awayAgeProfile.defenceAge || "-"} · GK ${homeAgeProfile.goalkeeperAge || "-"} vs ${awayAgeProfile.goalkeeperAge || "-"}`,
+    zh: olderSide === "even"
+      ? "两队外场年龄结构接近，年龄更多影响临场体能和换人质量，不构成单边胜负优势。"
+      : `${olderName} 外场更老，经验和站位可能更稳；${youngerName} 冲刺、回追和后段节奏更有体能空间。模型只把它作为体能/波动低权重因子。`,
+    en: olderSide === "even"
+      ? "Outfield age profiles are close; age mainly affects live fatigue and substitutions rather than a one-sided pre-match edge."
+      : `${olderName} have the older outfield profile, which can help positioning and control; ${youngerName} carry more late-running and transition upside. The model treats this only as a low-weight fatigue/volatility factor.`,
+    evidence: [
+      `${match.homeName}：外场均龄 ${homeAgeProfile.outfieldAge || "-"}，后防 ${homeAgeProfile.defenceAge || "-"}，门将 ${homeAgeProfile.goalkeeperAge || "-"}。`,
+      `${match.awayName}：外场均龄 ${awayAgeProfile.outfieldAge || "-"}，后防 ${awayAgeProfile.defenceAge || "-"}，门将 ${awayAgeProfile.goalkeeperAge || "-"}。`,
+      homeEvidence.summary,
+      awayEvidence.summary
+    ].filter(Boolean),
+    evidenceEn: [
+      `${match.homeName}: outfield age ${homeAgeProfile.outfieldAge || "-"}, defence ${homeAgeProfile.defenceAge || "-"}, GK ${homeAgeProfile.goalkeeperAge || "-"}.`,
+      `${match.awayName}: outfield age ${awayAgeProfile.outfieldAge || "-"}, defence ${awayAgeProfile.defenceAge || "-"}, GK ${awayAgeProfile.goalkeeperAge || "-"}.`,
+      homeEvidence.summaryEn,
+      awayEvidence.summaryEn
+    ].filter(Boolean)
+  }));
 
   const gkScoreHome = lineStrengthScore(h.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
   const gkScoreAway = lineStrengthScore(a.GK, { height: 0.35, caps: 0.3, tier: 0.35 });
