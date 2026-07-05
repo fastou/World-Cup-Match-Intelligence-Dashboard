@@ -1174,6 +1174,36 @@ function isKnockoutMatch(match) {
   return Boolean(kickoffKey && KNOCKOUT_PHASE_START_KEY && kickoffKey >= KNOCKOUT_PHASE_START_KEY);
 }
 
+function knockoutStageProfile(match) {
+  const text = [
+    match?.round,
+    match?.stage,
+    match?.phase,
+    match?.matchday,
+    match?.roundName,
+    match?.scheduleRound,
+    match?.season?.slug
+  ].join(" ").toLowerCase();
+  if (/final|决赛/.test(text) && !/semi|半决赛|quarter|八强/.test(text)) {
+    return { key: "final", labelZh: "决赛", drawBoost: 0.02, favoritePenalty: 0.018, deepHandicapPenalty: 0.035, longScorePenalty: 0.035 };
+  }
+  if (/semi|半决赛|四强/.test(text)) {
+    return { key: "semi", labelZh: "半决赛", drawBoost: 0.024, favoritePenalty: 0.018, deepHandicapPenalty: 0.04, longScorePenalty: 0.04 };
+  }
+  if (/quarter|八强/.test(text)) {
+    return { key: "quarter", labelZh: "八强", drawBoost: 0.028, favoritePenalty: 0.02, deepHandicapPenalty: 0.045, longScorePenalty: 0.045 };
+  }
+  if (/round of 16|last 16|16强|十六强/.test(text)) {
+    return { key: "round16", labelZh: "16强", drawBoost: 0.018, favoritePenalty: 0.012, deepHandicapPenalty: 0.035, longScorePenalty: 0.035 };
+  }
+  if (/round of 32|32强|三十二强/.test(text)) {
+    return { key: "round32", labelZh: "32强", drawBoost: 0.012, favoritePenalty: 0.008, deepHandicapPenalty: 0.028, longScorePenalty: 0.028 };
+  }
+  return isKnockoutMatch(match)
+    ? { key: "knockout", labelZh: "淘汰赛", drawBoost: 0.018, favoritePenalty: 0.012, deepHandicapPenalty: 0.035, longScorePenalty: 0.035 }
+    : { key: "group", labelZh: "小组赛", drawBoost: 0, favoritePenalty: 0, deepHandicapPenalty: 0, longScorePenalty: 0 };
+}
+
 function favoriteProfile(probabilities = {}) {
   const home = Number(probabilities.home) || 0;
   const away = Number(probabilities.away) || 0;
@@ -1192,6 +1222,7 @@ function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
   if (!isKnockoutMatch(match) || !probabilities?.topScoresFull?.length) {
     return { ok: false, deltas: {}, notes: [] };
   }
+  const stageProfile = knockoutStageProfile(match);
   const trend = match?.tournamentTrend || {};
   const trendRates = trend.rates || {};
   const underdogGoalRate = Number(trendRates.underdogGoal);
@@ -1207,7 +1238,7 @@ function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
     .filter(Boolean)
     .some((profile) => Number(profile.bttsRate) >= 0.45 || Number(profile.goalsForPerMatch) >= 1.1);
 
-  let drawBoost = 0.018;
+  let drawBoost = stageProfile.drawBoost || 0.018;
   let bttsBoost = 0.018;
   let underdogScoreBoost = 0.012;
   let favoriteWinPenalty = 0;
@@ -1220,8 +1251,12 @@ function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
   }
   if (teamBttsSupport) bttsBoost += 0.008;
   if (contextBtts > 0) bttsBoost += clamp(contextBtts * 0.45, 0, 0.012);
-  if (favStrongButNotSafe) favoriteWinPenalty += 0.012;
+  if (favStrongButNotSafe) favoriteWinPenalty += stageProfile.favoritePenalty || 0.012;
   if (balanced) drawBoost += 0.006;
+  if (stageProfile.key === "quarter") {
+    bttsBoost = Math.max(0, bttsBoost - 0.004);
+    underdogScoreBoost = Math.max(0, underdogScoreBoost - 0.002);
+  }
 
   drawBoost = clamp(drawBoost, 0.012, 0.055);
   bttsBoost = clamp(bttsBoost, 0.012, 0.06);
@@ -1256,9 +1291,11 @@ function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
       over25: roundTo((adjusted.over25 || 0) - (probabilities.over25 || 0), 4)
     },
     notes: [
-      "淘汰赛复盘修正：90分钟胜负与晋级盘分离，平局/加时路径上修。",
+      `${stageProfile.labelZh}预测修正：90分钟胜负与晋级盘分离，平局/加时路径上修。`,
       "近几场强队控场但未打穿，强队90分钟胜和让球不再按场面优势线性外推。",
-      "弱队进球与BTTS样本偏强，BTTS Yes 和 1-1/2-1/1-2路径同步重标定。"
+      stageProfile.key === "quarter"
+        ? "八强阶段双方质量更接近，热门深盘、大胜球胆和纯场面压制信号进一步降权。"
+        : "弱队进球与BTTS样本偏强，BTTS Yes 和 1-1/2-1/1-2路径同步重标定。"
     ]
   };
 }
@@ -2396,6 +2433,7 @@ function marketReviewAdjustments(match, rec) {
   const oneTeamChasing = motivation.homeAttack || motivation.awayAttack;
   const openMotivation = bothTeamsChasing || (oneTeamChasing && (motivation.over25Delta || 0) > 0.015);
   const knockout = isKnockoutMatch(match);
+  const stageProfile = knockoutStageProfile(match);
   const favoriteGap = Math.abs((match?.probabilities?.home || 0) - (match?.probabilities?.away || 0));
   const knockoutBttsSupport = knockout && (match?.probabilities?.btts || 0) >= 0.43;
 
@@ -2479,9 +2517,9 @@ function marketReviewAdjustments(match, rec) {
         || (rec.key.endsWith("-away") && favoriteKey === "away" && rec.handicap.awayLine < 0));
     const absLine = rec.key.endsWith("-home") ? Math.abs(rec.handicap.homeLine) : Math.abs(rec.handicap.awayLine);
     if (knockout && favoriteGivingLine && absLine >= 1.5) {
-      edgePenalty += 0.035;
-      scorePenalty += 0.07;
-      reasons.push("淘汰赛复盘：强队赢不等于穿深盘，领先后控节奏风险提高。");
+      edgePenalty += stageProfile.deepHandicapPenalty || 0.035;
+      scorePenalty += stageProfile.key === "quarter" ? 0.085 : 0.07;
+      reasons.push(`${stageProfile.labelZh}复盘：强队赢不等于穿深盘，领先后控节奏风险提高。`);
     }
   }
 
@@ -2494,14 +2532,15 @@ function marketReviewAdjustments(match, rec) {
   }
 
   if (knockout && rec.marketType === "moneyline" && rec.key === favoriteKey && rec.modelProbability >= 0.5 && rec.modelProbability <= 0.72) {
-    edgePenalty += favoriteGap < 0.46 ? 0.022 : 0.014;
-    scorePenalty += favoriteGap < 0.46 ? 0.052 : 0.035;
-    reasons.push("淘汰赛复盘：90分钟强队胜要防平局/加时，不和晋级盘混用。");
+    const quarterBoost = stageProfile.key === "quarter" ? 0.008 : 0;
+    edgePenalty += (favoriteGap < 0.46 ? 0.022 : 0.014) + quarterBoost;
+    scorePenalty += (favoriteGap < 0.46 ? 0.052 : 0.035) + (stageProfile.key === "quarter" ? 0.018 : 0);
+    reasons.push(`${stageProfile.labelZh}复盘：90分钟强队胜要防平局/加时，不和晋级盘混用。`);
   }
 
   if (knockout && rec.marketType === "moneyline" && rec.key === "draw" && rec.modelProbability >= 0.24) {
     scorePenalty -= 0.012;
-    reasons.push("淘汰赛复盘：常规时间平局是独立路径，不能按普通小组赛低估。");
+    reasons.push(`${stageProfile.labelZh}复盘：常规时间平局是独立路径，不能按普通小组赛低估。`);
   }
 
   if (rec.marketType === "advance") {
@@ -4573,7 +4612,15 @@ function normalizeLiveStats(summary, match) {
     saves: statValue(team, ["saves"]),
     fouls: statValue(team, ["foulsCommitted"]),
     accuratePasses: statValue(team, ["accuratePasses"]),
-    totalPasses: statValue(team, ["totalPasses"])
+    totalPasses: statValue(team, ["totalPasses"]),
+    accurateCrosses: statValue(team, ["accurateCrosses"]),
+    totalCrosses: statValue(team, ["totalCrosses"]),
+    blockedShots: statValue(team, ["blockedShots"]),
+    interceptions: statValue(team, ["interceptions"]),
+    effectiveClearance: statValue(team, ["effectiveClearance"]),
+    totalClearance: statValue(team, ["totalClearance"]),
+    effectiveTackles: statValue(team, ["effectiveTackles"]),
+    totalTackles: statValue(team, ["totalTackles"])
   });
   return {
     home: read(homeBox),
@@ -4583,13 +4630,58 @@ function normalizeLiveStats(summary, match) {
   };
 }
 
+function eventMinuteValue(event) {
+  const detail = String(event?.clock?.displayValue || event?.time?.displayValue || event?.displayTime || "");
+  const parsed = Number(detail.match(/(\d{1,3})/)?.[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function eventTextValue(event) {
+  return [
+    event?.type?.text,
+    event?.type?.displayName,
+    event?.text,
+    event?.shortText
+  ].filter(Boolean).join(" ");
+}
+
+function normalizeLiveSituationalFlags(summary, liveBase) {
+  const elapsed = elapsedMinuteFromLive(liveBase, null);
+  const rows = [
+    ...(Array.isArray(summary?.keyEvents) ? summary.keyEvents : []),
+    ...(Array.isArray(summary?.commentary) ? summary.commentary : [])
+  ]
+    .map((event) => ({
+      minute: eventMinuteValue(event),
+      text: eventTextValue(event)
+    }))
+    .filter((event) => Number.isFinite(event.minute) && event.text);
+
+  const recent = rows
+    .filter((event) => Math.abs((elapsed || event.minute) - event.minute) <= 5)
+    .sort((a, b) => b.minute - a.minute);
+  const latestPenaltyEvent = recent.find((event) => /var|penalty|点球/i.test(event.text));
+  const latestResolution = recent.find((event) =>
+    /penalty\s*-\s*scored|converts the penalty|penalty saved|penalty missed|penalty not awarded|var decision:\s*no penalty|not awarded/i.test(event.text)
+  );
+  const activePenaltyReview = Boolean(latestPenaltyEvent)
+    && !/scored|converts|saved|missed|not awarded/i.test(latestPenaltyEvent.text)
+    && (!latestResolution || latestResolution.minute < latestPenaltyEvent.minute);
+  return {
+    activePenaltyReview,
+    freezeRecommendations: activePenaltyReview,
+    latestPenaltyText: latestPenaltyEvent?.text || "",
+    latestPenaltyMinute: latestPenaltyEvent?.minute ?? null
+  };
+}
+
 function normalizeLiveEvent(summary, match) {
   const status = eventStatusTypeFromSummary(summary);
   const homeCompetitor = summaryCompetitorForMatch(summary, match, "home");
   const awayCompetitor = summaryCompetitorForMatch(summary, match, "away");
   const homeScore = Number(homeCompetitor?.score);
   const awayScore = Number(awayCompetitor?.score);
-  return {
+  const liveBase = {
     source: "ESPN FIFA World Cup summary",
     sourceUrl: `${ESPN_WORLDCUP_SUMMARY}?event=${encodeURIComponent(match.scheduleId || "")}`,
     status: status.name || status.description || "",
@@ -4605,6 +4697,10 @@ function normalizeLiveEvent(summary, match) {
     stats: normalizeLiveStats(summary, match),
     venue: summary?.gameInfo?.venue?.fullName || summary?.header?.competitions?.[0]?.venue?.fullName || match.venue,
     lastUpdated: new Date().toISOString()
+  };
+  return {
+    ...liveBase,
+    situationalFlags: normalizeLiveSituationalFlags(summary, liveBase)
   };
 }
 
@@ -4631,7 +4727,105 @@ function statDiff(homeValue, awayValue) {
   return home - away;
 }
 
-function liveMomentumScore(live) {
+function livePressureQualityProfile(live, match = null) {
+  const stats = live?.stats || {};
+  if (!hasUsefulLiveStats(stats)) {
+    return { homePenalty: 0, awayPenalty: 0, notes: [] };
+  }
+  const sideProfile = (side, opponentSide) => {
+    const sideStats = stats[side] || {};
+    const opponentStats = stats[opponentSide] || {};
+    const shots = Number(sideStats.shots);
+    const sot = Number(sideStats.shotsOnTarget);
+    const corners = Number(sideStats.corners);
+    const possession = Number(sideStats.possession);
+    const totalCrosses = Number(sideStats.totalCrosses);
+    const accurateCrosses = Number(sideStats.accurateCrosses);
+    const opponentClearances = Number(opponentStats.totalClearance ?? opponentStats.effectiveClearance);
+    const opponentInterceptions = Number(opponentStats.interceptions);
+    const shotQuality = Number.isFinite(shots) && shots > 0 && Number.isFinite(sot) ? sot / shots : null;
+    const crossSuccess = Number.isFinite(totalCrosses) && totalCrosses > 0 && Number.isFinite(accurateCrosses) ? accurateCrosses / totalCrosses : null;
+    const heavyWingVolume = (Number.isFinite(totalCrosses) && totalCrosses >= 14) || (Number.isFinite(corners) && corners >= 8);
+    const poorFinalBall = heavyWingVolume
+      && ((Number.isFinite(crossSuccess) && crossSuccess <= 0.12) || (Number.isFinite(accurateCrosses) && accurateCrosses <= 1));
+    const lowShotQuality = Number.isFinite(shotQuality) && shotQuality <= 0.22;
+    const blockedBox = (Number.isFinite(opponentClearances) && opponentClearances >= 18)
+      || (Number.isFinite(opponentInterceptions) && opponentInterceptions >= 12);
+    const sterileDominance = Number.isFinite(possession) && possession >= 62 && lowShotQuality && (poorFinalBall || blockedBox);
+    const penalty = sterileDominance
+      ? clamp((Number.isFinite(possession) ? (possession - 58) * 0.0018 : 0)
+        + (poorFinalBall ? 0.045 : 0)
+        + (blockedBox ? 0.035 : 0)
+        + (lowShotQuality ? 0.035 : 0), 0.035, 0.14)
+      : 0;
+    return {
+      penalty,
+      shots,
+      sot,
+      totalCrosses,
+      accurateCrosses,
+      crossSuccess,
+      opponentClearances,
+      opponentInterceptions,
+      sterileDominance
+    };
+  };
+  const homeProfile = sideProfile("home", "away");
+  const awayProfile = sideProfile("away", "home");
+  const teamLabel = (side) => side === "home" ? (match?.homeName || "主队") : (match?.awayName || "客队");
+  const notes = [];
+  for (const [side, profile] of [["home", homeProfile], ["away", awayProfile]]) {
+    if (!profile.sterileDominance) continue;
+    notes.push(`${teamLabel(side)}控球/角球压制但质量偏低：传中 ${profile.accurateCrosses ?? "-"}/${profile.totalCrosses ?? "-"}，射正 ${profile.sot ?? "-"}/${profile.shots ?? "-"}，对手解围 ${profile.opponentClearances ?? "-"}。`);
+  }
+  return {
+    homePenalty: homeProfile.penalty,
+    awayPenalty: awayProfile.penalty,
+    home: homeProfile,
+    away: awayProfile,
+    notes
+  };
+}
+
+function liveCounterAttackProfile(live, match = null) {
+  const stats = live?.stats || {};
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!hasUsefulLiveStats(stats) || !Number.isFinite(homeScore) || !Number.isFinite(awayScore) || homeScore === awayScore) {
+    return { homeBoost: 0, awayBoost: 0, notes: [] };
+  }
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const leader = homeScore > awayScore ? "home" : "away";
+  const trailer = leader === "home" ? "away" : "home";
+  const leaderStats = stats[leader] || {};
+  const trailerStats = stats[trailer] || {};
+  const leaderShots = Number(leaderStats.shots);
+  const leaderSot = Number(leaderStats.shotsOnTarget);
+  const leaderPossession = Number(leaderStats.possession);
+  const trailerCorners = Number(trailerStats.corners);
+  const trailerCrosses = Number(trailerStats.totalCrosses);
+  const trailerPossession = Number(trailerStats.possession);
+  const trailerShots = Number(trailerStats.shots);
+  const leaderEfficiency = Number.isFinite(leaderShots) && leaderShots > 0 && Number.isFinite(leaderSot) ? leaderSot / leaderShots : 0;
+  const trailerPushes = (Number.isFinite(trailerCorners) && trailerCorners >= 7)
+    || (Number.isFinite(trailerCrosses) && trailerCrosses >= 16)
+    || (Number.isFinite(trailerPossession) && trailerPossession >= 58)
+    || (Number.isFinite(trailerShots) && trailerShots >= 9);
+  const efficientLeader = leaderEfficiency >= 0.5 || (Number.isFinite(leaderSot) && leaderSot >= 3);
+  if (!trailerPushes || !efficientLeader || elapsed < 45) {
+    return { homeBoost: 0, awayBoost: 0, notes: [] };
+  }
+  const boost = clamp(0.035 + leaderEfficiency * 0.05 + (Number.isFinite(leaderPossession) && leaderPossession < 48 ? 0.015 : 0), 0.035, 0.11);
+  const leaderName = leader === "home" ? (match?.homeName || "主队") : (match?.awayName || "客队");
+  const trailerName = trailer === "home" ? (match?.homeName || "主队") : (match?.awayName || "客队");
+  return {
+    homeBoost: leader === "home" ? boost : 0,
+    awayBoost: leader === "away" ? boost : 0,
+    notes: [`${trailerName}压上后留下反击空间，${leaderName}射正效率 ${formatPercent(leaderEfficiency)}，领先方反击进球路径上修。`]
+  };
+}
+
+function liveMomentumScore(live, match = null) {
   const stats = live?.stats || {};
   if (!hasUsefulLiveStats(stats)) return { home: 0, away: 0, notes: ["现场技术统计未同步，只使用比分时间模型。"] };
   const shotDiff = statDiff(stats.home.shots, stats.away.shots);
@@ -4639,11 +4833,23 @@ function liveMomentumScore(live) {
   const cornerDiff = statDiff(stats.home.corners, stats.away.corners);
   const possessionDiff = statDiff(stats.home.possession, stats.away.possession);
   const redCardDiff = statDiff(stats.home.redCards, stats.away.redCards);
-  const raw = shotDiff * 0.012 + sotDiff * 0.026 + cornerDiff * 0.008 + possessionDiff * 0.0015 - redCardDiff * 0.08;
+  const quality = livePressureQualityProfile(live, match);
+  const counter = liveCounterAttackProfile(live, match);
+  const raw = shotDiff * 0.012
+    + sotDiff * 0.026
+    + cornerDiff * 0.008
+    + possessionDiff * 0.0015
+    - redCardDiff * 0.08
+    - quality.homePenalty
+    + quality.awayPenalty
+    + counter.homeBoost
+    - counter.awayBoost;
   const home = clamp(raw, -0.18, 0.18);
   const notes = [
     `射门 ${stats.home.shots ?? "-"}-${stats.away.shots ?? "-"}，射正 ${stats.home.shotsOnTarget ?? "-"}-${stats.away.shotsOnTarget ?? "-"}。`,
     `角球 ${stats.home.corners ?? "-"}-${stats.away.corners ?? "-"}，控球 ${stats.home.possession ?? "-"}%-${stats.away.possession ?? "-"}%。`,
+    ...quality.notes,
+    ...counter.notes,
     redCardDiff ? `红牌差 ${stats.home.redCards ?? 0}-${stats.away.redCards ?? 0}，模型对少打一方降权。` : ""
   ].filter(Boolean);
   return {
@@ -4670,7 +4876,7 @@ function liveProbabilityModel(match, live) {
   const hasScore = Number.isFinite(homeScore) && Number.isFinite(awayScore);
   const goalDiff = hasScore ? homeScore - awayScore : 0;
   const totalGoals = hasScore ? homeScore + awayScore : 0;
-  const momentum = liveMomentumScore(live);
+  const momentum = liveMomentumScore(live, match);
   const statsReady = hasUsefulLiveStats(live?.stats);
   const shifts = { home: 0, draw: 0, away: 0 };
   const notes = [];
@@ -4699,6 +4905,9 @@ function liveProbabilityModel(match, live) {
   shifts.home += momentum.home * clamp(0.55 + remaining * 0.45, 0.45, 1);
   shifts.away += momentum.away * clamp(0.55 + remaining * 0.45, 0.45, 1);
   notes.push(...momentum.notes);
+  if (live?.situationalFlags?.activePenaltyReview) {
+    notes.push(`VAR/点球事件正在确认：${live.situationalFlags.latestPenaltyText || "等待判罚结果"}，实时买点冻结。`);
+  }
 
   const triplet = applyLiveTripletShift(base, shifts);
   const tiebreakHome = typeof base.advance?.tiebreakHome === "number" ? base.advance.tiebreakHome : 0.5;
@@ -4774,7 +4983,7 @@ function liveRemainingGoalModel(match, live) {
   const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0.01, 1);
   const baseHomeLambda = Number(match?.dynamicModel?.adjusted?.lambdaHome || match?.model?.lambdaHome || 1.1);
   const baseAwayLambda = Number(match?.dynamicModel?.adjusted?.lambdaAway || match?.model?.lambdaAway || 1.1);
-  const momentum = liveMomentumScore(live);
+  const momentum = liveMomentumScore(live, match);
   const momentumWeight = Math.sqrt(remaining) * 0.35;
   let homeLambda = baseHomeLambda * remaining + Math.max(0, momentum.home || 0) * momentumWeight;
   let awayLambda = baseAwayLambda * remaining + Math.max(0, momentum.away || 0) * momentumWeight;
@@ -4782,6 +4991,28 @@ function liveRemainingGoalModel(match, live) {
   const awayScore = liveScoreNumber(live?.score?.away);
   const notes = [];
   const stats = live?.stats || {};
+  const quality = livePressureQualityProfile(live, match);
+  const counter = liveCounterAttackProfile(live, match);
+
+  if (quality.homePenalty > 0) {
+    homeLambda *= clamp(1 - quality.homePenalty * 0.9, 0.78, 1);
+    notes.push(...quality.notes.filter((note) => note.includes(match.homeName || "")));
+  }
+  if (quality.awayPenalty > 0) {
+    awayLambda *= clamp(1 - quality.awayPenalty * 0.9, 0.78, 1);
+    notes.push(...quality.notes.filter((note) => note.includes(match.awayName || "")));
+  }
+  if (counter.homeBoost > 0) {
+    homeLambda *= clamp(1 + counter.homeBoost * 0.85, 1, 1.12);
+    notes.push(...counter.notes);
+  }
+  if (counter.awayBoost > 0) {
+    awayLambda *= clamp(1 + counter.awayBoost * 0.85, 1, 1.12);
+    notes.push(...counter.notes);
+  }
+  if (live?.situationalFlags?.activePenaltyReview) {
+    notes.push(`VAR/点球事件未落定，暂停用当前比分做补仓。`);
+  }
 
   if (Number.isFinite(homeScore) && Number.isFinite(awayScore) && homeScore === awayScore && elapsed >= 75) {
     homeLambda *= 0.88;
@@ -4962,7 +5193,7 @@ function liveScorePathContext(row, match, live, liveModel) {
   const favoriteTrailing = strongerSide && strongerSide !== "draw" && currentSide !== "draw" && currentSide !== strongerSide;
   const favoriteLevelOrBehind = strongerSide && strongerSide !== "draw" && (currentSide === "draw" || currentSide !== strongerSide);
   const goalsNeeded = Math.max(0, homeNeeded) + Math.max(0, awayNeeded);
-  const momentum = liveMomentumScore(live);
+  const momentum = liveMomentumScore(live, match);
   const targetMomentum = targetSide === "home" ? momentum.home : targetSide === "away" ? momentum.away : 0;
   const strongerMomentum = strongerSide === "home" ? momentum.home : strongerSide === "away" ? momentum.away : 0;
   const stats = live?.stats || {};
@@ -4992,6 +5223,10 @@ function liveScorePathContext(row, match, live, liveModel) {
       : "";
   const redCardDiff = statDiff(stats.home?.redCards, stats.away?.redCards);
   const targetHasRedRisk = (targetSide === "home" && redCardDiff > 0) || (targetSide === "away" && redCardDiff < 0);
+  const quality = livePressureQualityProfile(live, match);
+  const counter = liveCounterAttackProfile(live, match);
+  const lowQualityPressureSide = quality.homePenalty > 0.04 ? "home" : quality.awayPenalty > 0.04 ? "away" : "";
+  const counterSide = counter.homeBoost > 0 ? "home" : counter.awayBoost > 0 ? "away" : "";
   return {
     homeScore,
     awayScore,
@@ -5016,6 +5251,9 @@ function liveScorePathContext(row, match, live, liveModel) {
     pressureScore: roundTo(targetSide === "home" ? pressureScoreHome : targetSide === "away" ? -pressureScoreHome : Math.abs(pressureScoreHome), 3),
     pressureScoreHome: roundTo(pressureScoreHome, 3),
     pressureSide,
+    lowQualityPressureSide,
+    counterSide,
+    eventFrozen: Boolean(live?.situationalFlags?.freezeRecommendations),
     shotDiff,
     sotDiff,
     cornerDiff,
@@ -5044,6 +5282,10 @@ function pathTradingStance(row, context, liveEdge, dataQuality) {
   }
   if (row.excluded || row.currentScoreGate?.blocked) return { action: "NO_TRADE", label: "已失效", severity: "bad" };
   if (dataQuality.status !== "synced") return { action: "WAIT", label: "等待现场统计", severity: "warn" };
+  if (context.eventFrozen) return { action: "WAIT", label: "等待VAR/点球确认", severity: "warn" };
+  if (context.lowQualityPressureSide && context.goalsNeeded >= 2 && context.targetSide === context.lowQualityPressureSide) {
+    return { action: "NO_CHASE", label: "低质量围攻，不追长比分", severity: "bad" };
+  }
   if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1) return { action: "NO_CHASE", label: "时间不够，不追", severity: "bad" };
   if (context.goalsNeeded >= 3 && context.elapsed >= 55) return { action: "NO_CHASE", label: "路径太长", severity: "bad" };
   if (context.targetHasRedRisk) return { action: "NO_TRADE", label: "红牌风险，不追", severity: "bad" };
@@ -5336,6 +5578,9 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
   } else {
     entry.push(`${context.scoreText} 到 ${context.targetText} 还需要 ${context.goalsNeeded} 球：${context.homeNeeded > 0 ? `${match.homeName} +${context.homeNeeded}` : ""}${context.homeNeeded > 0 && context.awayNeeded > 0 ? "，" : ""}${context.awayNeeded > 0 ? `${match.awayName} +${context.awayNeeded}` : ""}。`);
     entry.push(`只在当前价 <= ${formatCents(row.maxBuyPrice)} 且现场状态继续支持时考虑；超过上限不追。`);
+    if (context.lowQualityPressureSide && context.targetSide === context.lowQualityPressureSide && context.goalsNeeded >= 2) {
+      entry.push("当前属于低质量围攻：控球/角球多不等于能连续进球，长比分路径降级。");
+    }
     const addPct = tradeState.positionAdvice?.addPct || 0;
     if (addPct) position.push(`未持有/想补仓：最多动用该场球胆预算 ${addPct}% 左右，等待下一次刷新确认。`);
     position.push(...(tradeState.positionAdvice?.reasons || []));
@@ -5350,6 +5595,7 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
   } else {
     add.push("当前不满足补仓条件；不要因为赔率变大就摊平。");
   }
+  if (context.eventFrozen) add.unshift("VAR/点球事件未确认，先冻结买点，等比分和盘口重新定价后再看。");
   add.push(...scorePathNextTriggers(row, context, match));
   nextGoal.push(...(tradeState.nextGoal || []));
   timeDecay.push(...(tradeState.timeDecay?.notes || []));
@@ -5378,6 +5624,12 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
   } else {
     warnings.push("现场技术统计不足，不能把补仓建议升为强信号。");
   }
+  if (context.lowQualityPressureSide) {
+    evidence.push(`${context.lowQualityPressureSide === "home" ? match.homeName : match.awayName}存在低质量围攻信号，深盘/大比分不能只看控球和角球。`);
+  }
+  if (context.counterSide) {
+    evidence.push(`${context.counterSide === "home" ? match.homeName : match.awayName}有领先方反击收益，落后方压上时要防下一球反向打穿。`);
+  }
   if (tradeState.remainingModel?.notes?.length) {
     evidence.push(...tradeState.remainingModel.notes.slice(0, 2));
   }
@@ -5388,6 +5640,8 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
 
   if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1) forbidden.push("时间不足但还差球，不追。");
   if (context.goalsNeeded >= 3 && context.elapsed >= 55) forbidden.push("55 分钟后还差 3 球以上，长路径不补。");
+  if (context.lowQualityPressureSide && context.targetSide === context.lowQualityPressureSide && context.goalsNeeded >= 2) forbidden.push("低质量围攻下不补长比分/深盘。");
+  if (context.eventFrozen) forbidden.push("VAR/点球事件未确认时冻结所有实时买点。");
   if (Number.isFinite(row.marketPrice) && Number.isFinite(row.maxBuyPrice) && row.marketPrice > row.maxBuyPrice + 0.03) forbidden.push("价格高于建议上限 3¢ 以上，不追。");
   forbidden.push("比分已超过目标比分、红牌改变结构、现场统计断流时，不做补仓。");
 
@@ -5534,6 +5788,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
   if (dataQuality.status === "pre" || dataQuality.status === "missing") return [];
   const baseHome = Number(match.probabilities?.home) || 0;
   const baseAway = Number(match.probabilities?.away) || 0;
+  const frozen = Boolean(live?.situationalFlags?.freezeRecommendations);
   return (match.recommendations || [])
     .map((rec) => {
       const decoratedRec = { ...rec, _baseHome: baseHome, _baseAway: baseAway };
@@ -5553,8 +5808,11 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
       const hasLiveMarket = rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number";
       const action = !longTail?.impossible && !longTail?.longTail && !hasLiveMarket
         ? { action: "wait", label: "等待实时盘口", canConsider: false }
-        : liveActionFor(liveEdge, rec, dataQuality, longTail);
+        : frozen
+          ? { action: "wait", label: "等待VAR/点球确认", canConsider: false }
+          : liveActionFor(liveEdge, rec, dataQuality, longTail);
       const risks = [
+        frozen ? `VAR/点球事件未确认：${live.situationalFlags?.latestPenaltyText || "等待判罚"}。` : "",
         longTail?.reason || "",
         ...(liveHandicap?.notes || []),
         dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
@@ -5577,7 +5835,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         maxBuyPrice,
         action: live.completed ? "avoid" : action.action,
         label: live.completed && !longTail?.impossible ? "已完赛复盘" : action.label,
-        canConsider: !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        canConsider: !frozen && !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
         hasLiveMarket,
         excluded: Boolean(longTail?.impossible || longTail?.longTail),
         excludedReason: longTail?.reason || "",
@@ -5610,6 +5868,7 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
   const cachedRows = match.correctScoreRecommendations?.rows || [];
   const baseRows = fullCorrectScore.rows?.length ? fullCorrectScore.rows : cachedRows;
   if (!baseRows.length || dataQuality.status === "missing" || dataQuality.status === "pre") return [];
+  const frozen = Boolean(live?.situationalFlags?.freezeRecommendations);
   return baseRows
     .map((row) => {
       const currentScoreGate = matchCurrentScoreGate({
@@ -5637,6 +5896,8 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
         action = { action: "avoid", label: currentScoreGate.label, canConsider: false };
       } else if (!hasLiveMarket) {
         action = { action: "wait", label: "等待球胆价格", canConsider: false };
+      } else if (frozen) {
+        action = { action: "wait", label: "等待VAR/点球确认", canConsider: false };
       } else if (strategy.tier === "avoid") {
         action = { action: "avoid", label: "不建议", canConsider: false };
       } else if (dataQuality.status === "pre") {
@@ -5651,6 +5912,7 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
         action = { action: "wait", label: "等待更好价格", canConsider: false };
       }
       const risks = [
+        frozen ? `VAR/点球事件未确认：${live.situationalFlags?.latestPenaltyText || "等待判罚"}。` : "",
         currentScoreGate?.reason || "",
         ...(strategy.reasons || []),
         dataQuality.status !== "synced" ? "现场技术统计不足，球胆实时建议降级。" : "",
@@ -5672,7 +5934,7 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
         maxBuyPrice,
         action: live?.completed ? "avoid" : action.action,
         label: live?.completed && !currentScoreGate?.blocked ? "已完赛复盘" : action.label,
-        canConsider: !currentScoreGate?.blocked && !live?.completed && Boolean(action.canConsider) && hasLiveMarket,
+        canConsider: !frozen && !currentScoreGate?.blocked && !live?.completed && Boolean(action.canConsider) && hasLiveMarket,
         hasLiveMarket,
         excluded: Boolean(currentScoreGate?.blocked || strategy.tier === "avoid"),
         excludedReason: currentScoreGate?.reason || "",
@@ -7591,6 +7853,11 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     scheduleStatus: event.status || "STATUS_SCHEDULED",
     scheduleStatusDetail: event.statusDetail || "Scheduled",
     scheduleSource: event.source,
+    round: event.round || event.stage || "",
+    stage: event.stage || event.round || "",
+    phase: event.stage || "",
+    roundName: event.roundName || event.round || event.stage || "",
+    season: event.season || null,
     homeName: eventTeamName(event, "home"),
     awayName: eventTeamName(event, "away"),
     homeEnglishName: eventTeamSearchName(event, "home"),
@@ -7603,7 +7870,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
     group: "待确认",
     venue,
     venueInfo: event.venue || {},
-    matchday: "-",
+    matchday: event.stage || event.round || "-",
     kickoffLocal: event.kickoffUtc,
     kickoffShanghai: new Date(kickoffMs).toISOString(),
     model: {
@@ -10230,6 +10497,10 @@ function normalizeScoreboardEvents(data) {
       scheduleId: String(event.id || ""),
       name: event.name || event.shortName || "",
       kickoffUtc: event.date || competition.date || "",
+      stage: event.season?.slug || event.season?.typeName || "",
+      round: event.season?.slug || event.week?.text || "",
+      roundName: event.season?.slug || "",
+      season: event.season || null,
       status: event.status?.type?.name || "",
       statusDetail: event.status?.type?.shortDetail || event.status?.type?.detail || "",
       completed: Boolean(event.status?.type?.completed) || isFinishedStatus(event.status?.type?.name),

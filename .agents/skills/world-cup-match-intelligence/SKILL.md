@@ -22,8 +22,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - For `Team to Advance`, compute and display a separate advancement probability using regulation probabilities plus a conservative tiebreak split from xG edge, ranking/depth, and World Cup record. Do not compare a 90-minute win price directly with an advancement price.
 - For knockout advancement, include knockout-stage experience as a low-weight tiebreak factor when structured World Cup records exist: best finish, finals appearances, and finals matches can form a transparent proxy. Label it as a proxy, not as verified penalty-taking ability.
 - In knockout rounds, add rest/fatigue and current-tournament form as low-weight model factors when schedule and completed-score data exist. Public tipster consensus may only be used as a small market-context signal, never as a substitute for the model.
-- In knockout rounds, apply the post-review correction learned from Brazil-Japan, Germany-Paraguay, and Netherlands-Morocco on June 29-30, 2026: modestly lift regulation draw/extra-time paths, do not equate favorite control with a 90-minute win, and reweight BTTS through the score grid so 1-1, 2-1, and 1-2 paths rise together instead of displaying contradictory score/totals signals.
-- In knockout rounds, downgrade favorite 90-minute moneyline and deep handicap recommendations unless price edge is strong after the draw/extra-time correction. Favorite-to-advance may still be valid, but it must be evaluated separately from regulation win.
+- In knockout rounds, apply the post-review correction learned from Brazil-Japan, Germany-Paraguay, and Netherlands-Morocco on June 29-30, 2026: lift regulation draw/extra-time paths, keep BTTS tied to the score grid, and downgrade favorite 90-minute moneyline/deep handicap unless edge is strong. Quarter-finals and later use a stricter stage profile because team quality is closer; `Team to Advance` is often the cleaner favorite market when price is fair.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -36,10 +35,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - `data/research-framework.json`: structured research dimensions and scoring framework.
 - `data/head-to-head-overrides.json`: manually verified structured H2H records and no-meeting confirmations.
 - `data/worldcup-context.json`: generated runtime context, ignored by Git.
-- `scripts/sync-worldcup-context.js`: public source sync and optional OpenAI-compatible AI synthesis.
-- `scripts/archive-dashboard.js`: archives current dashboard snapshots into SQLite.
-- `scripts/record-match-result.js`: records final scores for later calibration.
-- `scripts/history-store.js`: SQLite schema, migrations, and persistence helpers.
+- `scripts/sync-worldcup-context.js`, `archive-dashboard.js`, `record-match-result.js`, `history-store.js`: public sync, history/archive, result recording, and SQLite persistence.
 - `deploy/`: systemd and nginx examples.
 
 ## Workflow
@@ -153,6 +149,7 @@ When maintaining public market data:
 - In-play recommendations must suppress extreme long-tail moneyline rows after a large score gap. If a team trails by three or more goals, or by two or more goals late, and the comeback/draw probability is tiny or the market is trading near 0¢, label it `长尾不追` and move it below practical live markets instead of saying `等待更好价格`.
 - In-play advancement recommendations should recompute from the live regulation triplet plus the same extra-time/penalty tiebreak split. Do not leave `Team to Advance` at its pre-match probability once live score, time, and attack/defense stats are available.
 - In-play opportunity labels must distinguish real Polymarket live prices from local/manual snapshots. If the row does not have a live Polymarket price/curve, show waiting or downgraded language instead of a buy-style recommendation.
+- In-play models must separate sterile pressure from dangerous pressure: high possession/corners plus low shots on target, poor cross completion, and many opponent clearances/interceptions should downgrade totals, deep handicaps, and long correct-score paths. Raise a leading side's counterattack/next-goal path only with efficient shots-on-target or fast-break evidence; freeze all buy recommendations during unresolved VAR/penalty events.
 - BTTS recommendations need a post-review discipline layer: downgrade BTTS Yes when low-score/clean-sheet paths dominate or underdog shot creation is unverified, but in knockout rounds do not over-downgrade it when current-tournament BTTS, underdog scoring, or team form supports both teams scoring.
 - Match Polymarket team names with exact team aliases or word-boundary tokens. Do not treat short team codes such as `SCO`, `MAR`, or `CAN` as arbitrary substrings, because they can appear inside unrelated words like `score`, `market`, or `canceled`.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
@@ -201,8 +198,7 @@ Use the subset relevant to the change:
 
 ```bash
 npm start
-npm run update:data
-npm run sync:context
+npm run update:data && npm run sync:context
 npm run archive:dashboard
 npm run record:result -- --match MATCH_ID --home-goals 0 --away-goals 0 --source manual
 BASE_PATH=/worldcup PORT=4174 npm start
