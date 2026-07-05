@@ -5046,8 +5046,20 @@ function liveRemainingGoalModel(match, live) {
     return { scores: [{ homeGoals: 0, awayGoals: 0, probability: 1 }], homeLambda: 0, awayLambda: 0, notes: ["比赛已结束，无剩余进球分布。"] };
   }
   const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0.01, 1);
-  const baseHomeLambda = Number(match?.dynamicModel?.adjusted?.lambdaHome || match?.model?.lambdaHome || 1.1);
-  const baseAwayLambda = Number(match?.dynamicModel?.adjusted?.lambdaAway || match?.model?.lambdaAway || 1.1);
+  const baseHomeLambda = Number(
+    match?.probabilities?.lambdaHome
+    ?? match?.modelV2?.adjusted?.lambdaHome
+    ?? match?.dynamicModel?.adjusted?.lambdaHome
+    ?? match?.model?.lambdaHome
+    ?? 1.1
+  );
+  const baseAwayLambda = Number(
+    match?.probabilities?.lambdaAway
+    ?? match?.modelV2?.adjusted?.lambdaAway
+    ?? match?.dynamicModel?.adjusted?.lambdaAway
+    ?? match?.model?.lambdaAway
+    ?? 1.1
+  );
   const momentum = liveMomentumScore(live, match);
   const momentumWeight = Math.sqrt(remaining) * 0.35;
   let homeLambda = baseHomeLambda * remaining + Math.max(0, momentum.home || 0) * momentumWeight;

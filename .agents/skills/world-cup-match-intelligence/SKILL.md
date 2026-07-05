@@ -90,13 +90,11 @@ Use this skill when building, modifying, operating, or extending a football matc
 ## Data Quality Logic
 
 Use these prediction modes:
-
 - `baseline`: long-term strength, seed data, and existing model only.
 - `dynamic`: baseline plus current lineup, injury, team news, form, tactical, weather, venue, odds, and market curve inputs.
 - `lineup-confirmed`: dynamic mode after official starting lineups are available.
 
 Downgrade output when inputs are incomplete:
-
 - Missing lineups or injuries: no strong confidence or aggressive action label.
 - Lineup gate reasons must distinguish projected lineups, queried-but-unverified lineups, and missing lineup sources. Do not collapse those states into a vague "lineup not fully confirmed" message.
 - Missing odds or Polymarket curves: no price guidance.
@@ -139,6 +137,7 @@ When maintaining public market data:
 - Treat BTTS / Both Teams To Score as a first-class market alongside match result, handicap, and totals: generate Yes/No probabilities, match Polymarket BTTS tokens when available, show curves, archive snapshots, and settle reviews from final scores.
 - Treat `Team to Advance` as a first-class knockout market when Polymarket returns it, but never let advancement tokens satisfy 90-minute moneyline matching.
 - Fetch each match's `-more-markets` event and expose derivative markets. Correct score/ball-score recommendations may be shown only by matching Polymarket `Correct Score` / `Exact Score` Yes prices to the same xG score grid, excluding `Any Other Score`, applying current-score gates, and treating live cards as path-trading plans with entry limit, scale-in trigger, take-profit, stop/no-chase, hedge rules, evidence, and warnings.
+- Every derived market recommendation must consume the already-adjusted model distribution, including goalkeeper/age, tournament trend, knockout review, and context signals. Moneyline, handicap, totals, BTTS, Team to Advance, correct score, opportunity radar, and live remaining-goal models must not rebuild from raw seed lambdas unless the adjusted distribution is unavailable and the fallback is labelled.
 - If Polymarket does not return a derivative category such as correct score/ball-score for a match, show a structured missing state for that category instead of leaving the UI blank or inventing prices.
 - The next-three-day fixture window is a data collection and context sync scope. Do not render it as the primary home-page match list unless explicitly requested.
 - The primary dashboard tabs should default to every match on the current Beijing/Shanghai matchday, not the entire ESPN/FIFA schedule window and not the date embedded in Polymarket market slugs. A late-night match whose Polymarket slug says the prior date should still be grouped by its kickoff date in Asia/Shanghai. Matches without live Polymarket curves may appear as schedule/awaiting-market, but must not generate fake price advice.
