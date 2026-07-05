@@ -6530,30 +6530,38 @@
 
       function wireLivePanels() {
         document.querySelectorAll("[data-live-refresh]").forEach((button) => {
+          if (button.dataset.liveWired === "1") return;
+          button.dataset.liveWired = "1";
           button.addEventListener("click", () => {
             refreshLiveMatch(button.dataset.liveRefresh, true);
           });
         });
         document.querySelectorAll("[data-position-market]").forEach((select) => {
+          if (select.dataset.positionWired === "1") return;
+          select.dataset.positionWired = "1";
           select.addEventListener("change", () => {
-            const matchId = select.dataset.positionMarket;
+            const manager = select.closest("[data-position-manager]");
+            const matchId = manager?.dataset.positionManager || select.dataset.positionMarket;
             const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
             if (!match) return;
             const market = availablePositionMarkets(match).find((item) => item.key === select.value);
-            const input = document.querySelector(`[data-position-entry="${cssEscape(matchId)}"]`);
+            const input = manager?.querySelector("[data-position-entry]");
             if (input && market && typeof market.marketPrice === "number" && !input.value) {
               input.value = market.marketPrice.toFixed(3);
             }
           });
         });
         document.querySelectorAll("[data-position-add]").forEach((button) => {
+          if (button.dataset.positionWired === "1") return;
+          button.dataset.positionWired = "1";
           button.addEventListener("click", () => {
-            const matchId = button.dataset.positionAdd;
+            const manager = button.closest("[data-position-manager]");
+            const matchId = manager?.dataset.positionManager || button.dataset.positionAdd;
             const match = (currentDashboard?.matches || []).find((item) => item.id === matchId);
             if (!match) return;
-            const select = document.querySelector(`[data-position-market="${cssEscape(matchId)}"]`);
-            const entryInput = document.querySelector(`[data-position-entry="${cssEscape(matchId)}"]`);
-            const amountInput = document.querySelector(`[data-position-amount="${cssEscape(matchId)}"]`);
+            const select = manager?.querySelector("[data-position-market]");
+            const entryInput = manager?.querySelector("[data-position-entry]");
+            const amountInput = manager?.querySelector("[data-position-amount]");
             const market = availablePositionMarkets(match).find((item) => item.key === select?.value);
             const entryPrice = Number(entryInput?.value);
             const amount = Number(amountInput?.value);
@@ -6579,6 +6587,8 @@
           });
         });
         document.querySelectorAll("[data-position-remove]").forEach((button) => {
+          if (button.dataset.positionWired === "1") return;
+          button.dataset.positionWired = "1";
           button.addEventListener("click", () => {
             const card = button.closest("[data-position-manager]");
             const matchId = card?.dataset.positionManager;
