@@ -3541,6 +3541,18 @@ function buildLiveLadderCorrectScoreCombo(rows, match, options = {}) {
 }
 
 function buildCorrectScoreComboStrategy(match, rows = [], options = {}) {
+  if (options.live && options.liveGate && options.liveGate.ready === false) {
+    return {
+      source: "Correct score combo engine",
+      updatedAt: options.updatedAt || match?.marketCatalog?.updatedAt || new Date().toISOString(),
+      status: "waiting",
+      missingReason: options.liveGate.reason || "实时球胆等待现场样本，不使用赛前组合伪装临场买点。",
+      missingReasonEn: options.liveGate.reasonEn || "Live correct-score combos are waiting for enough in-play evidence.",
+      referenceNotes: options.liveGate.rules || [],
+      referenceNotesEn: options.liveGate.rulesEn || [],
+      combos: []
+    };
+  }
   const validRows = validCorrectScoreComboRows(rows);
   if (validRows.length < 2) {
     return {
@@ -6401,7 +6413,9 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
     .slice(0, 8);
 }
 
-function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality) {
+function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality, correctScoreTradeGate = null) {
+  const tradeGate = correctScoreTradeGate || liveCorrectScoreTradeGate(live, dataQuality, match);
+  if (!tradeGate.ready) return [];
   const fullCorrectScore = buildCorrectScoreRecommendations(match, { limit: 32 });
   const cachedRows = match.correctScoreRecommendations?.rows || [];
   const baseRows = fullCorrectScore.rows?.length ? fullCorrectScore.rows : cachedRows;
@@ -6610,6 +6624,71 @@ function buildLiveRecommendationSummary(match, live, recommendations, dataQualit
   };
 }
 
+function liveCorrectScoreTradeGate(live, dataQuality, match = null) {
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  const scoreKnown = Number.isFinite(homeScore) && Number.isFinite(awayScore);
+  const totalGoals = scoreKnown ? homeScore + awayScore : 0;
+  const rules = [
+    "赛前球胆组合按赛前比分分布显示；实时球胆必须等待现场样本。",
+    "0-18 分钟默认不推荐实时球胆组合，避免快节奏早球直接打穿路径。",
+    "18-30 分钟若已经有进球，只做复核不追相邻比分，等待市场完成重定价。",
+    "现场统计必须同步；只有比分没有射门/射正/角球时，不给实时入场组合。"
+  ];
+  const rulesEn = [
+    "Pre-match correct-score combos use the pre-match score distribution; live combos require in-play evidence.",
+    "From 0-18' no live correct-score combo is recommended, because a fast early goal can kill nearby paths.",
+    "From 18-30' after an early goal, review only and wait for market repricing instead of chasing adjacent scores.",
+    "Team stats must be synced; score-only data is not enough for a live entry combo."
+  ];
+  const wait = (reason, reasonEn) => ({
+    ready: false,
+    reason,
+    reasonEn,
+    rules,
+    rulesEn,
+    elapsed,
+    score: scoreKnown ? `${homeScore}-${awayScore}` : ""
+  });
+  if (dataQuality.status === "pre") {
+    return wait("比赛未开赛，实时球胆不显示买入组合；只看赛前球胆推荐。", "The match has not started; use only pre-match correct-score picks.");
+  }
+  if (dataQuality.status === "missing") {
+    return wait("现场比分和统计缺失，实时球胆不显示买入组合。", "Live score and stats are missing; no live correct-score combo is shown.");
+  }
+  if (dataQuality.status === "score-only") {
+    return wait("只有比分、没有现场统计，不能判断节奏和压制质量；实时球胆等待统计同步。", "Only the score is available, so tempo and pressure quality cannot be judged.");
+  }
+  if (!scoreKnown) {
+    return wait("比分未同步，实时球胆等待比分和盘口。", "Score is not synced; waiting for score and market data.");
+  }
+  if (live?.completed || dataQuality.status === "post") {
+    return wait("比赛已结束，实时球胆只做复盘，不显示新买点。", "The match is finished; live correct-score output is review-only.");
+  }
+  if (live?.situationalFlags?.freezeRecommendations) {
+    return wait("VAR/点球等关键事件未确认，实时球胆冻结。", "A VAR/penalty event is unresolved; live correct-score combos are frozen.");
+  }
+  if (elapsed < 18) {
+    return wait(`${elapsed || 0}' 现场样本太少：先不推实时球胆组合，等比赛节奏、射正和盘口重定价出来。`, `${elapsed || 0}' is too early; wait for tempo, shots on target, and market repricing.`);
+  }
+  if (elapsed < 30 && totalGoals > 0) {
+    return wait(`${elapsed}' 已经出现早球，盘口处在重定价期；不追相邻比分，等 30' 后再看现场趋势。`, `${elapsed}' already has an early goal; wait until after 30' for the market and tempo to settle.`);
+  }
+  if (dataQuality.status !== "synced") {
+    return wait("现场统计未完整同步，实时球胆等待射门/射正/角球数据。", "Team stats are not fully synced; waiting for shots, shots on target, and corners.");
+  }
+  return {
+    ready: true,
+    reason: "现场样本达到门槛，允许生成实时球胆组合。",
+    reasonEn: "In-play evidence threshold is met; live correct-score combos may be generated.",
+    rules,
+    rulesEn,
+    elapsed,
+    score: `${homeScore}-${awayScore}`
+  };
+}
+
 function dashboardMatchByIdOrSchedule(dashboard, matchId) {
   const aliases = matchIdAliases(matchId);
   return (dashboard?.matches || []).find((match) =>
@@ -6721,11 +6800,13 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
   const marketRefresh = await refreshMatchMarketsForLive(match, live, force);
   const liveModel = liveProbabilityModel(match, live);
   const recommendations = buildLiveRecommendations(match, live, liveModel, dataQuality);
-  const correctScoreRecommendations = buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality);
+  const correctScoreTradeGate = liveCorrectScoreTradeGate(live, dataQuality, match);
+  const correctScoreRecommendations = buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality, correctScoreTradeGate);
   const correctScoreComboStrategy = buildCorrectScoreComboStrategy(match, correctScoreRecommendations, {
     updatedAt: new Date().toISOString(),
     live,
-    liveModel
+    liveModel,
+    liveGate: correctScoreTradeGate
   });
   const payload = {
     ok: true,
@@ -6743,6 +6824,7 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
     liveModel,
     recommendations,
     correctScoreRecommendations,
+    correctScoreTradeGate,
     correctScoreComboStrategy,
     marketCatalog: match.marketCatalog,
     recommendationSummary: buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel, correctScoreRecommendations),

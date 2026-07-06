@@ -5807,11 +5807,12 @@
         const score = live.score || {};
         const recommendations = payload.recommendations || [];
         const correctScores = payload.correctScoreRecommendations || [];
+        const liveScoreGateWaiting = payload.correctScoreTradeGate?.ready === false;
         const scoreText = `${payload.homeName || ""} ${score.home ?? "-"} - ${score.away ?? "-"} ${payload.awayName || ""}`;
         const liveComboStrategy = payload.correctScoreComboStrategy || {};
         const correctScoreRows = correctScores.length
           ? correctScores.slice(0, 6).map(renderLiveCorrectScoreCard).join("")
-          : `<div class="live-summary-card"><div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No correct-score candidate is available right now." : "当前没有可用的实时球胆候选。")}</div></div>`;
+          : `<div class="live-summary-card"><div class="live-summary-body">${escapeHtml(liveScoreGateWaiting ? (currentLang === "en" ? "Live correct-score candidates are hidden until the evidence gate is met." : "现场样本门槛未过，暂不生成实时球胆候选。") : (currentLang === "en" ? "No correct-score candidate is available right now." : "当前没有可用的实时球胆候选。"))}</div></div>`;
         const rows = recommendations.length
           ? recommendations.slice(0, 6).map((rec) => `
             <div class="live-market-row">
@@ -5855,6 +5856,7 @@
             ${renderPositionManager((currentDashboard?.matches || []).find((item) => item.id === matchId) || {}, payload)}
             <div class="live-correct-score">
               <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Live Correct Score Path Trading" : "实时球胆观察 / 过程交易")}<span>${escapeHtml(currentLang === "en" ? "entry, scale-in, hedge, take-profit and stop rules" : "买入 / 补仓 / 对冲 / 止盈 / 止损")}</span></div>
+              ${renderLiveCorrectScoreGate(payload)}
               ${renderCorrectScoreComboStrategy(liveComboStrategy)}
               ${correctScoreRows}
             </div>
@@ -6277,6 +6279,20 @@
             }).join("")}
           </div>
           ${notes.length ? `<div class="correct-score-combo-note">${notes.slice(0, 3).map((item) => escapeHtml(translateLivePlanText(item))).join(" · ")}</div>` : ""}
+        `;
+      }
+
+      function renderLiveCorrectScoreGate(payload = {}) {
+        const gate = payload.correctScoreTradeGate || {};
+        if (!gate || gate.ready !== false) return "";
+        const rules = currentLang === "en" ? gate.rulesEn || gate.rules || [] : gate.rules || [];
+        const reason = currentLang === "en" ? gate.reasonEn || gate.reason : gate.reason;
+        return `
+          <div class="live-summary-card">
+            <div class="live-summary-title">${escapeHtml(currentLang === "en" ? "Live correct-score gate" : "实时球胆暂不推荐")}</div>
+            <div class="live-summary-body">${escapeHtml(reason || (currentLang === "en" ? "Waiting for enough in-play evidence." : "等待足够现场样本。"))}</div>
+            ${rules.length ? `<ul class="prediction-reasons">${rules.slice(0, 4).map((item) => `<li>${escapeHtml(translateLivePlanText(item))}</li>`).join("")}</ul>` : ""}
+          </div>
         `;
       }
 
