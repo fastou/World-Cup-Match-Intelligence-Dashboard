@@ -5435,9 +5435,52 @@
         return { action, tone, trimPct, keepPct, addPct, currentValue, pnl, pnlPct, shares, path, rules };
       }
 
+      function positionPortfolioRisk(positions = [], match = {}, livePayload = {}) {
+        const context = liveScoreContext(livePayload);
+        const totalAmount = positions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+        const sides = { home: 0, away: 0, draw: 0, total: totalAmount };
+        for (const position of positions) {
+          const amount = Number(position.amount) || 0;
+          const label = `${position.marketName || ""} ${position.score || ""}`.toLowerCase();
+          if (/draw|平/.test(label)) sides.draw += amount;
+          else if (position.marketType === "correctScore" && position.score) {
+            const [homeGoals, awayGoals] = String(position.score).split("-").map(Number);
+            if (Number.isFinite(homeGoals) && Number.isFinite(awayGoals)) {
+              if (homeGoals > awayGoals) sides.home += amount;
+              else if (awayGoals > homeGoals) sides.away += amount;
+              else sides.draw += amount;
+            }
+          } else if (label.includes(String(homeName(match)).toLowerCase()) || label.includes("home")) {
+            sides.home += amount;
+          } else if (label.includes(String(awayName(match)).toLowerCase()) || label.includes("away")) {
+            sides.away += amount;
+          }
+        }
+        const dominant = Object.entries({ home: sides.home, away: sides.away, draw: sides.draw }).sort((a, b) => b[1] - a[1])[0] || ["", 0];
+        const dominantShare = totalAmount > 0 ? dominant[1] / totalAmount : 0;
+        const lateLevel = context.home !== null && context.away !== null && context.home === context.away && (context.minute ?? 0) >= 70;
+        const messages = [];
+        let tone = "";
+        if (dominantShare >= 0.7 && positions.length >= 2) {
+          tone = "bad";
+          const sideName = dominant[0] === "home" ? homeName(match) : dominant[0] === "away" ? awayName(match) : (currentLang === "en" ? "draw" : "平局");
+          messages.push(currentLang === "en"
+            ? `Portfolio is ${Math.round(dominantShare * 100)}% exposed to ${sideName}. Do not keep adding the same path; trim or hedge adjacent outcomes.`
+            : `你的仓位 ${Math.round(dominantShare * 100)}% 都押在 ${sideName} 路径上，不要继续同向补仓，优先减仓或覆盖相邻结果。`);
+        }
+        if (lateLevel) {
+          tone = tone || "bad";
+          messages.push(currentLang === "en"
+            ? "After 70' while level, regulation-win and multi-goal correct-score paths decay fast; treat Team to Advance or draw/adjacent-score hedges separately."
+            : "70分钟后仍平局，90分钟胜和多球球胆衰减很快；晋级盘、平局或相邻比分要单独当保护路径看。");
+        }
+        return { tone, messages };
+      }
+
       function renderPositionManager(match, livePayload = null) {
         const positions = userPositionsForMatch(match.id);
         const markets = availablePositionMarkets(match);
+        const portfolioRisk = positionPortfolioRisk(positions, match, livePayload || {});
         const options = markets.map((market) => `<option value="${escapeHtml(market.key)}">${escapeHtml(compactMarketLabel(market))} ${typeof market.marketPrice === "number" ? `@ ${fmtPrice(market.marketPrice)}` : ""}</option>`).join("");
         const cards = positions.length ? positions.map((position) => {
           const market = findPositionMarket(match, position, livePayload);
@@ -5494,6 +5537,7 @@
               <button class="position-add" type="button" data-position-add="${escapeHtml(match.id)}">${escapeHtml(currentLang === "en" ? "Add" : "添加")}</button>
             </div>
             <div class="position-hint">${escapeHtml(currentLang === "en" ? "Tip: use decimal prices such as 0.545. The tool reads live score, stats and current market prices when available." : "提示：价格填 0.545 这种小数。工具会结合实时比分、攻防统计和当前盘口价给出持有/止盈/减仓/补仓上限。")}</div>
+            ${portfolioRisk.messages.length ? `<div class="position-status ${escapeHtml(portfolioRisk.tone)}">${portfolioRisk.messages.map((item) => escapeHtml(item)).join("<br>")}</div>` : ""}
             <div class="position-status" data-position-status="${escapeHtml(match.id)}"></div>
             <div class="position-list">${cards}</div>
           </section>

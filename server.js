@@ -783,6 +783,11 @@ function poisson(lambda, goals) {
   return Math.exp(-lambda) * Math.pow(lambda, goals) / factorial;
 }
 
+function poissonScoreProbability(lambdaHome, lambdaAway, homeGoals, awayGoals) {
+  if (!Number.isInteger(homeGoals) || !Number.isInteger(awayGoals) || homeGoals < 0 || awayGoals < 0) return 0;
+  return poisson(lambdaHome, homeGoals) * poisson(lambdaAway, awayGoals);
+}
+
 function scoreModel(lambdaHome, lambdaAway) {
   const maxGoals = 10;
   let home = 0;
@@ -4933,6 +4938,46 @@ function applyLiveTripletShift(base, shifts) {
   });
 }
 
+function liveTripletFromRemainingModel(live, remainingModel) {
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || !remainingModel?.scores?.length) return null;
+  let home = 0;
+  let draw = 0;
+  let away = 0;
+  for (const score of remainingModel.scores) {
+    const finalHome = homeScore + score.homeGoals;
+    const finalAway = awayScore + score.awayGoals;
+    if (finalHome > finalAway) home += score.probability;
+    else if (finalHome < finalAway) away += score.probability;
+    else draw += score.probability;
+  }
+  return normalizeProbabilityTriplet({ home, draw, away });
+}
+
+function liveOverProbabilityFromRemainingModel(live, remainingModel, line = 2.5) {
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || !remainingModel?.scores?.length) return null;
+  let over = 0;
+  const currentTotal = homeScore + awayScore;
+  for (const score of remainingModel.scores) {
+    if (currentTotal + score.homeGoals + score.awayGoals > line) over += score.probability;
+  }
+  return clamp(over, 0, 1);
+}
+
+function liveBttsProbabilityFromRemainingModel(live, remainingModel) {
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || !remainingModel?.scores?.length) return null;
+  let btts = 0;
+  for (const score of remainingModel.scores) {
+    if (homeScore + score.homeGoals > 0 && awayScore + score.awayGoals > 0) btts += score.probability;
+  }
+  return clamp(btts, 0, 1);
+}
+
 function liveProbabilityModel(match, live) {
   const base = match.probabilities || { home: 0.33, draw: 0.34, away: 0.33, over25: 0.5, under25: 0.5, btts: 0.5 };
   const elapsed = elapsedMinuteFromLive(live, match);
@@ -4975,7 +5020,10 @@ function liveProbabilityModel(match, live) {
     notes.push(`VAR/点球事件正在确认：${live.situationalFlags.latestPenaltyText || "等待判罚结果"}，实时买点冻结。`);
   }
 
-  const triplet = applyLiveTripletShift(base, shifts);
+  const remainingModel = hasScore ? liveRemainingGoalModel(match, live) : null;
+  const triplet = (hasScore && remainingModel)
+    ? liveTripletFromRemainingModel(live, remainingModel)
+    : applyLiveTripletShift(base, shifts);
   const tiebreakHome = typeof base.advance?.tiebreakHome === "number" ? base.advance.tiebreakHome : 0.5;
   const advanceHomeRaw = triplet.home + triplet.draw * tiebreakHome;
   const advanceAwayRaw = triplet.away + triplet.draw * (1 - tiebreakHome);
@@ -4988,14 +5036,20 @@ function liveProbabilityModel(match, live) {
     : 0;
   let over25 = typeof base.over25 === "number" ? base.over25 : 0.5;
   if (hasScore) {
-    if (totalGoals >= 3) over25 = 0.99;
-    else if (totalGoals === 2) over25 = clamp(0.34 + remaining * 0.52 + tempo * 0.55 + sotTempo * 1.3, 0.08, 0.92);
-    else if (totalGoals === 1) over25 = clamp(0.14 + remaining * 0.47 + tempo * 0.5 + sotTempo * 1.1, 0.05, 0.76);
-    else over25 = clamp(remaining * 0.34 + tempo * 0.45 + sotTempo * 1.0, 0.03, 0.58);
+    over25 = liveOverProbabilityFromRemainingModel(live, remainingModel, 2.5);
+    if (over25 === null) {
+      if (totalGoals >= 3) over25 = 0.99;
+      else if (totalGoals === 2) over25 = clamp(0.34 + remaining * 0.52 + tempo * 0.55 + sotTempo * 1.3, 0.08, 0.92);
+      else if (totalGoals === 1) over25 = clamp(0.14 + remaining * 0.47 + tempo * 0.5 + sotTempo * 1.1, 0.05, 0.76);
+      else over25 = clamp(remaining * 0.34 + tempo * 0.45 + sotTempo * 1.0, 0.03, 0.58);
+    }
   }
   let btts = typeof base.btts === "number" ? base.btts : 0.5;
   if (hasScore) {
-    if (homeScore > 0 && awayScore > 0) btts = 0.99;
+    const distributionBtts = liveBttsProbabilityFromRemainingModel(live, remainingModel);
+    if (distributionBtts !== null) {
+      btts = distributionBtts;
+    } else if (homeScore > 0 && awayScore > 0) btts = 0.99;
     else {
       const nilSide = homeScore === 0 ? "home" : "away";
       const nilStats = live.stats?.[nilSide] || {};
@@ -5009,6 +5063,7 @@ function liveProbabilityModel(match, live) {
       }
     }
   }
+  if (remainingModel?.notes?.length) notes.push(...remainingModel.notes);
 
   return {
     ...triplet,
@@ -5213,12 +5268,15 @@ function liveCorrectScoreProbability(row, match, live, liveModel) {
   const homeAdditional = row.homeGoals - homeScore;
   const awayAdditional = row.awayGoals - awayScore;
   const remaining = liveRemainingGoalModel(match, live);
-  let probability = poisson(remaining.homeLambda, homeAdditional) * poisson(remaining.awayLambda, awayAdditional);
+  let probability = poissonScoreProbability(remaining.homeLambda, remaining.awayLambda, homeAdditional, awayAdditional);
 
   const side = scoreOutcomeSide(row);
-  if (side === "home") probability *= clamp((liveModel.home || row.modelProbability) / Math.max(0.05, match.probabilities?.home || 0.33), 0.45, 1.9);
-  if (side === "away") probability *= clamp((liveModel.away || row.modelProbability) / Math.max(0.05, match.probabilities?.away || 0.33), 0.45, 1.9);
-  if (side === "draw") probability *= clamp((liveModel.draw || row.modelProbability) / Math.max(0.05, match.probabilities?.draw || 0.28), 0.45, 1.9);
+  const targetReached = homeAdditional === 0 && awayAdditional === 0;
+  if (!targetReached) {
+    if (side === "home") probability *= clamp((liveModel.home || row.modelProbability) / Math.max(0.05, match.probabilities?.home || 0.33), 0.45, 1.35);
+    if (side === "away") probability *= clamp((liveModel.away || row.modelProbability) / Math.max(0.05, match.probabilities?.away || 0.33), 0.45, 1.35);
+    if (side === "draw") probability *= clamp((liveModel.draw || row.modelProbability) / Math.max(0.05, match.probabilities?.draw || 0.28), 0.45, 1.35);
+  }
 
   return clamp(probability, 0.001, 0.98);
 }
@@ -5238,11 +5296,12 @@ function liveCorrectScoreFairProbability(row, match, live, liveModel, remainingM
   const remaining = remainingModel || liveRemainingGoalModel(match, live);
   const raw = remainingScoreProbabilityFromModel(remaining, Number(row.homeGoals) - homeScore, Number(row.awayGoals) - awayScore);
   const side = scoreOutcomeSide(row);
-  const sideMultiplier = side === "home"
-    ? clamp((liveModel.home || row.modelProbability || 0.33) / Math.max(0.05, match.probabilities?.home || 0.33), 0.55, 1.55)
+  const targetReached = homeScore === Number(row.homeGoals) && awayScore === Number(row.awayGoals);
+  const sideMultiplier = targetReached ? 1 : side === "home"
+    ? clamp((liveModel.home || row.modelProbability || 0.33) / Math.max(0.05, match.probabilities?.home || 0.33), 0.55, 1.35)
     : side === "away"
-      ? clamp((liveModel.away || row.modelProbability || 0.33) / Math.max(0.05, match.probabilities?.away || 0.33), 0.55, 1.55)
-      : clamp((liveModel.draw || row.modelProbability || 0.28) / Math.max(0.05, match.probabilities?.draw || 0.28), 0.55, 1.55);
+      ? clamp((liveModel.away || row.modelProbability || 0.33) / Math.max(0.05, match.probabilities?.away || 0.33), 0.55, 1.35)
+      : clamp((liveModel.draw || row.modelProbability || 0.28) / Math.max(0.05, match.probabilities?.draw || 0.28), 0.55, 1.35);
   return clamp(raw * sideMultiplier, 0.001, 0.98);
 }
 
@@ -5862,6 +5921,49 @@ function liveReviewRisk(rec, liveEdge) {
   return reason;
 }
 
+function lateRegulationWinRisk(rec, match, live, liveProbability) {
+  if (rec?.marketType !== "moneyline") return null;
+  if (!["home", "away"].includes(rec.key)) return null;
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || elapsed < 70) return null;
+  const goalDiff = homeScore - awayScore;
+  const side = rec.key;
+  const selectedScoreSide = side === "home" ? goalDiff : -goalDiff;
+  const stats = live?.stats || {};
+  const sideStats = stats[side] || {};
+  const otherStats = stats[side === "home" ? "away" : "home"] || {};
+  const sotDiff = statDiff(sideStats.shotsOnTarget, otherStats.shotsOnTarget);
+  const shotDiff = statDiff(sideStats.shots, otherStats.shots);
+  const possessionDiff = statDiff(sideStats.possession, otherStats.possession);
+  const pressureClear = sotDiff >= 2 && shotDiff >= 5;
+  const notControlling = possessionDiff < -8 || sotDiff <= 0;
+  if (selectedScoreSide > 0) return null;
+  if (goalDiff === 0) {
+    const reason = `${elapsed}' 仍为平局，${rec.name} 是90分钟胜，不等于晋级；后段只剩绝杀路径。`;
+    if (!pressureClear || notControlling || Number(liveProbability) < 0.35) {
+      return {
+        caution: true,
+        forceNoConsider: true,
+        reason: `${reason} 现场未形成清晰射正压制，降级为观察。`
+      };
+    }
+    return {
+      caution: true,
+      reason: `${reason} 只有射正/危险进攻持续压制时才允许小仓。`
+    };
+  }
+  if (selectedScoreSide < 0) {
+    return {
+      caution: true,
+      forceNoConsider: true,
+      reason: `${elapsed}' ${rec.name} 仍落后，90分钟反超需要连续进球，不能按强队名气补仓。`
+    };
+  }
+  return null;
+}
+
 function buildLiveRecommendations(match, live, liveModel, dataQuality) {
   if (dataQuality.status === "pre" || dataQuality.status === "missing") return [];
   const baseHome = Number(match.probabilities?.home) || 0;
@@ -5873,6 +5975,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
       const impossible = impossibleByCurrentScore(rec, live);
       const liveHandicap = liveHandicapProbabilityForRecommendation(rec, match, live);
       const liveProbability = liveHandicap ? liveHandicap.win : liveProbabilityForRecommendation(decoratedRec, liveModel);
+      const lateWinRisk = lateRegulationWinRisk(rec, match, live, liveProbability);
       const handicapImpossibility = liveHandicap?.lateDeepHandicap && liveHandicap.win < 0.08
         ? {
           longTail: true,
@@ -5880,20 +5983,27 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         }
         : null;
       const longTail = impossible || handicapImpossibility || longTailByCurrentScore(rec, live, liveProbability);
-      const effectiveProbability = longTail?.impossible ? 0 : liveProbability;
+      const effectiveProbability = longTail?.resolved ? 1 : longTail?.impossible ? 0 : liveProbability;
       const liveEdge = edge(effectiveProbability, rec.marketPrice);
       const maxBuyPrice = longTail?.impossible || longTail?.longTail ? 0 : fairBuyPrice(effectiveProbability, dataQuality.status === "synced" ? 0.04 : 0.06);
       const hasLiveMarket = rec.chart?.source === "Polymarket" && typeof rec.chart.currentPrice === "number";
-      const action = !longTail?.impossible && !longTail?.longTail && !hasLiveMarket
-        ? { action: "wait", label: "等待实时盘口", canConsider: false }
-        : frozen
-          ? { action: "wait", label: "等待VAR/点球确认", canConsider: false }
-          : liveActionFor(liveEdge, rec, dataQuality, longTail);
+      const action = longTail?.impossible || longTail?.longTail
+        ? liveActionFor(liveEdge, rec, dataQuality, longTail)
+        : !hasLiveMarket
+          ? { action: "wait", label: "等待实时盘口", canConsider: false }
+          : frozen
+            ? { action: "wait", label: "等待VAR/点球确认", canConsider: false }
+            : liveActionFor(liveEdge, rec, dataQuality, longTail);
+      if (lateWinRisk?.forceNoConsider && action.canConsider) {
+        action.canConsider = false;
+        action.label = "后段90分钟胜降级";
+      }
       const risks = [
         frozen ? `VAR/点球事件未确认：${live.situationalFlags?.latestPenaltyText || "等待判罚"}。` : "",
         longTail?.reason || "",
+        lateWinRisk?.reason || "",
         ...(liveHandicap?.notes || []),
-        dataQuality.status !== "synced" ? "现场技术统计不足，不能强推荐。" : "",
+        dataQuality.status !== "synced" && dataQuality.status !== "post" ? "现场技术统计不足，不能强推荐。" : "",
         !hasLiveMarket ? "当前盘口不是 Polymarket 实时价，价格建议降级。" : "",
         live.completed ? "比赛已结束或进入赛后状态，只用于复盘，不建议入场。" : "",
         liveReviewRisk(rec, liveEdge)
@@ -5913,7 +6023,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         maxBuyPrice,
         action: live.completed ? "avoid" : action.action,
         label: live.completed && !longTail?.impossible ? "已完赛复盘" : action.label,
-        canConsider: !frozen && !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        canConsider: !frozen && !lateWinRisk?.forceNoConsider && !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
         hasLiveMarket,
         excluded: Boolean(longTail?.impossible || longTail?.longTail),
         excludedReason: longTail?.reason || "",
