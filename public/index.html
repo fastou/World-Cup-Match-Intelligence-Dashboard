@@ -1690,6 +1690,9 @@
         .live-path-position,
         .live-path-rotation-row,
         .live-plan-grid,
+        .correct-score-combo-head,
+        .correct-score-combo-metrics,
+        .correct-score-combo-leg,
         .position-form,
         .position-head,
         .position-metrics {
@@ -2580,6 +2583,106 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
         gap: 8px;
+      }
+
+      .correct-score-combo-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .correct-score-combo {
+        display: grid;
+        gap: 9px;
+        padding: 11px;
+        border: 1px solid #dfe8df;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .correct-score-combo-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: start;
+      }
+
+      .correct-score-combo-title {
+        color: var(--ink);
+        font-size: 14px;
+        font-weight: 860;
+      }
+
+      .correct-score-combo-method {
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: #eef6ef;
+        color: #1f6b54;
+        font-size: 11px;
+        font-weight: 780;
+        white-space: nowrap;
+      }
+
+      .correct-score-combo-summary,
+      .correct-score-combo-note {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .correct-score-combo-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .correct-score-combo-metrics span {
+        display: grid;
+        gap: 3px;
+        padding: 7px;
+        border-radius: 7px;
+        background: #f6f8f5;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .correct-score-combo-metrics strong {
+        color: var(--ink);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .correct-score-combo-legs {
+        display: grid;
+        gap: 6px;
+      }
+
+      .correct-score-combo-leg {
+        display: grid;
+        grid-template-columns: 44px minmax(74px, 0.8fr) repeat(3, minmax(52px, 0.55fr));
+        gap: 6px;
+        align-items: center;
+        padding: 7px;
+        border: 1px solid #edf1ec;
+        border-radius: 7px;
+        background: #fbfcfa;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .correct-score-combo-leg strong {
+        color: var(--ink);
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .correct-score-combo-rules {
+        margin: 0;
+        padding-left: 16px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
       }
 
       .correct-score-card {
@@ -5704,6 +5807,7 @@
         const recommendations = payload.recommendations || [];
         const correctScores = payload.correctScoreRecommendations || [];
         const scoreText = `${payload.homeName || ""} ${score.home ?? "-"} - ${score.away ?? "-"} ${payload.awayName || ""}`;
+        const liveComboStrategy = payload.correctScoreComboStrategy || {};
         const correctScoreRows = correctScores.length
           ? correctScores.slice(0, 6).map(renderLiveCorrectScoreCard).join("")
           : `<div class="live-summary-card"><div class="live-summary-body">${escapeHtml(currentLang === "en" ? "No correct-score candidate is available right now." : "当前没有可用的实时球胆候选。")}</div></div>`;
@@ -5750,6 +5854,7 @@
             ${renderPositionManager((currentDashboard?.matches || []).find((item) => item.id === matchId) || {}, payload)}
             <div class="live-correct-score">
               <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Live Correct Score Path Trading" : "实时球胆观察 / 过程交易")}<span>${escapeHtml(currentLang === "en" ? "entry, scale-in, hedge, take-profit and stop rules" : "买入 / 补仓 / 对冲 / 止盈 / 止损")}</span></div>
+              ${renderCorrectScoreComboStrategy(liveComboStrategy)}
               ${correctScoreRows}
             </div>
             <div class="live-section-title">${escapeHtml(currentLang === "en" ? "Other Live Markets" : "其他实时盘口")}<span>${escapeHtml(currentLang === "en" ? "moneyline / totals / BTTS / handicap" : "胜平负 / 大小球 / 双进 / 让球")}</span></div>
@@ -6113,6 +6218,67 @@
         return "";
       }
 
+      function fmtSignedPct(value) {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+        const sign = value > 0 ? "+" : "";
+        return `${sign}${(value * 100).toFixed(1)}%`;
+      }
+
+      function renderCorrectScoreComboStrategy(strategy = {}) {
+        const combos = Array.isArray(strategy.combos) ? strategy.combos : [];
+        if (!combos.length) return "";
+        const notes = currentLang === "en" ? strategy.referenceNotesEn || strategy.referenceNotes || [] : strategy.referenceNotes || [];
+        return `
+          <div class="correct-score-combo-grid">
+            ${combos.slice(0, 4).map((combo) => {
+              const metrics = combo.metrics || {};
+              const legs = Array.isArray(combo.legs) ? combo.legs : [];
+              const rules = currentLang === "en" ? combo.rulesEn || combo.rules || [] : combo.rules || [];
+              const title = currentLang === "en" ? combo.titleEn || combo.title : combo.title;
+              const method = currentLang === "en" ? combo.methodEn || combo.method : combo.method;
+              const summary = currentLang === "en" ? combo.summaryEn || combo.summary : combo.summary;
+              const risk = currentLang === "en" ? combo.riskLevelEn || combo.riskLevel : combo.riskLevel;
+              const reserveText = combo.cashReservePct > 0
+                ? `${escapeHtml(currentLang === "en" ? "Reserve" : "留现金")} ${escapeHtml(fmtPct(combo.cashReservePct))}`
+                : `${escapeHtml(currentLang === "en" ? "Fully allocated" : "预算全分配")}`;
+              return `
+                <article class="correct-score-combo">
+                  <div class="correct-score-combo-head">
+                    <div>
+                      <div class="correct-score-combo-title">${escapeHtml(title || "-")}</div>
+                      <div class="correct-score-combo-summary">${escapeHtml(summary || "")}</div>
+                    </div>
+                    <span class="correct-score-combo-method">${escapeHtml(method || "-")}</span>
+                  </div>
+                  <div class="correct-score-combo-metrics">
+                    <span>${escapeHtml(currentLang === "en" ? "Coverage" : "覆盖概率")}<strong>${escapeHtml(fmtPct(metrics.coverageProbability))}</strong></span>
+                    <span>${escapeHtml(currentLang === "en" ? "Cost sum" : "组合成本")}<strong>${escapeHtml(fmtPrice(metrics.priceSum))}</strong></span>
+                    <span>${escapeHtml(currentLang === "en" ? "If hit" : "命中收益区间")}<strong>${escapeHtml(`${fmtSignedPct(metrics.worstProfitIfHit)} ~ ${fmtSignedPct(metrics.bestProfitIfHit)}`)}</strong></span>
+                  </div>
+                  <div class="correct-score-combo-note">${escapeHtml(risk || "")} · ${reserveText}</div>
+                  <div class="correct-score-combo-legs">
+                    ${legs.map((leg) => {
+                      const role = currentLang === "en" ? leg.roleEn || leg.role : leg.role;
+                      return `
+                        <div class="correct-score-combo-leg">
+                          <strong>${escapeHtml(leg.score || "-")}</strong>
+                          <span>${escapeHtml(role || "-")}</span>
+                          <span>${escapeHtml(currentLang === "en" ? "Stake" : "投入")} ${escapeHtml(fmtPct(leg.stakePct))}</span>
+                          <span>${escapeHtml(currentLang === "en" ? "Price" : "价格")} ${escapeHtml(fmtPrice(leg.marketPrice))}</span>
+                          <span>${escapeHtml(currentLang === "en" ? "Hit" : "命中")} ${escapeHtml(fmtSignedPct(leg.profitIfHit))}</span>
+                        </div>
+                      `;
+                    }).join("")}
+                  </div>
+                  ${rules.length ? `<ul class="correct-score-combo-rules">${rules.slice(0, 3).map((item) => `<li>${escapeHtml(translateLivePlanText(item))}</li>`).join("")}</ul>` : ""}
+                </article>
+              `;
+            }).join("")}
+          </div>
+          ${notes.length ? `<div class="correct-score-combo-note">${notes.slice(0, 3).map((item) => escapeHtml(translateLivePlanText(item))).join(" · ")}</div>` : ""}
+        `;
+      }
+
       function renderCorrectScoreRecommendations(match) {
         const payload = match.correctScoreRecommendations || {};
         const rows = Array.isArray(payload.rows) ? payload.rows : [];
@@ -6147,6 +6313,7 @@
               </div>
               <div class="correct-score-meta">${escapeHtml(payload.available || rows.length)} ${escapeHtml(currentLang === "en" ? "markets" : "个球胆盘口")} · ${escapeHtml(fmtTime(payload.updatedAt))}</div>
             </div>
+            ${renderCorrectScoreComboStrategy(payload.comboStrategy)}
             <div class="correct-score-grid">
               ${rows.map((row) => {
                 const reasons = row.decision?.reasons || [];

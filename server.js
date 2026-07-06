@@ -3241,6 +3241,355 @@ function correctScoreDecision(row, match) {
   };
 }
 
+function correctScoreComboUrl(row) {
+  return correctScoreRowMarketUrl(row);
+}
+
+function validCorrectScoreComboRows(rows = []) {
+  return (rows || [])
+    .filter((row) => {
+      const price = Number(row.marketPrice);
+      const probability = Number(row.liveProbability ?? row.modelProbability);
+      return row?.score
+        && !row.currentScoreGate?.blocked
+        && Number.isFinite(price)
+        && price > 0.005
+        && price < 0.98
+        && Number.isFinite(probability)
+        && probability > 0.002;
+    })
+    .map((row) => ({
+      ...row,
+      marketPrice: Number(row.marketPrice),
+      modelProbability: Number(row.liveProbability ?? row.modelProbability),
+      edge: typeof row.edge === "number" ? row.edge : edge(Number(row.liveProbability ?? row.modelProbability), Number(row.marketPrice))
+    }));
+}
+
+function scoreDistance(a = {}, b = {}) {
+  const ah = Number(a.homeGoals);
+  const aa = Number(a.awayGoals);
+  const bh = Number(b.homeGoals);
+  const ba = Number(b.awayGoals);
+  if (![ah, aa, bh, ba].every(Number.isFinite)) return Infinity;
+  return Math.abs(ah - bh) + Math.abs(aa - ba);
+}
+
+function correctScoreComboMetrics(legs = []) {
+  const active = legs.filter((leg) => Number.isFinite(Number(leg.stakePct)) && Number(leg.stakePct) > 0 && Number.isFinite(Number(leg.marketPrice)) && Number(leg.marketPrice) > 0);
+  const coverageProbability = active.reduce((sum, leg) => sum + (Number(leg.modelProbability) || 0), 0);
+  const priceSum = active.reduce((sum, leg) => sum + (Number(leg.marketPrice) || 0), 0);
+  const expectedPayout = active.reduce((sum, leg) => sum + (Number(leg.modelProbability) || 0) * ((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1)), 0);
+  const expectedRoi = expectedPayout - 1;
+  const payoutByScore = active.map((leg) => ({
+    score: leg.score,
+    payoutPerBudget: roundTo((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1), 3),
+    profitIfHit: roundTo(((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1)) - 1, 3)
+  }));
+  const hitProfits = payoutByScore.map((item) => item.profitIfHit);
+  return {
+    coverageProbability: roundTo(coverageProbability, 4),
+    priceSum: roundTo(priceSum, 4),
+    expectedRoi: roundTo(expectedRoi, 4),
+    bestProfitIfHit: roundTo(Math.max(...hitProfits), 4),
+    worstProfitIfHit: roundTo(Math.min(...hitProfits), 4),
+    lossIfMiss: -1,
+    payoutByScore
+  };
+}
+
+function correctScoreLeg(row, role, stakePct, reason = "", roleEn = "") {
+  const price = Number(row.marketPrice);
+  const stake = Number(stakePct) || 0;
+  return {
+    score: row.score,
+    homeGoals: row.homeGoals,
+    awayGoals: row.awayGoals,
+    role,
+    roleEn: roleEn || role,
+    stakePct: roundTo(stake, 4),
+    modelProbability: roundTo(Number(row.modelProbability) || 0, 4),
+    marketPrice: Number.isFinite(price) ? roundTo(price, 4) : null,
+    edge: typeof row.edge === "number" ? roundTo(row.edge, 4) : null,
+    maxBuyPrice: typeof row.maxBuyPrice === "number" ? roundTo(row.maxBuyPrice, 4) : null,
+    payoutPerBudget: Number.isFinite(price) && price > 0 ? roundTo(stake / price, 3) : null,
+    profitIfHit: Number.isFinite(price) && price > 0 ? roundTo(stake / price - 1, 3) : null,
+    reason,
+    reasonEn: reason,
+    url: correctScoreComboUrl(row)
+  };
+}
+
+function uniqueScoreRows(rows = []) {
+  const seen = new Set();
+  const unique = [];
+  for (const row of rows) {
+    if (!row?.score || seen.has(row.score)) continue;
+    seen.add(row.score);
+    unique.push(row);
+  }
+  return unique;
+}
+
+function buildEqualReturnCorrectScoreCombo(rows, match) {
+  const candidates = rows
+    .filter((row) => row.modelProbability >= 0.035 || row.scoreRank <= 6)
+    .sort((a, b) => {
+      const av = (a.modelProbability || 0) + Math.max(0, a.edge || 0) * 0.35 - Math.max(0, (a.marketPrice || 0) - (a.modelProbability || 0)) * 0.2;
+      const bv = (b.modelProbability || 0) + Math.max(0, b.edge || 0) * 0.35 - Math.max(0, (b.marketPrice || 0) - (b.modelProbability || 0)) * 0.2;
+      return bv - av;
+    });
+  const selected = uniqueScoreRows(candidates).slice(0, 4);
+  const priceSum = selected.reduce((sum, row) => sum + row.marketPrice, 0);
+  if (selected.length < 2 || priceSum <= 0) return null;
+  const legs = selected.map((row, index) => correctScoreLeg(
+    row,
+    index === 0 ? "主覆盖" : "覆盖",
+    row.marketPrice / priceSum,
+    index === 0 ? "组合中模型/价格综合最优。" : "用来覆盖相邻比分路径。",
+    index === 0 ? "Core cover" : "Cover"
+  ));
+  const metrics = correctScoreComboMetrics(legs);
+  return {
+    key: "equal-return-dutching",
+    title: "等回款覆盖",
+    titleEn: "Equal-return cover",
+    method: "Dutching",
+    methodEn: "Dutching",
+    riskLevel: "中低波动",
+    riskLevelEn: "Lower variance",
+    totalBudgetPct: 1,
+    cashReservePct: 0,
+    summary: `把预算按 Yes 价格拆到 ${selected.length} 个比分，任一覆盖比分命中时回款接近一致；未覆盖比分仍会亏损。`,
+    summaryEn: `Split the budget by Yes price across ${selected.length} scorelines so any covered score returns roughly the same; uncovered scores still lose.`,
+    metrics,
+    legs,
+    rules: [
+      "适合模型前几名比分接近、你不想押单一路径时使用。",
+      "只有覆盖概率明显高于组合成本时才有价值；否则只是买得更分散。",
+      "如果其中一个比分在比赛中变成当前比分，优先卖出一部分回本金。"
+    ],
+    rulesEn: [
+      "Use when top score probabilities are close and you do not want one fragile path.",
+      "It has value only when model coverage is clearly above combined cost.",
+      "If one covered score becomes the live score, trim part first to recover stake."
+    ]
+  };
+}
+
+function buildCoreCoverCorrectScoreCombo(rows, match) {
+  const byProbability = [...rows].sort((a, b) => (b.modelProbability || 0) - (a.modelProbability || 0));
+  const primary = byProbability[0];
+  if (!primary) return null;
+  const adjacent = uniqueScoreRows(byProbability
+    .filter((row) => row.score !== primary.score)
+    .sort((a, b) => {
+      const aScore = (a.modelProbability || 0) - scoreDistance(a, primary) * 0.015 + Math.max(0, a.edge || 0) * 0.25;
+      const bScore = (b.modelProbability || 0) - scoreDistance(b, primary) * 0.015 + Math.max(0, b.edge || 0) * 0.25;
+      return bScore - aScore;
+    }))
+    .slice(0, 2);
+  const tail = uniqueScoreRows(rows
+    .filter((row) => row.score !== primary.score && !adjacent.some((item) => item.score === row.score))
+    .filter((row) => scoreOutcomeSide(row) === correctScoreMarketBias(match).regularFavorite || row.edge >= -0.025)
+    .sort((a, b) => ((b.edge || 0) + (b.modelProbability || 0) * 0.35) - ((a.edge || 0) + (a.modelProbability || 0) * 0.35)))[0];
+  const selected = [primary, ...adjacent, tail].filter(Boolean);
+  if (selected.length < 2) return null;
+  const rawWeights = selected.map((_, index) => [0.5, 0.25, 0.17, 0.08][index] || 0.05);
+  const sumWeights = rawWeights.reduce((sum, value) => sum + value, 0);
+  const roles = ["主比分", "保护比分", "相邻保护", "小尾仓"];
+  const rolesEn = ["Core score", "Cover score", "Adjacent cover", "Small tail"];
+  const legs = selected.map((row, index) => correctScoreLeg(
+    row,
+    roles[index],
+    rawWeights[index] / sumWeights,
+    index === 0 ? "模型最高比分，承担主要回报。" : index <= 2 ? "保护相邻比分，降低单比分打穿风险。" : "只留小尾仓，不摊平。",
+    rolesEn[index]
+  ));
+  const metrics = correctScoreComboMetrics(legs);
+  return {
+    key: "core-cover",
+    title: "主比分 + 保护",
+    titleEn: "Core score plus cover",
+    method: "Cover bet",
+    methodEn: "Cover bet",
+    riskLevel: "均衡",
+    riskLevelEn: "Balanced",
+    totalBudgetPct: 1,
+    cashReservePct: 0,
+    summary: "主比分吃主要收益，旁边两个比分做保险，最后一个深路径只给小尾仓。",
+    summaryEn: "The core score carries most upside, adjacent scores reduce path risk, and the deep path stays tiny.",
+    metrics,
+    legs,
+    rules: [
+      "适合你已经认可一个主方向，但担心 1 球误差时使用。",
+      "保护比分不是主仓，涨了就先卖回本金。",
+      "如果半场仍没有形成主路径，优先减小尾仓，不继续补深比分。"
+    ],
+    rulesEn: [
+      "Use when you like one main direction but want protection against a one-goal miss.",
+      "Cover scores are not core holdings; trim them first after a price jump.",
+      "If the match has not moved into the core path by half-time, cut the tail rather than adding deep scores."
+    ]
+  };
+}
+
+function buildBarbellCorrectScoreCombo(rows, match) {
+  const top = [...rows].sort((a, b) => (b.modelProbability || 0) - (a.modelProbability || 0))[0];
+  if (!top) return null;
+  const tails = uniqueScoreRows(rows
+    .filter((row) => row.score !== top.score)
+    .filter((row) => row.marketPrice <= 0.13 && row.modelProbability >= 0.018)
+    .sort((a, b) => ((b.edge || 0) + (b.modelProbability || 0) * 0.5) - ((a.edge || 0) + (a.modelProbability || 0) * 0.5)))
+    .slice(0, 2);
+  const selected = [top, ...tails].filter(Boolean);
+  if (selected.length < 2) return null;
+  const rawWeights = selected.map((_, index) => [0.65, 0.22, 0.13][index] || 0.08);
+  const sumWeights = rawWeights.reduce((sum, value) => sum + value, 0);
+  const roles = ["小主仓", "长尾", "长尾"];
+  const rolesEn = ["Small core", "Tail", "Tail"];
+  const legs = selected.map((row, index) => correctScoreLeg(
+    row,
+    roles[index],
+    rawWeights[index] / sumWeights,
+    index === 0 ? "只用小主仓，不押满。" : "高赔率路径，只能用尾仓。",
+    rolesEn[index]
+  ));
+  const metrics = correctScoreComboMetrics(legs);
+  return {
+    key: "barbell-reserve",
+    title: "小主仓 + 长尾 + 留现金",
+    titleEn: "Small core, tails and reserve",
+    method: "Barbell / reserve",
+    methodEn: "Barbell / reserve",
+    riskLevel: "高波动但亏损可控",
+    riskLevelEn: "High variance, capped exposure",
+    totalBudgetPct: 0.45,
+    cashReservePct: 0.55,
+    summary: "只动用约 45% 球胆预算，剩余现金等现场第一球或半场信号，再补相邻路径。",
+    summaryEn: "Deploy only about 45% of the correct-score budget and keep the rest for the first-goal or half-time signal.",
+    metrics,
+    legs,
+    rules: [
+      "适合淘汰赛早段不确定、但你想提前占一点低价路径。",
+      "第一球后只补被增强的相邻比分，不补已经被杀死的比分。",
+      "长尾仓一旦翻倍，先卖出回本金，别等终场。"
+    ],
+    rulesEn: [
+      "Use when early knockout uncertainty is high but you still want tiny exposure.",
+      "After the first goal, add only adjacent paths strengthened by that goal.",
+      "If a tail doubles, trim to recover stake; do not wait for full-time."
+    ]
+  };
+}
+
+function buildLiveLadderCorrectScoreCombo(rows, match, options = {}) {
+  const live = options.live || {};
+  const liveModel = options.liveModel || {};
+  const score = live?.score || {};
+  if (!Number.isFinite(Number(score.home)) || !Number.isFinite(Number(score.away))) return null;
+  const currentRows = rows
+    .filter((row) => row.homeGoals >= score.home && row.awayGoals >= score.away)
+    .sort((a, b) => {
+      const aDistance = (a.homeGoals - score.home) + (a.awayGoals - score.away);
+      const bDistance = (b.homeGoals - score.home) + (b.awayGoals - score.away);
+      const aScore = (a.liveProbability ?? a.modelProbability ?? 0) - aDistance * 0.025 + Math.max(0, a.edge || 0) * 0.2;
+      const bScore = (b.liveProbability ?? b.modelProbability ?? 0) - bDistance * 0.025 + Math.max(0, b.edge || 0) * 0.2;
+      return bScore - aScore;
+    });
+  const selected = uniqueScoreRows(currentRows).slice(0, 3);
+  if (selected.length < 2) return null;
+  const rawWeights = selected.map((_, index) => [0.45, 0.35, 0.2][index] || 0.1);
+  const sumWeights = rawWeights.reduce((sum, value) => sum + value, 0);
+  const legs = selected.map((row, index) => correctScoreLeg(
+    row,
+    index === 0 ? "当前主路径" : "轮动保护",
+    rawWeights[index] / sumWeights,
+    index === 0 ? "当前比分往目标比分推进最自然的路径。" : "下一球后用于轮动止盈/对冲。",
+    index === 0 ? "Live core path" : "Rotation cover"
+  ));
+  const metrics = correctScoreComboMetrics(legs);
+  return {
+    key: "live-ladder",
+    title: "现场轮动组合",
+    titleEn: "Live ladder combo",
+    method: "Ladder / green-up",
+    methodEn: "Ladder / green-up",
+    riskLevel: "过程交易",
+    riskLevelEn: "In-play trading",
+    totalBudgetPct: 0.6,
+    cashReservePct: 0.4,
+    summary: `当前 ${match.homeName} ${score.home}-${score.away} ${match.awayName}，只买还没被打穿的路径；下一球后先锁利再换相邻比分。`,
+    summaryEn: `Current score is ${score.home}-${score.away}; use only live paths that are not crossed, then trim and rotate after the next goal.`,
+    metrics,
+    legs,
+    rules: [
+      "这不是赛前一次性买满，而是下一球后轮动。",
+      "目标比分出现时，先卖出 50%-70%，再留尾仓。",
+      "如果 8-10 分钟没有射正，停止补仓。"
+    ],
+    rulesEn: [
+      "This is not an all-in pre-match combo; it rotates after the next goal.",
+      "When the target score appears, sell 50%-70% first and keep only a tail.",
+      "If there is no shot on target for 8-10 minutes, stop adding."
+    ],
+    liveContext: {
+      minute: liveModel.elapsedMinute,
+      score: `${score.home}-${score.away}`
+    }
+  };
+}
+
+function buildCorrectScoreComboStrategy(match, rows = [], options = {}) {
+  const validRows = validCorrectScoreComboRows(rows);
+  if (validRows.length < 2) {
+    return {
+      source: "Correct score combo engine",
+      updatedAt: options.updatedAt || match?.marketCatalog?.updatedAt || new Date().toISOString(),
+      status: "missing",
+      missingReason: "可用球胆价格不足，无法构造组合。",
+      combos: []
+    };
+  }
+  const combos = [
+    buildEqualReturnCorrectScoreCombo(validRows, match),
+    buildCoreCoverCorrectScoreCombo(validRows, match),
+    buildBarbellCorrectScoreCombo(validRows, match),
+    options.live ? buildLiveLadderCorrectScoreCombo(validRows, match, options) : null
+  ].filter(Boolean)
+    .map((combo) => ({
+      ...combo,
+      discipline: [
+        "单场球胆组合仍然是高波动；组合降低的是路径风险，不是消灭亏损。",
+        "所有百分比都是该场球胆预算内的比例，不是总本金比例。",
+        "超过建议上限、盘口断流、红牌/点球未结算时暂停。"
+      ],
+      disciplineEn: [
+        "Correct-score combos are still high variance; they reduce path risk, not loss risk.",
+        "All percentages are within the match correct-score budget, not total bankroll.",
+        "Pause when price is above limit, markets are stale, or red-card/penalty events are unresolved."
+      ]
+    }));
+  return {
+    source: "Correct score combo engine",
+    updatedAt: options.updatedAt || match?.marketCatalog?.updatedAt || new Date().toISOString(),
+    status: "synced",
+    methodology: "Dutching / cover bet / barbell reserve / ladder green-up",
+    methodologyEn: "Dutching / cover bet / barbell reserve / ladder green-up",
+    referenceNotes: [
+      "Dutching：多选项按价格拆分，让覆盖结果的回款接近一致。",
+      "Hedge/Cover：用相邻结果降低主路径被 1 球误差打穿的风险。",
+      "Green-up：价格上涨后卖出部分仓位，锁回本金或降低回撤。"
+    ],
+    referenceNotesEn: [
+      "Dutching splits stake by price so covered outcomes return similar amounts.",
+      "Cover bets reduce one-goal miss risk around the main path.",
+      "Green-up trims after a price move to recover stake or reduce drawdown."
+    ],
+    combos
+  };
+}
+
 function buildCorrectScoreRecommendations(match, options = {}) {
   const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Number(options.limit)) : 10;
   const correctScoreCategory = (match?.marketCatalog?.categories || []).find((category) => category.key === "correctScore");
@@ -3334,6 +3683,7 @@ function buildCorrectScoreRecommendations(match, options = {}) {
     available: markets.length,
     shown: Math.min(rows.length, limit),
     rows: rows.slice(0, limit),
+    comboStrategy: buildCorrectScoreComboStrategy(match, rows, { updatedAt: sourceUpdatedAt }),
     missingReason: rows.length ? "" : "已返回球胆盘口，但未能解析出可匹配模型比分的 Yes 价格。"
   };
 }
@@ -6114,6 +6464,7 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
         score: row.score,
         homeGoals: row.homeGoals,
         awayGoals: row.awayGoals,
+        currentScoreGate,
         liveProbability,
         rawLiveProbability: liveProbability,
         baseProbability: row.modelProbability,
@@ -6371,6 +6722,11 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
   const liveModel = liveProbabilityModel(match, live);
   const recommendations = buildLiveRecommendations(match, live, liveModel, dataQuality);
   const correctScoreRecommendations = buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQuality);
+  const correctScoreComboStrategy = buildCorrectScoreComboStrategy(match, correctScoreRecommendations, {
+    updatedAt: new Date().toISOString(),
+    live,
+    liveModel
+  });
   const payload = {
     ok: true,
     matchId: match.id,
@@ -6387,6 +6743,7 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
     liveModel,
     recommendations,
     correctScoreRecommendations,
+    correctScoreComboStrategy,
     marketCatalog: match.marketCatalog,
     recommendationSummary: buildLiveRecommendationSummary(match, live, recommendations, dataQuality, liveModel, correctScoreRecommendations),
     disclaimer: "实时买点是研究辅助，不自动下单；数据不足、价格缺失或比赛已结束时必须降级。"
@@ -13133,6 +13490,35 @@ function compactCorrectScoreRecommendations(payload = null) {
     available: payload.available,
     shown: payload.shown,
     missingReason: payload.missingReason,
+    comboStrategy: payload.comboStrategy ? {
+      source: payload.comboStrategy.source,
+      updatedAt: payload.comboStrategy.updatedAt,
+      status: payload.comboStrategy.status,
+      methodology: payload.comboStrategy.methodology,
+      methodologyEn: payload.comboStrategy.methodologyEn,
+      referenceNotes: compactArray(payload.comboStrategy.referenceNotes, 3),
+      referenceNotesEn: compactArray(payload.comboStrategy.referenceNotesEn, 3),
+      combos: compactArray(payload.comboStrategy.combos, 4).map((combo) => ({
+        key: combo.key,
+        title: combo.title,
+        titleEn: combo.titleEn,
+        method: combo.method,
+        methodEn: combo.methodEn,
+        riskLevel: combo.riskLevel,
+        riskLevelEn: combo.riskLevelEn,
+        totalBudgetPct: combo.totalBudgetPct,
+        cashReservePct: combo.cashReservePct,
+        summary: combo.summary,
+        summaryEn: combo.summaryEn,
+        metrics: combo.metrics,
+        legs: compactArray(combo.legs, 4),
+        rules: compactArray(combo.rules, 4),
+        rulesEn: compactArray(combo.rulesEn, 4),
+        discipline: compactArray(combo.discipline, 3),
+        disciplineEn: compactArray(combo.disciplineEn, 3),
+        liveContext: combo.liveContext
+      }))
+    } : null,
     rows: compactArray(payload.rows, 10).map((row) => ({
       key: row.key,
       marketType: row.marketType,
