@@ -3218,7 +3218,7 @@
           appTitle: "世界杯 AI分析平台",
           loading: "加载中",
           refreshTitle: "刷新数据",
-          matchesTitle: "当前比赛日 Polymarket 盘口与模型信号",
+          matchesTitle: "未来三天比赛与模型信号",
           sourcesTitle: "数据源状态",
           marketsTitle: "世界杯市场池",
           eliteTitle: "世界杯账号 Top 10",
@@ -3245,7 +3245,7 @@
           appTitle: "World Cup Match Intelligence Dashboard",
           loading: "Loading",
           refreshTitle: "Refresh data",
-          matchesTitle: "Current Matchday Polymarket Markets and Model Signals",
+          matchesTitle: "Next Three Days: Matches and Model Signals",
           sourcesTitle: "Data Sources",
           marketsTitle: "World Cup Market Pool",
           eliteTitle: "World Cup Accounts Top 10",
@@ -4237,17 +4237,18 @@
 
       const matchShanghaiDateKey = (match) => shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal || "");
 
-      const focusMatchdayMatches = (matches) => {
+      const visibleMatchWindowMatches = (matches) => {
         const candidates = (matches || [])
           .filter((match) => !String(match.scheduleStatus || "").toLowerCase().includes("final"))
           .sort((a, b) => (new Date(a.kickoffShanghai || a.kickoffLocal || "").getTime() || 0) - (new Date(b.kickoffShanghai || b.kickoffLocal || "").getTime() || 0));
-        if (!candidates.length) return [];
-        const inProgress = candidates.find((match) => String(match.scheduleStatus || "").toLowerCase().includes("in_progress"));
-        const todayShanghai = shanghaiDateKey(new Date().toISOString());
-        const matchDates = [...new Set(candidates.map(matchShanghaiDateKey).filter(Boolean))].sort();
-        const nextMatchDate = matchDates.find((date) => date >= todayShanghai) || matchDates[0];
-        const targetDate = inProgress ? matchShanghaiDateKey(inProgress) : nextMatchDate;
-        return candidates.filter((match) => matchShanghaiDateKey(match) === targetDate);
+        return candidates;
+      };
+
+      const matchWindowDateLabel = (matches) => {
+        const matchDates = [...new Set((matches || []).map(matchShanghaiDateKey).filter(Boolean))].sort();
+        if (!matchDates.length) return "-";
+        if (matchDates.length === 1) return matchDates[0];
+        return `${matchDates[0]} - ${matchDates[matchDates.length - 1]}`;
       };
 
       const fmtTime = (value) => {
@@ -6745,14 +6746,14 @@
       }
 
       function renderMatchTabs(matches) {
-        const matchdayMatches = focusMatchdayMatches(matches);
-        if (!matchdayMatches.length) {
+        const windowMatches = visibleMatchWindowMatches(matches);
+        if (!windowMatches.length) {
           return `<div class="empty">${escapeHtml(currentLang === "en"
-            ? "No match is available for the current matchday."
-            : "当前比赛日没有可显示的比赛。")}</div>`;
+            ? "No visible match is available in the three-day window."
+            : "当前三天窗口没有可显示的比赛。")}</div>`;
         }
-        const focusDate = matchShanghaiDateKey(matchdayMatches[0]);
-        const tabs = matchdayMatches.map((match, index) => {
+        const windowDateLabel = matchWindowDateLabel(windowMatches);
+        const tabs = windowMatches.map((match, index) => {
           const hasLive = livePolymarketRecommendations(match).length > 0;
           const statusLabel = hasLive
             ? (currentLang === "en" ? "Polymarket live" : "Polymarket 实时盘")
@@ -6765,14 +6766,14 @@
         `;
         }).join("");
 
-        const panels = matchdayMatches.map((match, index) => `
+        const panels = windowMatches.map((match, index) => `
           <div class="match-panel ${index === 0 ? "active" : ""}" data-match-panel="${escapeHtml(match.id)}">
             ${renderMatch(match)}
           </div>
         `).join("");
 
         return `
-          <div class="confidence-note">${escapeHtml(currentLang === "en" ? "Matchday" : "当前比赛日")} ${escapeHtml(focusDate || "-")}</div>
+          <div class="confidence-note">${escapeHtml(currentLang === "en" ? "Three-day fixture window" : "三天赛程窗口")} · ${windowMatches.length} ${escapeHtml(currentLang === "en" ? "matches" : "场")} · ${escapeHtml(windowDateLabel)}</div>
           <div class="match-switcher" role="tablist" aria-label="比赛切换">
             ${tabs}
           </div>

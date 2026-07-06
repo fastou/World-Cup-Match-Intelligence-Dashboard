@@ -6915,8 +6915,9 @@ async function buildOpportunityRadar({ force = false } = {}) {
     includeOpenAi: false,
     light: true
   });
-  const focus = focusMatchdayMatches(dashboard.matches || [], now);
-  const radarMatches = focus.matches.length ? focus.matches : dashboard.matches || [];
+  const allWindowMatches = dashboard.matches || [];
+  const focus = focusMatchdayMatches(allWindowMatches, now);
+  const radarMatches = allWindowMatches;
   const scanDate = focus.matchDate || opportunityScanDate(radarMatches);
   const candidateRows = opportunityCandidateRows(radarMatches, scanDate, now);
   const candidates = diversifiedOpportunityRows(candidateRows, OPPORTUNITY_MAX_ITEMS, now);
