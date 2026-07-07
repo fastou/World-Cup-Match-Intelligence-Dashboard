@@ -69,6 +69,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
+const DASHBOARD_MODEL_VERSION = "2026-07-08-r16-correct-score-reserve";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -1212,12 +1213,16 @@ function knockoutStageProfile(match) {
     : { key: "group", labelZh: "小组赛", drawBoost: 0, favoritePenalty: 0, deepHandicapPenalty: 0, longScorePenalty: 0 };
 }
 
-function useRound16PlusLiveLogic(match) {
+function useRound16PlusLogic(match) {
   const profile = knockoutStageProfile(match);
   if (["round16", "quarter", "semi", "final"].includes(profile.key)) return true;
   if (profile.key !== "knockout") return false;
   const kickoffKey = shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal);
   return Boolean(kickoffKey && ROUND_OF_16_PHASE_START_KEY && kickoffKey >= ROUND_OF_16_PHASE_START_KEY);
+}
+
+function useRound16PlusLiveLogic(match) {
+  return useRound16PlusLogic(match);
 }
 
 function favoriteProfile(probabilities = {}) {
@@ -3285,16 +3290,17 @@ function scoreDistance(a = {}, b = {}) {
   return Math.abs(ah - bh) + Math.abs(aa - ba);
 }
 
-function correctScoreComboMetrics(legs = []) {
+function correctScoreComboMetrics(legs = [], cashReservePct = 0) {
   const active = legs.filter((leg) => Number.isFinite(Number(leg.stakePct)) && Number(leg.stakePct) > 0 && Number.isFinite(Number(leg.marketPrice)) && Number(leg.marketPrice) > 0);
+  const reserve = clamp(Number(cashReservePct) || 0, 0, 0.95);
   const coverageProbability = active.reduce((sum, leg) => sum + (Number(leg.modelProbability) || 0), 0);
   const priceSum = active.reduce((sum, leg) => sum + (Number(leg.marketPrice) || 0), 0);
-  const expectedPayout = active.reduce((sum, leg) => sum + (Number(leg.modelProbability) || 0) * ((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1)), 0);
+  const expectedPayout = reserve + active.reduce((sum, leg) => sum + (Number(leg.modelProbability) || 0) * ((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1)), 0);
   const expectedRoi = expectedPayout - 1;
   const payoutByScore = active.map((leg) => ({
     score: leg.score,
-    payoutPerBudget: roundTo((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1), 3),
-    profitIfHit: roundTo(((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1)) - 1, 3)
+    payoutPerBudget: roundTo(reserve + (Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1), 3),
+    profitIfHit: roundTo(reserve + ((Number(leg.stakePct) || 0) / (Number(leg.marketPrice) || 1)) - 1, 3)
   }));
   const hitProfits = payoutByScore.map((item) => item.profitIfHit);
   return {
@@ -3303,14 +3309,15 @@ function correctScoreComboMetrics(legs = []) {
     expectedRoi: roundTo(expectedRoi, 4),
     bestProfitIfHit: roundTo(Math.max(...hitProfits), 4),
     worstProfitIfHit: roundTo(Math.min(...hitProfits), 4),
-    lossIfMiss: -1,
+    lossIfMiss: roundTo(reserve - 1, 4),
     payoutByScore
   };
 }
 
-function correctScoreLeg(row, role, stakePct, reason = "", roleEn = "") {
+function correctScoreLeg(row, role, stakePct, reason = "", roleEn = "", cashReservePct = 0) {
   const price = Number(row.marketPrice);
   const stake = Number(stakePct) || 0;
+  const reserve = clamp(Number(cashReservePct) || 0, 0, 0.95);
   return {
     score: row.score,
     homeGoals: row.homeGoals,
@@ -3322,11 +3329,12 @@ function correctScoreLeg(row, role, stakePct, reason = "", roleEn = "") {
     marketPrice: Number.isFinite(price) ? roundTo(price, 4) : null,
     edge: typeof row.edge === "number" ? roundTo(row.edge, 4) : null,
     maxBuyPrice: typeof row.maxBuyPrice === "number" ? roundTo(row.maxBuyPrice, 4) : null,
-    payoutPerBudget: Number.isFinite(price) && price > 0 ? roundTo(stake / price, 3) : null,
-    profitIfHit: Number.isFinite(price) && price > 0 ? roundTo(stake / price - 1, 3) : null,
+    payoutPerBudget: Number.isFinite(price) && price > 0 ? roundTo(reserve + stake / price, 3) : null,
+    profitIfHit: Number.isFinite(price) && price > 0 ? roundTo(reserve + stake / price - 1, 3) : null,
     reason,
     reasonEn: reason,
-    url: correctScoreComboUrl(row)
+    url: correctScoreComboUrl(row),
+    cashReservePct: roundTo(reserve, 4)
   };
 }
 
@@ -3341,13 +3349,66 @@ function uniqueScoreRows(rows = []) {
   return unique;
 }
 
-function buildEqualReturnCorrectScoreCombo(rows, match) {
+function correctScoreComboStake(rawWeight, sumWeights, totalBudgetPct = 1) {
+  if (!Number.isFinite(rawWeight) || !Number.isFinite(sumWeights) || sumWeights <= 0) return 0;
+  return clamp(Number(totalBudgetPct) || 0, 0.05, 1) * rawWeight / sumWeights;
+}
+
+function correctScoreComboCandidateValue(row, match, options = {}) {
+  const round16Plus = Boolean(options.round16Plus);
+  const modelProbability = Number(row?.modelProbability) || 0;
+  const marketPrice = Number(row?.marketPrice);
+  const edgeValue = Number(row?.edge);
+  const strategy = row?.strategy || {};
+  const bias = strategy.bias || correctScoreMarketBias(match);
+  const side = strategy.side || scoreOutcomeSide(row);
+  const goals = (Number(row?.homeGoals) || 0) + (Number(row?.awayGoals) || 0);
+  const margin = Math.abs((Number(row?.homeGoals) || 0) - (Number(row?.awayGoals) || 0));
+  let value = modelProbability * 0.9
+    + (Number.isFinite(edgeValue) ? edgeValue * 0.32 : 0)
+    + (Number(strategy.strategyScore) || 0) * 0.45;
+  if (strategy.tier === "primary") value += 0.05;
+  if (strategy.tier === "secondary") value += 0.03;
+  if (strategy.tier === "longshot") value += 0.005;
+  if (strategy.tier === "avoid") value -= 0.08;
+  if (row?.decision?.action === "AVOID_OR_SELL") value -= 0.08;
+  if (row?.decision?.action === "NO_TRADE") value -= 0.025;
+  if (Number.isFinite(marketPrice) && Number.isFinite(Number(row?.maxBuyPrice)) && marketPrice > Number(row.maxBuyPrice)) {
+    value -= clamp((marketPrice - Number(row.maxBuyPrice)) * 0.65, 0, 0.08);
+  }
+  if (round16Plus) {
+    value += (Number(strategy.strategyScore) || 0) * 0.55;
+    if (side === "draw") value += 0.018;
+    if (bias.advanceFavorite && side === bias.advanceFavorite) value += 0.026;
+    if (bias.regularFavorite && side === bias.regularFavorite) value += 0.018;
+    if (bias.advanceFavorite && side && side !== "draw" && side !== bias.advanceFavorite) value -= 0.045;
+    if (bias.regularFavorite && side && side !== "draw" && side !== bias.regularFavorite) value -= 0.03;
+    if (goals >= 4) value -= 0.026 + Math.max(0, goals - 4) * 0.014;
+    if (margin >= 2) value -= 0.012;
+  }
+  return value;
+}
+
+function correctScoreComboRows(rows = [], match, options = {}) {
+  const round16Plus = Boolean(options.round16Plus);
+  const validRows = validCorrectScoreComboRows(rows);
+  const preferred = validRows.filter((row) => {
+    if (!round16Plus) return true;
+    if (row.strategy?.tier === "avoid") return false;
+    if (row.decision?.action === "AVOID_OR_SELL") return false;
+    return true;
+  });
+  return preferred.length >= 2 ? preferred : validRows;
+}
+
+function buildEqualReturnCorrectScoreCombo(rows, match, options = {}) {
+  const round16Plus = Boolean(options.round16Plus);
+  const totalBudgetPct = round16Plus ? 0.6 : 1;
+  const cashReservePct = roundTo(1 - totalBudgetPct, 4);
   const candidates = rows
-    .filter((row) => row.modelProbability >= 0.035 || row.scoreRank <= 6)
+    .filter((row) => row.modelProbability >= (round16Plus ? 0.025 : 0.035) || row.scoreRank <= (round16Plus ? 8 : 6))
     .sort((a, b) => {
-      const av = (a.modelProbability || 0) + Math.max(0, a.edge || 0) * 0.35 - Math.max(0, (a.marketPrice || 0) - (a.modelProbability || 0)) * 0.2;
-      const bv = (b.modelProbability || 0) + Math.max(0, b.edge || 0) * 0.35 - Math.max(0, (b.marketPrice || 0) - (b.modelProbability || 0)) * 0.2;
-      return bv - av;
+      return correctScoreComboCandidateValue(b, match, { round16Plus }) - correctScoreComboCandidateValue(a, match, { round16Plus });
     });
   const selected = uniqueScoreRows(candidates).slice(0, 4);
   const priceSum = selected.reduce((sum, row) => sum + row.marketPrice, 0);
@@ -3355,31 +3416,44 @@ function buildEqualReturnCorrectScoreCombo(rows, match) {
   const legs = selected.map((row, index) => correctScoreLeg(
     row,
     index === 0 ? "主覆盖" : "覆盖",
-    row.marketPrice / priceSum,
-    index === 0 ? "组合中模型/价格综合最优。" : "用来覆盖相邻比分路径。",
-    index === 0 ? "Core cover" : "Cover"
+    correctScoreComboStake(row.marketPrice, priceSum, totalBudgetPct),
+    index === 0 ? "组合中模型/盘口方向综合最优。" : "用来覆盖相邻比分路径。",
+    index === 0 ? "Core cover" : "Cover",
+    cashReservePct
   ));
-  const metrics = correctScoreComboMetrics(legs);
+  const metrics = correctScoreComboMetrics(legs, cashReservePct);
   return {
     key: "equal-return-dutching",
-    title: "等回款覆盖",
-    titleEn: "Equal-return cover",
+    title: round16Plus ? "16强后等回款 + 留现金" : "等回款覆盖",
+    titleEn: round16Plus ? "Round-of-16 equal-return with reserve" : "Equal-return cover",
     method: "Dutching",
     methodEn: "Dutching",
-    riskLevel: "中低波动",
-    riskLevelEn: "Lower variance",
-    totalBudgetPct: 1,
-    cashReservePct: 0,
-    summary: `把预算按 Yes 价格拆到 ${selected.length} 个比分，任一覆盖比分命中时回款接近一致；未覆盖比分仍会亏损。`,
-    summaryEn: `Split the budget by Yes price across ${selected.length} scorelines so any covered score returns roughly the same; uncovered scores still lose.`,
+    riskLevel: round16Plus ? "中低波动但不打满" : "中低波动",
+    riskLevelEn: round16Plus ? "Lower variance, not fully allocated" : "Lower variance",
+    totalBudgetPct,
+    cashReservePct,
+    summary: round16Plus
+      ? `16强后只动用约 ${Math.round(totalBudgetPct * 100)}% 球胆预算，按 Yes 价格拆到 ${selected.length} 个比分；剩余现金等现场压制/第一球后再用。`
+      : `把预算按 Yes 价格拆到 ${selected.length} 个比分，任一覆盖比分命中时回款接近一致；未覆盖比分仍会亏损。`,
+    summaryEn: round16Plus
+      ? `Use about ${Math.round(totalBudgetPct * 100)}% of the correct-score budget across ${selected.length} scorelines; keep the rest for in-play pressure or first-goal confirmation.`
+      : `Split the budget by Yes price across ${selected.length} scorelines so any covered score returns roughly the same; uncovered scores still lose.`,
     metrics,
     legs,
-    rules: [
+    rules: round16Plus ? [
+      "16强后不要赛前打满；18-30 分钟有射正/压制证据再补相邻路径。",
+      "只有覆盖概率明显高于组合成本时才有价值；否则只是买得更分散。",
+      "若任一比分变成当前比分，优先卖出一部分回本金。"
+    ] : [
       "适合模型前几名比分接近、你不想押单一路径时使用。",
       "只有覆盖概率明显高于组合成本时才有价值；否则只是买得更分散。",
       "如果其中一个比分在比赛中变成当前比分，优先卖出一部分回本金。"
     ],
-    rulesEn: [
+    rulesEn: round16Plus ? [
+      "Do not fully allocate pre-match from the round of 16 onward; add adjacent paths only after 18-30' evidence.",
+      "It has value only when model coverage is clearly above combined cost.",
+      "If one covered score becomes the live score, trim part first to recover stake."
+    ] : [
       "Use when top score probabilities are close and you do not want one fragile path.",
       "It has value only when model coverage is clearly above combined cost.",
       "If one covered score becomes the live score, trim part first to recover stake."
@@ -3387,56 +3461,74 @@ function buildEqualReturnCorrectScoreCombo(rows, match) {
   };
 }
 
-function buildCoreCoverCorrectScoreCombo(rows, match) {
-  const byProbability = [...rows].sort((a, b) => (b.modelProbability || 0) - (a.modelProbability || 0));
+function buildCoreCoverCorrectScoreCombo(rows, match, options = {}) {
+  const round16Plus = Boolean(options.round16Plus);
+  const totalBudgetPct = round16Plus ? 0.55 : 1;
+  const cashReservePct = roundTo(1 - totalBudgetPct, 4);
+  const byProbability = [...rows].sort((a, b) => round16Plus
+    ? correctScoreComboCandidateValue(b, match, { round16Plus }) - correctScoreComboCandidateValue(a, match, { round16Plus })
+    : (b.modelProbability || 0) - (a.modelProbability || 0));
   const primary = byProbability[0];
   if (!primary) return null;
   const adjacent = uniqueScoreRows(byProbability
     .filter((row) => row.score !== primary.score)
     .sort((a, b) => {
-      const aScore = (a.modelProbability || 0) - scoreDistance(a, primary) * 0.015 + Math.max(0, a.edge || 0) * 0.25;
-      const bScore = (b.modelProbability || 0) - scoreDistance(b, primary) * 0.015 + Math.max(0, b.edge || 0) * 0.25;
+      const aScore = correctScoreComboCandidateValue(a, match, { round16Plus }) - scoreDistance(a, primary) * (round16Plus ? 0.024 : 0.015);
+      const bScore = correctScoreComboCandidateValue(b, match, { round16Plus }) - scoreDistance(b, primary) * (round16Plus ? 0.024 : 0.015);
       return bScore - aScore;
     }))
     .slice(0, 2);
   const tail = uniqueScoreRows(rows
     .filter((row) => row.score !== primary.score && !adjacent.some((item) => item.score === row.score))
     .filter((row) => scoreOutcomeSide(row) === correctScoreMarketBias(match).regularFavorite || row.edge >= -0.025)
-    .sort((a, b) => ((b.edge || 0) + (b.modelProbability || 0) * 0.35) - ((a.edge || 0) + (a.modelProbability || 0) * 0.35)))[0];
+    .sort((a, b) => correctScoreComboCandidateValue(b, match, { round16Plus }) - correctScoreComboCandidateValue(a, match, { round16Plus })))[0];
   const selected = [primary, ...adjacent, tail].filter(Boolean);
   if (selected.length < 2) return null;
-  const rawWeights = selected.map((_, index) => [0.5, 0.25, 0.17, 0.08][index] || 0.05);
+  const rawWeights = selected.map((_, index) => (round16Plus ? [0.44, 0.28, 0.2, 0.08] : [0.5, 0.25, 0.17, 0.08])[index] || 0.05);
   const sumWeights = rawWeights.reduce((sum, value) => sum + value, 0);
   const roles = ["主比分", "保护比分", "相邻保护", "小尾仓"];
   const rolesEn = ["Core score", "Cover score", "Adjacent cover", "Small tail"];
   const legs = selected.map((row, index) => correctScoreLeg(
     row,
     roles[index],
-    rawWeights[index] / sumWeights,
-    index === 0 ? "模型最高比分，承担主要回报。" : index <= 2 ? "保护相邻比分，降低单比分打穿风险。" : "只留小尾仓，不摊平。",
-    rolesEn[index]
+    correctScoreComboStake(rawWeights[index], sumWeights, totalBudgetPct),
+    index === 0 ? "模型、盘口方向和淘汰赛路径综合最高。" : index <= 2 ? "保护相邻比分，降低单比分打穿风险。" : "只留小尾仓，不摊平。",
+    rolesEn[index],
+    cashReservePct
   ));
-  const metrics = correctScoreComboMetrics(legs);
+  const metrics = correctScoreComboMetrics(legs, cashReservePct);
   return {
     key: "core-cover",
-    title: "主比分 + 保护",
-    titleEn: "Core score plus cover",
+    title: round16Plus ? "16强主路径 + 保护" : "主比分 + 保护",
+    titleEn: round16Plus ? "Round-of-16 core path plus cover" : "Core score plus cover",
     method: "Cover bet",
     methodEn: "Cover bet",
-    riskLevel: "均衡",
-    riskLevelEn: "Balanced",
-    totalBudgetPct: 1,
-    cashReservePct: 0,
-    summary: "主比分吃主要收益，旁边两个比分做保险，最后一个深路径只给小尾仓。",
-    summaryEn: "The core score carries most upside, adjacent scores reduce path risk, and the deep path stays tiny.",
+    riskLevel: round16Plus ? "均衡但保留现场弹药" : "均衡",
+    riskLevelEn: round16Plus ? "Balanced with in-play reserve" : "Balanced",
+    totalBudgetPct,
+    cashReservePct,
+    summary: round16Plus
+      ? "16强后主比分不只看模型最高，还看盘口/晋级方向；赛前只放主路径和保护，保留现金等现场确认。"
+      : "主比分吃主要收益，旁边两个比分做保险，最后一个深路径只给小尾仓。",
+    summaryEn: round16Plus
+      ? "From the round of 16, the core score uses model, market and advance direction; keep reserve for live confirmation."
+      : "The core score carries most upside, adjacent scores reduce path risk, and the deep path stays tiny.",
     metrics,
     legs,
-    rules: [
+    rules: round16Plus ? [
+      "主路径必须和盘口/晋级方向或平局路径不冲突，否则只做保护不做主仓。",
+      "保护比分涨了先卖回本金；不要因为价格低补已被打穿的比分。",
+      "若 20-30 分钟现场节奏和赛前方向相反，暂停补仓。"
+    ] : [
       "适合你已经认可一个主方向，但担心 1 球误差时使用。",
       "保护比分不是主仓，涨了就先卖回本金。",
       "如果半场仍没有形成主路径，优先减小尾仓，不继续补深比分。"
     ],
-    rulesEn: [
+    rulesEn: round16Plus ? [
+      "The core path should not fight both market and advance direction unless it is a draw cover.",
+      "Trim cover scores first after price jumps; never average down crossed scores.",
+      "If 20-30' live tempo contradicts the pre-match direction, pause adding."
+    ] : [
       "Use when you like one main direction but want protection against a one-goal miss.",
       "Cover scores are not core holdings; trim them first after a price jump.",
       "If the match has not moved into the core path by half-time, cut the tail rather than adding deep scores."
@@ -3444,13 +3536,18 @@ function buildCoreCoverCorrectScoreCombo(rows, match) {
   };
 }
 
-function buildBarbellCorrectScoreCombo(rows, match) {
-  const top = [...rows].sort((a, b) => (b.modelProbability || 0) - (a.modelProbability || 0))[0];
+function buildBarbellCorrectScoreCombo(rows, match, options = {}) {
+  const round16Plus = Boolean(options.round16Plus);
+  const totalBudgetPct = round16Plus ? 0.35 : 0.45;
+  const cashReservePct = roundTo(1 - totalBudgetPct, 4);
+  const top = [...rows].sort((a, b) => round16Plus
+    ? correctScoreComboCandidateValue(b, match, { round16Plus }) - correctScoreComboCandidateValue(a, match, { round16Plus })
+    : (b.modelProbability || 0) - (a.modelProbability || 0))[0];
   if (!top) return null;
   const tails = uniqueScoreRows(rows
     .filter((row) => row.score !== top.score)
     .filter((row) => row.marketPrice <= 0.13 && row.modelProbability >= 0.018)
-    .sort((a, b) => ((b.edge || 0) + (b.modelProbability || 0) * 0.5) - ((a.edge || 0) + (a.modelProbability || 0) * 0.5)))
+    .sort((a, b) => correctScoreComboCandidateValue(b, match, { round16Plus }) - correctScoreComboCandidateValue(a, match, { round16Plus })))
     .slice(0, 2);
   const selected = [top, ...tails].filter(Boolean);
   if (selected.length < 2) return null;
@@ -3461,23 +3558,24 @@ function buildBarbellCorrectScoreCombo(rows, match) {
   const legs = selected.map((row, index) => correctScoreLeg(
     row,
     roles[index],
-    rawWeights[index] / sumWeights,
+    correctScoreComboStake(rawWeights[index], sumWeights, totalBudgetPct),
     index === 0 ? "只用小主仓，不押满。" : "高赔率路径，只能用尾仓。",
-    rolesEn[index]
+    rolesEn[index],
+    cashReservePct
   ));
-  const metrics = correctScoreComboMetrics(legs);
+  const metrics = correctScoreComboMetrics(legs, cashReservePct);
   return {
     key: "barbell-reserve",
-    title: "小主仓 + 长尾 + 留现金",
-    titleEn: "Small core, tails and reserve",
+    title: round16Plus ? "16强小主仓 + 大留现金" : "小主仓 + 长尾 + 留现金",
+    titleEn: round16Plus ? "Round-of-16 small core and large reserve" : "Small core, tails and reserve",
     method: "Barbell / reserve",
     methodEn: "Barbell / reserve",
     riskLevel: "高波动但亏损可控",
     riskLevelEn: "High variance, capped exposure",
-    totalBudgetPct: 0.45,
-    cashReservePct: 0.55,
-    summary: "只动用约 45% 球胆预算，剩余现金等现场第一球或半场信号，再补相邻路径。",
-    summaryEn: "Deploy only about 45% of the correct-score budget and keep the rest for the first-goal or half-time signal.",
+    totalBudgetPct,
+    cashReservePct,
+    summary: `只动用约 ${Math.round(totalBudgetPct * 100)}% 球胆预算，剩余现金等现场第一球或半场信号，再补相邻路径。`,
+    summaryEn: `Deploy only about ${Math.round(totalBudgetPct * 100)}% of the correct-score budget and keep the rest for the first-goal or half-time signal.`,
     metrics,
     legs,
     rules: [
@@ -3563,7 +3661,8 @@ function buildCorrectScoreComboStrategy(match, rows = [], options = {}) {
       combos: []
     };
   }
-  const validRows = validCorrectScoreComboRows(rows);
+  const round16Plus = !options.live && useRound16PlusLogic(match);
+  const validRows = correctScoreComboRows(rows, match, { round16Plus });
   if (validRows.length < 2) {
     return {
       source: "Correct score combo engine",
@@ -3574,9 +3673,9 @@ function buildCorrectScoreComboStrategy(match, rows = [], options = {}) {
     };
   }
   const combos = [
-    buildEqualReturnCorrectScoreCombo(validRows, match),
-    buildCoreCoverCorrectScoreCombo(validRows, match),
-    buildBarbellCorrectScoreCombo(validRows, match),
+    buildEqualReturnCorrectScoreCombo(validRows, match, { round16Plus }),
+    buildCoreCoverCorrectScoreCombo(validRows, match, { round16Plus }),
+    buildBarbellCorrectScoreCombo(validRows, match, { round16Plus }),
     options.live ? buildLiveLadderCorrectScoreCombo(validRows, match, options) : null
   ].filter(Boolean)
     .map((combo) => ({
@@ -3599,11 +3698,13 @@ function buildCorrectScoreComboStrategy(match, rows = [], options = {}) {
     methodology: "Dutching / cover bet / barbell reserve / ladder green-up",
     methodologyEn: "Dutching / cover bet / barbell reserve / ladder green-up",
     referenceNotes: [
+      ...(round16Plus ? ["16强后赛前球胆组合默认保留现金，并按盘口/晋级方向、平局路径和深比分风险重新排序。"] : []),
       "Dutching：多选项按价格拆分，让覆盖结果的回款接近一致。",
       "Hedge/Cover：用相邻结果降低主路径被 1 球误差打穿的风险。",
       "Green-up：价格上涨后卖出部分仓位，锁回本金或降低回撤。"
     ],
     referenceNotesEn: [
+      ...(round16Plus ? ["From the round of 16 onward, pre-match correct-score combos keep cash reserve and rank legs by market/advance direction, draw paths, and deep-score risk."] : []),
       "Dutching splits stake by price so covered outcomes return similar amounts.",
       "Cover bets reduce one-goal miss risk around the main path.",
       "Green-up trims after a price move to recover stake or reduce drawdown."
@@ -13674,6 +13775,7 @@ function pendingDashboardPayload({ error = "" } = {}) {
 
 function shouldKeepExistingLightCache(nextPayload, previousPayload) {
   if (!previousPayload?.matches?.length || !nextPayload?.matches?.length) return false;
+  if (previousPayload?.meta?.modelVersion !== nextPayload?.meta?.modelVersion) return false;
   if (payloadCacheAgeMs(previousPayload) > LIGHT_CACHE_STABILITY_MAX_AGE_MS) return false;
   const previousCount = livePolymarketChartCount(previousPayload);
   const nextCount = livePolymarketChartCount(nextPayload);
@@ -13977,7 +14079,8 @@ function compactDashboardPayloadForLight(payload = null) {
     meta: {
       ...(payload.meta || {}),
       lightMode: true,
-      compactPayload: true
+      compactPayload: true,
+      modelVersion: DASHBOARD_MODEL_VERSION
     },
     schedule: payload.schedule ? {
       source: payload.schedule.source,
@@ -14164,6 +14267,7 @@ async function buildDashboard({
     meta: {
       ...local.meta,
       generatedAt: new Date().toISOString(),
+      modelVersion: DASHBOARD_MODEL_VERSION,
       cacheTtlSeconds: Math.round(CACHE_TTL_MS / 1000),
       lightMode: Boolean(light),
       backgroundRefresh: Boolean(backgroundRefreshPromise),
