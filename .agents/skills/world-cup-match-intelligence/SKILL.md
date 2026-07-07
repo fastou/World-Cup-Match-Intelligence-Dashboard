@@ -23,6 +23,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 - For knockout advancement, include knockout-stage experience as a low-weight tiebreak factor when structured World Cup records exist: best finish, finals appearances, and finals matches can form a transparent proxy. Label it as a proxy, not as verified penalty-taking ability.
 - In knockout rounds, add rest/fatigue and current-tournament form as low-weight model factors when schedule and completed-score data exist. Public tipster consensus may only be used as a small market-context signal, never as a substitute for the model.
 - In knockout rounds, apply the post-review correction learned from Brazil-Japan, Germany-Paraguay, and Netherlands-Morocco on June 29-30, 2026: lift regulation draw/extra-time paths, keep BTTS tied to the score grid, and downgrade favorite 90-minute moneyline/deep handicap unless edge is strong. Quarter-finals and later use a stricter stage profile because team quality is closer; `Team to Advance` is often the cleaner favorite market when price is fair.
+- From the round of 16 onward, keep group-stage logic intact but enable a separate live structural layer: reduce reliance on world-ranking/favorite priors, and weight verified live personnel/position signals, lead quality, defensive load, injury substitutions, late cards, goalkeeper saves, clearances, and estimated stoppage time. A favorite trailing or level late can remain a small correct-score path only when synced stats show dangerous pressure, not mere reputation.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
@@ -31,9 +32,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 
 - `server.js`: HTTP server, API routes, dashboard merge logic, Polymarket/public market fetches, elite account aggregation, probability calculations.
 - `public/index.html`: single-page bilingual dashboard UI.
-- `data/worldcup-dashboard.json`: seed/static match data and manually maintained market scaffolding.
-- `data/research-framework.json`: structured research dimensions and scoring framework.
-- `data/head-to-head-overrides.json`: manually verified structured H2H records and no-meeting confirmations.
+- `data/worldcup-dashboard.json`, `data/research-framework.json`, `data/head-to-head-overrides.json`: seed/static match data, structured research dimensions, and verified H2H overrides.
 - `data/worldcup-context.json`: generated runtime context, ignored by Git.
 - `scripts/sync-worldcup-context.js`, `archive-dashboard.js`, `record-match-result.js`, `history-store.js`: public sync, history/archive, result recording, and SQLite persistence.
 - `deploy/`: systemd and nginx examples.
@@ -44,13 +43,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 2. Read the relevant project files before editing. Use `rg` or `rg --files` first.
 3. Preserve the dashboard's bilingual structure. Any new visible UI string needs Chinese and English copy.
 4. Keep public source records attached to dynamic facts: source name, URL if available, timestamp, status, confidence, and reason.
-5. Recompute affected model outputs after data changes:
-   - win/draw/loss probabilities
-   - handicap probabilities
-   - totals probabilities
-   - edge
-   - max informational entry price
-   - observe/wait/reduce/add labels
+5. Recompute affected model outputs after data changes: win/draw/loss, handicap, totals, edge, max informational entry price, and observe/wait/reduce/add labels.
 6. Persist newly important fields through the archive layer when they matter for later analysis.
 7. Validate with local commands and API checks before committing.
 8. For dashboard changes, deploy after validation and then commit/push. If GitHub push times out, report the local commit and ahead status.
@@ -148,6 +141,7 @@ When maintaining public market data:
 - Opportunity radar scans should be archived as lightweight runs/items even when the visible dashboard is using light mode, so later review can compare surfaced candidates, observation candidates, prices, edge, and final outcomes.
 - In-play recommendations must apply current-score gates before ranking: crossed/satisfied totals, BTTS, and correct-score paths are not new buy points; late deep handicaps and large-score comeback rows must be labeled `长尾不追` or blocked instead of `等待更好价格`.
 - In-play probabilities for win/draw/loss, totals, BTTS, handicap, and correct score should share one remaining-goal distribution once a live score exists. Current-score exact score equals no-more-goals probability; after 70' in knockout matches, level-score favorite 90-minute wins are only late-goal paths and must be downgraded unless shots-on-target/dangerous pressure is clearly favorable.
+- In round-of-16-or-later in-play correct-score logic, do not hard-block every late one-goal path just because regulation time is short. Estimate effective remaining time from stoppage indicators such as goals, injuries, substitutions, and late cards. If the pressure side has clear shots/SOT/corners and the defending side has high clearances/saves/injury substitutions, allow only an explicitly tiny "late knockout pressure" observation, never a loss-chasing recommendation.
 - In-play advancement must be recomputed from the live regulation triplet plus the same extra-time/penalty tiebreak split, and must stay separate from 90-minute moneyline.
 - In-play labels must distinguish real Polymarket prices from local/manual snapshots, separate sterile pressure from dangerous pressure, freeze during unresolved VAR/penalty events, and warn when a user's held positions are highly correlated on the same path.
 - BTTS recommendations need a post-review discipline layer: downgrade BTTS Yes when low-score/clean-sheet paths dominate or underdog shot creation is unverified, but in knockout rounds do not over-downgrade it when current-tournament BTTS, underdog scoring, or team form supports both teams scoring.

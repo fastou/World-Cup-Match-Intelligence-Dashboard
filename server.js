@@ -67,6 +67,8 @@ const FIFA_WORLD_CUP_SCHEDULE_URL = "https://www.fifa.com/en/tournaments/mens/wo
 const KNOCKOUT_PATH_DIFFICULTY_GAP_THRESHOLD = 0.07;
 const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI || "2026-06-29";
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
+const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
+const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -1208,6 +1210,14 @@ function knockoutStageProfile(match) {
   return isKnockoutMatch(match)
     ? { key: "knockout", labelZh: "淘汰赛", drawBoost: 0.018, favoritePenalty: 0.012, deepHandicapPenalty: 0.035, longScorePenalty: 0.035 }
     : { key: "group", labelZh: "小组赛", drawBoost: 0, favoritePenalty: 0, deepHandicapPenalty: 0, longScorePenalty: 0 };
+}
+
+function useRound16PlusLiveLogic(match) {
+  const profile = knockoutStageProfile(match);
+  if (["round16", "quarter", "semi", "final"].includes(profile.key)) return true;
+  if (profile.key !== "knockout") return false;
+  const kickoffKey = shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal);
+  return Boolean(kickoffKey && ROUND_OF_16_PHASE_START_KEY && kickoffKey >= ROUND_OF_16_PHASE_START_KEY);
 }
 
 function favoriteProfile(probabilities = {}) {
@@ -5063,10 +5073,20 @@ function normalizeLiveStats(summary, match) {
   };
 }
 
-function eventMinuteValue(event) {
-  const detail = String(event?.clock?.displayValue || event?.time?.displayValue || event?.displayTime || "");
+function minuteFromDisplayValue(value) {
+  const detail = String(value || "");
+  const stoppage = detail.match(/(\d{1,3})\s*'\s*\+\s*(\d{1,2})/);
+  if (stoppage) {
+    const base = Number(stoppage[1]);
+    const added = Number(stoppage[2]);
+    if (Number.isFinite(base) && Number.isFinite(added)) return clamp(base + added, 0, 130);
+  }
   const parsed = Number(detail.match(/(\d{1,3})/)?.[1]);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) ? clamp(parsed, 0, 130) : null;
+}
+
+function eventMinuteValue(event) {
+  return minuteFromDisplayValue(event?.clock?.displayValue || event?.time?.displayValue || event?.displayTime || "");
 }
 
 function eventTextValue(event) {
@@ -5078,7 +5098,22 @@ function eventTextValue(event) {
   ].filter(Boolean).join(" ");
 }
 
-function normalizeLiveSituationalFlags(summary, liveBase) {
+function eventSideForMatch(event, match) {
+  if (!match) return "";
+  const values = [
+    event?.team?.abbreviation,
+    event?.team?.displayName,
+    event?.team?.name,
+    event?.team?.shortDisplayName
+  ].map(canonicalTeamValue).filter(Boolean);
+  for (const side of ["home", "away"]) {
+    const needles = teamMatchNeedles(match, side);
+    if (values.some((value) => needles.includes(value) || needles.some((needle) => value.includes(needle) || needle.includes(value)))) return side;
+  }
+  return "";
+}
+
+function normalizeLiveSituationalFlags(summary, liveBase, match = null) {
   const elapsed = elapsedMinuteFromLive(liveBase, null);
   const rows = [
     ...(Array.isArray(summary?.keyEvents) ? summary.keyEvents : []),
@@ -5086,7 +5121,8 @@ function normalizeLiveSituationalFlags(summary, liveBase) {
   ]
     .map((event) => ({
       minute: eventMinuteValue(event),
-      text: eventTextValue(event)
+      text: eventTextValue(event),
+      side: eventSideForMatch(event, match)
     }))
     .filter((event) => Number.isFinite(event.minute) && event.text);
 
@@ -5100,11 +5136,49 @@ function normalizeLiveSituationalFlags(summary, liveBase) {
   const activePenaltyReview = Boolean(latestPenaltyEvent)
     && !/scored|converts|saved|missed|not awarded/i.test(latestPenaltyEvent.text)
     && (!latestResolution || latestResolution.minute < latestPenaltyEvent.minute);
+  const teamSignals = {
+    home: { substitutions: 0, substitutionsAfter60: 0, injurySubstitutions: 0, injurySubstitutionsAfter45: 0, yellowCardsAfter75: 0, goalsAfter75: 0 },
+    away: { substitutions: 0, substitutionsAfter60: 0, injurySubstitutions: 0, injurySubstitutionsAfter45: 0, yellowCardsAfter75: 0, goalsAfter75: 0 }
+  };
+  for (const event of rows) {
+    if (!teamSignals[event.side]) continue;
+    const signal = teamSignals[event.side];
+    if (/substitution/i.test(event.text)) {
+      signal.substitutions += 1;
+      if (event.minute >= 60) signal.substitutionsAfter60 += 1;
+      if (/injury|because of an injury|伤/i.test(event.text)) {
+        signal.injurySubstitutions += 1;
+        if (event.minute >= 45) signal.injurySubstitutionsAfter45 += 1;
+      }
+    }
+    if (/yellow card|黄牌/i.test(event.text) && event.minute >= 75) signal.yellowCardsAfter75 += 1;
+    if (/goal/i.test(event.text) && event.minute >= 75) signal.goalsAfter75 += 1;
+  }
+  const substitutionsAfter75 = rows.filter((event) => /substitution/i.test(event.text) && event.minute >= 75).length;
+  const injurySubstitutionCount = teamSignals.home.injurySubstitutions + teamSignals.away.injurySubstitutions;
+  const lateYellowCount = teamSignals.home.yellowCardsAfter75 + teamSignals.away.yellowCardsAfter75;
+  const lateGoalCount = teamSignals.home.goalsAfter75 + teamSignals.away.goalsAfter75;
+  const actualAddedMinutes = rows.reduce((max, event) => Math.max(max, event.minute > 90 ? event.minute - 90 : 0), 0);
+  const estimatedStoppageMinutes = elapsed >= 70
+    ? clamp(Math.max(
+      actualAddedMinutes,
+      2.5
+        + injurySubstitutionCount * 1.15
+        + substitutionsAfter75 * 0.45
+        + lateYellowCount * 0.35
+        + lateGoalCount * 0.75
+    ), 2, 12)
+    : 0;
   return {
     activePenaltyReview,
     freezeRecommendations: activePenaltyReview,
     latestPenaltyText: latestPenaltyEvent?.text || "",
-    latestPenaltyMinute: latestPenaltyEvent?.minute ?? null
+    latestPenaltyMinute: latestPenaltyEvent?.minute ?? null,
+    teamSignals,
+    injurySubstitutionCount,
+    lateYellowCount,
+    lateGoalCount,
+    estimatedStoppageMinutes: roundTo(estimatedStoppageMinutes, 1)
   };
 }
 
@@ -5133,14 +5207,13 @@ function normalizeLiveEvent(summary, match) {
   };
   return {
     ...liveBase,
-    situationalFlags: normalizeLiveSituationalFlags(summary, liveBase)
+    situationalFlags: normalizeLiveSituationalFlags(summary, liveBase, match)
   };
 }
 
 function elapsedMinuteFromLive(live, match) {
-  const detail = String(live?.minute || live?.statusDetail || "");
-  const parsed = Number(detail.match(/(\d{1,3})/)?.[1]);
-  if (Number.isFinite(parsed)) return clamp(parsed, 0, 130);
+  const parsed = minuteFromDisplayValue(live?.minute || live?.statusDetail || "");
+  if (Number.isFinite(parsed)) return parsed;
   if (live?.completed) return 90;
   if (live && live.inProgress === false && live.completed === false) return 0;
   const kickoffMs = dateMs(match?.kickoffShanghai || match?.kickoffLocal);
@@ -5258,6 +5331,113 @@ function liveCounterAttackProfile(live, match = null) {
   };
 }
 
+function liveRound16PlusStructureProfile(live, match = null) {
+  if (!useRound16PlusLiveLogic(match)) return { enabled: false, homeBoost: 0, awayBoost: 0, notes: [], burden: {} };
+  const stats = live?.stats || {};
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!hasUsefulLiveStats(stats) || !Number.isFinite(homeScore) || !Number.isFinite(awayScore)) {
+    return { enabled: true, homeBoost: 0, awayBoost: 0, notes: [], burden: {} };
+  }
+  const teamName = (side) => side === "home" ? (match?.homeName || "主队") : (match?.awayName || "客队");
+  const sideBurden = (side, opponentSide) => {
+    const sideStats = stats[side] || {};
+    const opponentStats = stats[opponentSide] || {};
+    const opponentShots = Number(opponentStats.shots);
+    const opponentSot = Number(opponentStats.shotsOnTarget);
+    const opponentCorners = Number(opponentStats.corners);
+    const opponentPossession = Number(opponentStats.possession);
+    const clearances = Number(sideStats.totalClearance ?? sideStats.effectiveClearance);
+    const saves = Number(sideStats.saves);
+    const yellowCards = Number(sideStats.yellowCards);
+    const signals = live?.situationalFlags?.teamSignals?.[side] || {};
+    let score = 0;
+    if (Number.isFinite(opponentShots)) score += clamp((opponentShots - 9) * 0.018, 0, 0.18);
+    if (Number.isFinite(opponentSot)) score += clamp((opponentSot - 3) * 0.035, 0, 0.16);
+    if (Number.isFinite(opponentCorners)) score += clamp((opponentCorners - 4) * 0.018, 0, 0.12);
+    if (Number.isFinite(opponentPossession)) score += clamp((opponentPossession - 57) * 0.003, 0, 0.12);
+    if (Number.isFinite(clearances)) score += clamp((clearances - 24) * 0.0045, 0, 0.16);
+    if (Number.isFinite(saves)) score += clamp((saves - 2) * 0.03, 0, 0.11);
+    if (Number.isFinite(yellowCards)) score += clamp((yellowCards - 2) * 0.018, 0, 0.07);
+    score += clamp((signals.injurySubstitutionsAfter45 || 0) * 0.055, 0, 0.11);
+    score += clamp((signals.yellowCardsAfter75 || 0) * 0.025, 0, 0.08);
+    return {
+      score: clamp(score, 0, 0.42),
+      opponentShots,
+      opponentSot,
+      opponentCorners,
+      opponentPossession,
+      clearances,
+      saves,
+      yellowCards,
+      signals
+    };
+  };
+  const homeBurden = sideBurden("home", "away");
+  const awayBurden = sideBurden("away", "home");
+  const notes = [];
+  const boosts = { home: 0, away: 0 };
+  const applyBurden = (defendingSide, attackingSide, burden) => {
+    if (elapsed < 58 || burden.score < 0.13) return;
+    const multiplier = elapsed >= 75 ? 1.25 : 1;
+    const boost = clamp(burden.score * 0.42 * multiplier, 0.025, 0.16);
+    boosts[attackingSide] += boost;
+    const parts = [];
+    if (Number.isFinite(burden.clearances) && burden.clearances >= 26) parts.push(`解围 ${burden.clearances}`);
+    if (Number.isFinite(burden.saves) && burden.saves >= 3) parts.push(`门将扑救 ${burden.saves}`);
+    if (Number.isFinite(burden.opponentShots) && burden.opponentShots >= 12) parts.push(`被射门 ${burden.opponentShots}`);
+    if (burden.signals.injurySubstitutionsAfter45) parts.push(`伤病换人 ${burden.signals.injurySubstitutionsAfter45}`);
+    if (burden.signals.yellowCardsAfter75) parts.push(`末段黄牌 ${burden.signals.yellowCardsAfter75}`);
+    notes.push(`${teamName(defendingSide)}防守负荷偏高（${parts.join("，") || "连续承压"}），16强后模型上修 ${teamName(attackingSide)} 下一球/绝杀路径。`);
+  };
+  applyBurden("home", "away", homeBurden);
+  applyBurden("away", "home", awayBurden);
+
+  const goalDiff = homeScore - awayScore;
+  if (goalDiff !== 0 && elapsed >= 55) {
+    const leader = goalDiff > 0 ? "home" : "away";
+    const trailer = leader === "home" ? "away" : "home";
+    const leaderStats = stats[leader] || {};
+    const trailerStats = stats[trailer] || {};
+    const leaderShots = Number(leaderStats.shots);
+    const trailerShots = Number(trailerStats.shots);
+    const leaderSot = Number(leaderStats.shotsOnTarget);
+    const trailerSot = Number(trailerStats.shotsOnTarget);
+    const leaderClearances = Number(leaderStats.totalClearance ?? leaderStats.effectiveClearance);
+    const fragileLead = (Number.isFinite(trailerShots) && Number.isFinite(leaderShots) && trailerShots - leaderShots >= 7)
+      || (Number.isFinite(trailerSot) && Number.isFinite(leaderSot) && trailerSot - leaderSot >= 2)
+      || (Number.isFinite(leaderClearances) && leaderClearances >= 28);
+    if (fragileLead) {
+      const boost = elapsed >= 75 ? 0.08 : 0.055;
+      boosts[trailer] += boost;
+      notes.push(`${teamName(leader)}比分领先但领先质量偏脆，过程数据更支持 ${teamName(trailer)} 继续追分。`);
+    }
+  }
+
+  if (homeScore === awayScore && elapsed >= 75) {
+    const shotDiff = statDiff(stats.home?.shots, stats.away?.shots);
+    const sotDiff = statDiff(stats.home?.shotsOnTarget, stats.away?.shotsOnTarget);
+    const cornerDiff = statDiff(stats.home?.corners, stats.away?.corners);
+    const pressureSide = shotDiff >= 8 && (sotDiff >= 2 || cornerDiff >= 4) ? "home"
+      : shotDiff <= -8 && (sotDiff <= -2 || cornerDiff <= -4) ? "away"
+        : "";
+    if (pressureSide) {
+      boosts[pressureSide] += 0.075;
+      notes.push(`${elapsed}' 平局但 ${teamName(pressureSide)}仍有明显射门/角球压制，16强后保留小仓绝杀路径。`);
+    }
+  }
+
+  return {
+    enabled: true,
+    homeBoost: clamp(boosts.home, 0, 0.18),
+    awayBoost: clamp(boosts.away, 0, 0.18),
+    notes,
+    burden: { home: homeBurden, away: awayBurden },
+    estimatedStoppageMinutes: live?.situationalFlags?.estimatedStoppageMinutes || 0
+  };
+}
+
 function liveMomentumScore(live, match = null) {
   const stats = live?.stats || {};
   if (!hasUsefulLiveStats(stats)) return { home: 0, away: 0, notes: ["现场技术统计未同步，只使用比分时间模型。"] };
@@ -5268,6 +5448,7 @@ function liveMomentumScore(live, match = null) {
   const redCardDiff = statDiff(stats.home.redCards, stats.away.redCards);
   const quality = livePressureQualityProfile(live, match);
   const counter = liveCounterAttackProfile(live, match);
+  const round16 = liveRound16PlusStructureProfile(live, match);
   const raw = shotDiff * 0.012
     + sotDiff * 0.026
     + cornerDiff * 0.008
@@ -5276,13 +5457,17 @@ function liveMomentumScore(live, match = null) {
     - quality.homePenalty
     + quality.awayPenalty
     + counter.homeBoost
-    - counter.awayBoost;
-  const home = clamp(raw, -0.18, 0.18);
+    - counter.awayBoost
+    + (round16.homeBoost || 0)
+    - (round16.awayBoost || 0);
+  const limit = round16.enabled ? 0.26 : 0.18;
+  const home = clamp(raw, -limit, limit);
   const notes = [
     `射门 ${stats.home.shots ?? "-"}-${stats.away.shots ?? "-"}，射正 ${stats.home.shotsOnTarget ?? "-"}-${stats.away.shotsOnTarget ?? "-"}。`,
     `角球 ${stats.home.corners ?? "-"}-${stats.away.corners ?? "-"}，控球 ${stats.home.possession ?? "-"}%-${stats.away.possession ?? "-"}%。`,
     ...quality.notes,
     ...counter.notes,
+    ...round16.notes,
     redCardDiff ? `红牌差 ${stats.home.redCards ?? 0}-${stats.away.redCards ?? 0}，模型对少打一方降权。` : ""
   ].filter(Boolean);
   return {
@@ -5463,7 +5648,11 @@ function liveRemainingGoalModel(match, live) {
   if (live?.completed) {
     return { scores: [{ homeGoals: 0, awayGoals: 0, probability: 1 }], homeLambda: 0, awayLambda: 0, notes: ["比赛已结束，无剩余进球分布。"] };
   }
-  const remaining = clamp((90 - Math.min(elapsed, 90)) / 90, 0.01, 1);
+  const round16Plus = useRound16PlusLiveLogic(match);
+  const estimatedStoppage = round16Plus ? Number(live?.situationalFlags?.estimatedStoppageMinutes) || 0 : 0;
+  const effectiveEndMinute = round16Plus && elapsed >= 70 ? 90 + clamp(estimatedStoppage, 0, 12) : 90;
+  const remainingMinutes = Math.max(0.5, effectiveEndMinute - Math.min(elapsed, effectiveEndMinute));
+  const remaining = clamp(remainingMinutes / 90, 0.01, 1);
   const baseHomeLambda = Number(
     match?.probabilities?.lambdaHome
     ?? match?.modelV2?.adjusted?.lambdaHome
@@ -5488,6 +5677,7 @@ function liveRemainingGoalModel(match, live) {
   const stats = live?.stats || {};
   const quality = livePressureQualityProfile(live, match);
   const counter = liveCounterAttackProfile(live, match);
+  const round16 = liveRound16PlusStructureProfile(live, match);
 
   if (quality.homePenalty > 0) {
     homeLambda *= clamp(1 - quality.homePenalty * 0.9, 0.78, 1);
@@ -5505,6 +5695,18 @@ function liveRemainingGoalModel(match, live) {
     awayLambda *= clamp(1 + counter.awayBoost * 0.85, 1, 1.12);
     notes.push(...counter.notes);
   }
+  if (round16.enabled) {
+    if (round16.homeBoost > 0) {
+      homeLambda *= clamp(1 + round16.homeBoost * 1.35, 1, 1.24);
+    }
+    if (round16.awayBoost > 0) {
+      awayLambda *= clamp(1 + round16.awayBoost * 1.35, 1, 1.24);
+    }
+    notes.push(...round16.notes);
+    if (elapsed >= 70 && estimatedStoppage > 0) {
+      notes.push(`16强后按事件估算有效补时约 ${roundTo(estimatedStoppage, 1)} 分钟，末段绝杀/追平路径不按 90' 简单归零。`);
+    }
+  }
   if (live?.situationalFlags?.activePenaltyReview) {
     notes.push(`VAR/点球事件未落定，暂停用当前比分做补仓。`);
   }
@@ -5513,6 +5715,11 @@ function liveRemainingGoalModel(match, live) {
     homeLambda *= 0.88;
     awayLambda *= 0.88;
     notes.push(`${elapsed}' 平局，淘汰赛/后段比赛更容易进入谨慎节奏，深盘进球需求降权。`);
+    if (round16.enabled && (round16.homeBoost > 0.04 || round16.awayBoost > 0.04)) {
+      if (round16.homeBoost > round16.awayBoost) homeLambda *= 1.14;
+      else awayLambda *= 1.14;
+      notes.push(`但现场压制仍明显，16强后保留压制方最后一球的小概率路径。`);
+    }
   }
   if (Number.isFinite(homeScore) && Number.isFinite(awayScore) && elapsed >= 55) {
     const goalDiff = homeScore - awayScore;
@@ -5671,7 +5878,10 @@ function liveScorePathContext(row, match, live, liveModel) {
   const homeScore = liveScoreNumber(live?.score?.home);
   const awayScore = liveScoreNumber(live?.score?.away);
   const elapsed = elapsedMinuteFromLive(live, match);
-  const remainingMinutes = Math.max(0, 90 - Math.min(elapsed, 90));
+  const round16Plus = useRound16PlusLiveLogic(match);
+  const estimatedStoppage = round16Plus ? Number(live?.situationalFlags?.estimatedStoppageMinutes) || 0 : 0;
+  const effectiveEndMinute = round16Plus && elapsed >= 70 ? 90 + clamp(estimatedStoppage, 0, 12) : 90;
+  const remainingMinutes = Math.max(0, effectiveEndMinute - Math.min(elapsed, effectiveEndMinute));
   const scoreKnown = Number.isFinite(homeScore) && Number.isFinite(awayScore);
   const safeHomeScore = scoreKnown ? homeScore : 0;
   const safeAwayScore = scoreKnown ? awayScore : 0;
@@ -5710,8 +5920,9 @@ function liveScorePathContext(row, match, live, liveModel) {
   const possessionDiff = Number.isFinite(homePossession) && Number.isFinite(awayPossession) ? homePossession - awayPossession : 0;
   const pressureScoreHome = clamp(shotDiff * 0.035 + sotDiff * 0.09 + cornerDiff * 0.028 + possessionDiff * 0.004, -1, 1);
   const pressureSide = pressureScoreHome > 0.18 ? "home" : pressureScoreHome < -0.18 ? "away" : "";
-  const dominantSide = targetMomentum > 0.08 ? targetSide
-    : strongerMomentum > 0.08 ? strongerSide
+  const dominantSide = round16Plus && pressureSide ? pressureSide
+    : targetMomentum > 0.08 ? targetSide
+      : strongerMomentum > 0.08 ? strongerSide
       : Math.abs(sotDiff) >= 3 ? sotDiff > 0 ? "home" : "away"
         : Math.abs(shotDiff) >= 7 ? shotDiff > 0 ? "home" : "away"
           : "";
@@ -5724,8 +5935,10 @@ function liveScorePathContext(row, match, live, liveModel) {
   const targetHasRedRisk = (targetSide === "home" && redCardDiff > 0) || (targetSide === "away" && redCardDiff < 0);
   const quality = livePressureQualityProfile(live, match);
   const counter = liveCounterAttackProfile(live, match);
+  const round16 = liveRound16PlusStructureProfile(live, match);
   const lowQualityPressureSide = quality.homePenalty > 0.04 ? "home" : quality.awayPenalty > 0.04 ? "away" : "";
   const counterSide = counter.homeBoost > 0 ? "home" : counter.awayBoost > 0 ? "away" : "";
+  const latePressureSide = round16.homeBoost > 0.04 ? "home" : round16.awayBoost > 0.04 ? "away" : "";
   return {
     homeScore,
     awayScore,
@@ -5750,8 +5963,12 @@ function liveScorePathContext(row, match, live, liveModel) {
     pressureScore: roundTo(targetSide === "home" ? pressureScoreHome : targetSide === "away" ? -pressureScoreHome : Math.abs(pressureScoreHome), 3),
     pressureScoreHome: roundTo(pressureScoreHome, 3),
     pressureSide,
+    latePressureSide,
     lowQualityPressureSide,
     counterSide,
+    round16Plus,
+    estimatedStoppageMinutes: roundTo(estimatedStoppage, 1),
+    effectiveEndMinute: roundTo(effectiveEndMinute, 1),
     eventFrozen: Boolean(live?.situationalFlags?.freezeRecommendations),
     shotDiff,
     sotDiff,
@@ -5785,7 +6002,16 @@ function pathTradingStance(row, context, liveEdge, dataQuality) {
   if (context.lowQualityPressureSide && context.goalsNeeded >= 2 && context.targetSide === context.lowQualityPressureSide) {
     return { action: "NO_CHASE", label: "低质量围攻，不追长比分", severity: "bad" };
   }
-  if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1) return { action: "NO_CHASE", label: "时间不够，不追", severity: "bad" };
+  if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1) {
+    const lateKnockoutPressure = context.round16Plus
+      && context.goalsNeeded === 1
+      && context.latePressureSide
+      && ((context.homeNeeded > 0 && context.latePressureSide === "home") || (context.awayNeeded > 0 && context.latePressureSide === "away"))
+      && edgeKnown
+      && edgeValue >= -0.015;
+    if (!lateKnockoutPressure) return { action: "NO_CHASE", label: "时间不够，不追", severity: "bad" };
+    return { action: "LATE_KO_PRESSURE", label: "16强后压制绝杀，小仓观察", severity: "good" };
+  }
   if (context.goalsNeeded >= 3 && context.elapsed >= 55) return { action: "NO_CHASE", label: "路径太长", severity: "bad" };
   if (context.targetHasRedRisk) return { action: "NO_TRADE", label: "红牌风险，不追", severity: "bad" };
   if (context.goalsNeeded === 1 && context.remainingMinutes >= 18 && edgeKnown && edgeValue >= 0.03 && context.pressureSide && (
@@ -5802,6 +6028,12 @@ function pathTradingStance(row, context, liveEdge, dataQuality) {
   }
   if (context.favoriteLevelOrBehind && context.dominantSide === context.strongerSide && context.goalsNeeded <= 2 && liveEdge >= 0.02 && context.remainingMinutes >= 18) {
     return { action: "ADD_SMALL", label: "压制路径，小注观察", severity: "good" };
+  }
+  if (context.round16Plus && context.elapsed >= 75 && context.goalsNeeded === 1 && context.latePressureSide && (
+    (context.homeNeeded > 0 && context.latePressureSide === "home")
+    || (context.awayNeeded > 0 && context.latePressureSide === "away")
+  ) && liveEdge >= -0.005) {
+    return { action: "LATE_KO_PRESSURE", label: "16强后压制绝杀，小仓观察", severity: "good" };
   }
   if (liveEdge >= 0.055 && context.goalsNeeded <= 2 && context.remainingMinutes >= 20) {
     return { action: "OPEN_SMALL", label: "有 edge，小注观察", severity: "good" };
@@ -5870,6 +6102,13 @@ function scorePathPositionAdvice(row, context) {
     addPct = context.pressureSide ? 25 : 15;
     label = context.pressureSide ? "可以用小仓等下一球路径" : "只小仓观察";
     reasons.push(`还差 1 球，若目标方下一球出现，价格通常快速重估；但进球后动作要切换成止盈。`);
+  } else if (context.round16Plus && context.elapsed >= 75 && context.goalsNeeded === 1 && context.latePressureSide && (
+    (context.homeNeeded > 0 && context.latePressureSide === "home")
+    || (context.awayNeeded > 0 && context.latePressureSide === "away")
+  ) && edgeValue >= -0.015) {
+    addPct = 8;
+    label = "16强后末段压制，仅极小绝杀仓";
+    reasons.push(`16强后按有效补时约 ${context.estimatedStoppageMinutes || 0} 分钟处理；压制方仍有最后一球路径，但只能极小仓。`);
   } else if (context.goalsNeeded === 2 && edgeValue >= 0.07 && context.remainingMinutes >= 30) {
     addPct = 12;
     label = "两球路径，仅极小试探";
@@ -5878,7 +6117,7 @@ function scorePathPositionAdvice(row, context) {
     label = edgeValue > 0 ? "有价格差但不补仓" : "不追";
     reasons.push(edgeValue > 0 ? "edge 未覆盖路径风险和时间成本。" : "市场价格不低于模型公允，追买没有优势。");
   }
-  if (context.remainingMinutes <= 12 && context.goalsNeeded >= 1) {
+  if (context.remainingMinutes <= 12 && context.goalsNeeded >= 1 && addPct > 8) {
     addPct = 0;
     label = "时间不足，不追";
     reasons.push("剩余时间太短，进球路径赔率变大不等于价值变高。");
@@ -6087,6 +6326,9 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
 
   if (stance.action === "PATH_ADD") {
     add.push(`只差 1 球且目标方压制，最多先用 ${unit} 中的 1 份；进球后立刻从买入切到止盈/对冲。`);
+  } else if (stance.action === "LATE_KO_PRESSURE") {
+    add.push(`16强后末段压制只允许极小仓：最多用 ${unit} 中的半份到 1 份，目标是买最后一球方向，不是补前面亏损。`);
+    add.push(`按有效补时约 ${context.estimatedStoppageMinutes || 0} 分钟估算；若下一次刷新射门/角球压制消失，立刻停止。`);
   } else if (stance.action === "ADD_ON_PRESSURE") {
     add.push(`强队${context.strongerSide === "home" ? match.homeName : match.awayName}落后/未领先但场面压制，可用 ${unit}：先 1 份，5-8 分钟后仍有射门/射正优势再加 1 份。`);
   } else if (stance.action === "ADD_SMALL" || stance.action === "OPEN_SMALL") {
@@ -6137,7 +6379,7 @@ function buildCorrectScorePathPlan(row, match, live, liveModel, dataQuality, act
   }
   if (Number.isFinite(row.edge)) evidence.push(`当前 edge ${formatPercent(row.edge)}，实时模型 ${formatPercent(row.liveProbability)}，当前价 ${formatCents(row.marketPrice)}。`);
 
-  if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1) forbidden.push("时间不足但还差球，不追。");
+  if (context.remainingMinutes <= 8 && context.goalsNeeded >= 1 && stance.action !== "LATE_KO_PRESSURE") forbidden.push("时间不足但还差球，不追。");
   if (context.goalsNeeded >= 3 && context.elapsed >= 55) forbidden.push("55 分钟后还差 3 球以上，长路径不补。");
   if (context.lowQualityPressureSide && context.targetSide === context.lowQualityPressureSide && context.goalsNeeded >= 2) forbidden.push("低质量围攻下不补长比分/深盘。");
   if (context.eventFrozen) forbidden.push("VAR/点球事件未确认时冻结所有实时买点。");
