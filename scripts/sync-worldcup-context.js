@@ -8,9 +8,10 @@ const FIFA_RANKINGS_PATH = path.join(__dirname, "..", "data", "fifa-rankings.jso
 const H2H_OVERRIDES_PATH = path.join(__dirname, "..", "data", "head-to-head-overrides.json");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 8000);
-const MATCH_SYNC_TIMEOUT_MS = Number(process.env.MATCH_SYNC_TIMEOUT_MS || 50000);
-const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 150000);
+const MATCH_SYNC_TIMEOUT_MS = Number(process.env.MATCH_SYNC_TIMEOUT_MS || 120000);
+const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 360000);
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
+const MEDIA_OPENAI_TIMEOUT_MS = Number(process.env.MEDIA_OPENAI_TIMEOUT_MS || 15000);
 const CONTEXT_ARCHIVE_TIMEOUT_MS = Number(process.env.CONTEXT_ARCHIVE_TIMEOUT_MS || 20000);
 const WEATHER_REQUEST_SPACING_MS = 350;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
@@ -216,12 +217,17 @@ const TEAM_DISPLAY_NAMES_ZH = {
 const ARTICLE_DOMAINS = [
   "fifa.com",
   "espn.com",
+  "espn.co.uk",
   "si.com",
   "sportingnews.com",
   "sportsmole.co.uk",
   "rotowire.com",
   "covers.com",
   "theanalyst.com",
+  "theguardian.com",
+  "bbc.com",
+  "bbc.co.uk",
+  "talksport.com",
   "skysports.com",
   "sportskeeda.com",
   "worldsoccer.com",
@@ -236,11 +242,93 @@ const ARTICLE_DOMAINS = [
   "cbssports.com",
   "reuters.com",
   "apnews.com",
+  "nytimes.com",
+  "theathletic.com",
+  "washingtonpost.com",
+  "houstonchronicle.com",
+  "nbcsports.com",
+  "aljazeera.com",
   "standard.co.uk",
   "independent.co.uk",
   "yahoo.com",
   "aol.com",
   "365scores.com"
+];
+
+const MEDIA_NEUTRAL_DOMAINS = [
+  "fifa.com",
+  "espn.com",
+  "espn.co.uk",
+  "theguardian.com",
+  "bbc.com",
+  "bbc.co.uk",
+  "reuters.com",
+  "apnews.com",
+  "skysports.com",
+  "theanalyst.com",
+  "cbssports.com",
+  "nytimes.com",
+  "theathletic.com",
+  "washingtonpost.com",
+  "houstonchronicle.com",
+  "nbcsports.com",
+  "aljazeera.com",
+  "independent.co.uk",
+  "standard.co.uk"
+];
+
+const MEDIA_MARKET_DOMAINS = [
+  "talksport.com",
+  "sportsmole.co.uk",
+  "covers.com",
+  "sportskeeda.com",
+  "sportingnews.com",
+  "si.com",
+  "rotowire.com",
+  "goal.com",
+  "101greatgoals.com"
+];
+
+const MEDIA_EXCLUDED_DOMAINS = [
+  "duckduckgo.com",
+  "r.jina.ai",
+  "polymarket.com",
+  "x.com",
+  "twitter.com",
+  "facebook.com",
+  "reddit.com"
+];
+
+const MEDIA_SIGNAL_KEYWORDS = [
+  "preview",
+  "analysis",
+  "tactics",
+  "form",
+  "fitness",
+  "injury",
+  "suspended",
+  "team news",
+  "lineup",
+  "line-up",
+  "pressing",
+  "transition",
+  "counter",
+  "defence",
+  "defense",
+  "goalkeeper",
+  "BTTS",
+  "both teams to score",
+  "over 2.5",
+  "under 2.5",
+  "extra time",
+  "penalties",
+  "淘汰赛",
+  "战术",
+  "状态",
+  "伤停",
+  "首发",
+  "防守",
+  "门将"
 ];
 
 const DIRECT_MATCH_SOURCES = {
@@ -723,6 +811,150 @@ function uniqueUrls(urls, limit) {
     if (limit && out.length >= limit) break;
   }
   return out;
+}
+
+function clampValue(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function hostnameFromUrl(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function domainMatches(hostname, domain) {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function mediaSourceTier(url) {
+  const hostname = hostnameFromUrl(url);
+  if (!hostname) return "candidate";
+  if (MEDIA_EXCLUDED_DOMAINS.some((domain) => domainMatches(hostname, domain))) return "excluded";
+  if (MEDIA_NEUTRAL_DOMAINS.some((domain) => domainMatches(hostname, domain))) return "neutral";
+  if (MEDIA_MARKET_DOMAINS.some((domain) => domainMatches(hostname, domain))) return "market-context";
+  return "candidate";
+}
+
+function mediaTierWeight(tier) {
+  if (tier === "neutral") return 3;
+  if (tier === "candidate") return 2;
+  if (tier === "market-context") return 1;
+  return 0;
+}
+
+function mediaTitleFromText(text, fallback = "") {
+  const head = String(text || "").slice(0, 900);
+  const titleMatch = head.match(/(?:^|\n)\s*Title:\s*([^\n]+)/i);
+  if (titleMatch) return titleMatch[1].replace(/\s+/g, " ").trim().slice(0, 140);
+  const firstLine = head.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length >= 12);
+  return (firstLine || fallback || "公开媒体来源").replace(/\s+/g, " ").trim().slice(0, 140);
+}
+
+function teamSearchNeedles(match) {
+  return [
+    match.homeName,
+    match.awayName,
+    match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName,
+    match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName,
+    TEAM_SEARCH_NAMES[match.home],
+    TEAM_SEARCH_NAMES[match.away],
+    match.home,
+    match.away
+  ].filter(Boolean);
+}
+
+function textMentionsMatchTeams(text, match) {
+  const lower = String(text || "").toLowerCase();
+  const homeNeedles = [match.homeName, match.homeEnglishName, TEAM_SEARCH_NAMES[match.home], match.home]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  const awayNeedles = [match.awayName, match.awayEnglishName, TEAM_SEARCH_NAMES[match.away], match.away]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  return homeNeedles.some((needle) => lower.includes(needle)) && awayNeedles.some((needle) => lower.includes(needle));
+}
+
+function buildMediaCandidates(match, preview) {
+  const candidates = [];
+  const seen = new Set();
+  const needles = [...teamSearchNeedles(match), ...MEDIA_SIGNAL_KEYWORDS];
+  const pushCandidate = ({ url, text, name = "", sourceType = "article", allowQueryMatch = false }) => {
+    const originalUrl = url || "";
+    const tier = mediaSourceTier(originalUrl);
+    if (tier === "excluded") return;
+    const cleanText = stripHtml(text || "");
+    if (!cleanText || cleanText.length < 120) return;
+    if (!allowQueryMatch && !textMentionsMatchTeams(`${name}\n${cleanText}`, match)) return;
+    const key = originalUrl || `${sourceType}:${name}:${cleanText.slice(0, 80)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const relevant = extractRelevantSentences(cleanText, needles, 5);
+    const snippet = (relevant.length ? relevant.join(" ") : cleanText.slice(0, 520)).replace(/\s+/g, " ").trim();
+    candidates.push({
+      title: mediaTitleFromText(cleanText, name),
+      url: originalUrl,
+      domain: hostnameFromUrl(originalUrl),
+      tier,
+      sourceType,
+      weight: mediaTierWeight(tier),
+      snippet: snippet.slice(0, 760)
+    });
+  };
+
+  for (const result of preview.direct?.results || []) {
+    if (!result.ok) continue;
+    pushCandidate({
+      url: result.originalUrl || result.url,
+      text: result.cleanText || result.text,
+      name: result.name || "",
+      sourceType: "direct"
+    });
+  }
+
+  for (const article of preview.articles || []) {
+    if (!article.ok) continue;
+    pushCandidate({
+      url: article.originalUrl || article.url,
+      text: article.text,
+      sourceType: "article"
+    });
+  }
+
+  for (const search of preview.searches || []) {
+    if (candidates.length >= 6) break;
+    if (!search.ok) continue;
+    const links = extractSearchLinks(search.text || "", 3).filter((url) => mediaSourceTier(url) !== "excluded");
+    const queryMentionsTeams = textMentionsMatchTeams(search.queryText || "", match);
+    pushCandidate({
+      url: links[0] || "",
+      text: `${search.queryText || ""}\n${search.text || ""}`,
+      name: search.queryText || "公开搜索摘要",
+      sourceType: "search-snippet",
+      allowQueryMatch: queryMentionsTeams
+    });
+  }
+
+  if (!candidates.length && Array.isArray(preview.snippets)) {
+    const combined = preview.snippets.filter(Boolean).join(" ");
+    if (combined.length >= 120) {
+      pushCandidate({
+        url: preview.url || "",
+        text: `${match.homeName} vs ${match.awayName}\n${combined}`,
+        name: `${match.homeName} vs ${match.awayName} 公开搜索摘要`,
+        sourceType: "search-snippet",
+        allowQueryMatch: true
+      });
+    }
+  }
+
+  return candidates
+    .sort((a, b) => b.weight - a.weight || b.snippet.length - a.snippet.length)
+    .slice(0, 8);
 }
 
 function readableProxyUrl(url) {
@@ -1431,7 +1663,7 @@ async function fetchOpenAiAnalysis(match, preview, weather) {
   const responsesUrl = `${config.baseUrl}/v1/responses`;
   const result = await withTimeout(timedFetchJson(responsesUrl, {
     method: "POST",
-    timeoutMs: OPENAI_TIMEOUT_MS,
+    timeoutMs: MEDIA_OPENAI_TIMEOUT_MS,
     headers: {
       "authorization": `Bearer ${config.apiKey}`,
       "content-type": "application/json"
@@ -1475,14 +1707,303 @@ async function fetchOpenAiAnalysis(match, preview, weather) {
   return normalized;
 }
 
+function normalizeMediaConfidence(value, neutralSourceCount, sourceCount) {
+  const normalized = String(value || "").toLowerCase();
+  if (["low", "medium", "high"].includes(normalized)) {
+    if (normalized === "high" && neutralSourceCount < 3) return "medium";
+    return normalized;
+  }
+  if (neutralSourceCount >= 3) return "medium";
+  if (sourceCount >= 3) return "medium";
+  return "low";
+}
+
+function normalizeMediaImpacts(raw = {}) {
+  return {
+    homeXgDelta: clampValue(raw.homeXgDelta, -0.06, 0.06),
+    awayXgDelta: clampValue(raw.awayXgDelta, -0.06, 0.06),
+    bttsDelta: clampValue(raw.bttsDelta, -0.035, 0.035),
+    over25Delta: clampValue(raw.over25Delta, -0.035, 0.035),
+    drawDelta: clampValue(raw.drawDelta, -0.025, 0.025)
+  };
+}
+
+function countMediaSources(candidates) {
+  return {
+    sourceCount: candidates.length,
+    neutralSourceCount: candidates.filter((item) => item.tier === "neutral").length,
+    marketSourceCount: candidates.filter((item) => item.tier === "market-context").length
+  };
+}
+
+function teamSentenceScore(text, aliases) {
+  const positive = [
+    "strong",
+    "impressive",
+    "dominant",
+    "dangerous",
+    "creative",
+    "in form",
+    "momentum",
+    "control",
+    "press",
+    "threat",
+    "edge",
+    "favored",
+    "favourite",
+    "favorite",
+    "状态好",
+    "优势",
+    "压制",
+    "威胁",
+    "创造"
+  ];
+  const negative = [
+    "struggle",
+    "inconsistent",
+    "vulnerable",
+    "fatigue",
+    "injury",
+    "injured",
+    "suspended",
+    "doubt",
+    "concern",
+    "flaw",
+    "worry",
+    "leaky",
+    "conceded",
+    "疲劳",
+    "伤停",
+    "停赛",
+    "不稳定",
+    "漏洞",
+    "隐患"
+  ];
+  const cleanAliases = aliases.filter(Boolean).map((item) => String(item).toLowerCase());
+  const sentences = stripHtml(text).split(/(?<=[.!?。！？])\s+|\s{2,}/).map((item) => item.trim()).filter(Boolean);
+  let score = 0;
+  for (const sentence of sentences) {
+    const lower = sentence.toLowerCase();
+    if (!cleanAliases.some((alias) => lower.includes(alias))) continue;
+    if (positive.some((needle) => lower.includes(needle))) score += 1;
+    if (negative.some((needle) => lower.includes(needle))) score -= 1;
+  }
+  return score;
+}
+
+function buildHeuristicMediaConsensus(match, candidates, previous = {}) {
+  if (!candidates.length) {
+    if (previous?.ok) {
+      return {
+        ...previous,
+        status: "stale",
+        stale: true,
+        lastError: "本轮未抓到可用媒体来源，沿用上一次媒体共识，仅作观察。",
+        updatedAt: shanghaiIso()
+      };
+    }
+    return {
+      ok: false,
+      status: "missing",
+      updatedAt: shanghaiIso(),
+      source: "媒体/专家赛前共识",
+      summary: "未抓到足够可用的中立媒体或专家赛前信息。",
+      confidence: "low",
+      sourceCount: 0,
+      neutralSourceCount: 0,
+      marketSourceCount: 0,
+      impacts: normalizeMediaImpacts({}),
+      sources: [],
+      notes: [],
+      riskFlags: ["媒体共识未同步"]
+    };
+  }
+
+  const text = candidates.map((item) => `${item.title}\n${item.snippet}`).join("\n").toLowerCase();
+  const homeAliases = [match.homeName, match.homeEnglishName, TEAM_SEARCH_NAMES[match.home], match.home];
+  const awayAliases = [match.awayName, match.awayEnglishName, TEAM_SEARCH_NAMES[match.away], match.away];
+  const homeScore = teamSentenceScore(text, homeAliases);
+  const awayScore = teamSentenceScore(text, awayAliases);
+  const directionalDelta = clampValue((homeScore - awayScore) * 0.012, -0.04, 0.04);
+  const impacts = {
+    homeXgDelta: directionalDelta,
+    awayXgDelta: -directionalDelta * 0.8,
+    bttsDelta: 0,
+    over25Delta: 0,
+    drawDelta: 0
+  };
+  const notes = [];
+  if (/both teams to score|btts|both sides.*score|both teams.*net|两队.*进球|双方.*进球/.test(text)) {
+    impacts.bttsDelta += 0.02;
+    notes.push("媒体摘要出现 BTTS/双方进球倾向。");
+  }
+  if (/over 2\.5|high-scoring|goals at both ends|open game|end-to-end|大于 2\.5|大球/.test(text)) {
+    impacts.over25Delta += 0.018;
+    notes.push("媒体摘要出现开放/大球倾向。");
+  }
+  if (/under 2\.5|low-scoring|tight|cagey|disciplined|organized|defensive|extra time|小于 2\.5|小球|防守|加时/.test(text)) {
+    impacts.over25Delta -= 0.018;
+    impacts.drawDelta += 0.008;
+    notes.push("媒体摘要出现低比分/谨慎/防守倾向。");
+  }
+  if (/heat|humidity|travel|fatigue|酷热|高温|湿度|疲劳/.test(text)) {
+    impacts.over25Delta -= 0.008;
+    notes.push("媒体摘要提到体能或天气负担，降低节奏权重。");
+  }
+
+  const counts = countMediaSources(candidates);
+  const directionText = directionalDelta > 0.01
+    ? `${teamLabel(match, "home")}媒体语义略占优`
+    : directionalDelta < -0.01
+      ? `${teamLabel(match, "away")}媒体语义略占优`
+      : "媒体方向没有明显单边倾斜";
+
+  return {
+    ok: true,
+    status: counts.neutralSourceCount ? "rule-fallback" : "low-signal",
+    updatedAt: shanghaiIso(),
+    source: "媒体/专家赛前共识",
+    model: "rule-based-media-filter",
+    summary: `${directionText}；${notes[0] || "公开媒体只提供弱信号，暂不做大幅调整。"}`,
+    confidence: normalizeMediaConfidence("low", counts.neutralSourceCount, counts.sourceCount),
+    ...counts,
+    impacts: normalizeMediaImpacts(impacts),
+    sources: candidates.map((item) => ({
+      title: item.title,
+      url: item.url,
+      domain: item.domain,
+      tier: item.tier,
+      sourceType: item.sourceType,
+      snippet: item.snippet
+    })),
+    notes,
+    riskFlags: ["规则兜底，不等同专家定论"]
+  };
+}
+
+function normalizeMediaConsensus(raw, config, candidates, fallback) {
+  if (!raw || typeof raw !== "object") return fallback;
+  const counts = countMediaSources(candidates);
+  const summary = String(raw.summary || fallback.summary || "").replace(/\s+/g, " ").trim().slice(0, 420);
+  if (!summary) return fallback;
+  const notes = Array.isArray(raw.notes) ? raw.notes : [];
+  const riskFlags = Array.isArray(raw.riskFlags) ? raw.riskFlags : [];
+  return {
+    ok: true,
+    status: counts.neutralSourceCount ? "synced" : "partial",
+    updatedAt: shanghaiIso(),
+    source: "媒体/专家赛前共识",
+    model: config.model,
+    summary,
+    consensusLabel: String(raw.consensusLabel || fallback.consensusLabel || "").slice(0, 80),
+    confidence: normalizeMediaConfidence(raw.confidence, counts.neutralSourceCount, counts.sourceCount),
+    ...counts,
+    impacts: normalizeMediaImpacts(raw.impacts || fallback.impacts || {}),
+    sources: candidates.map((item) => ({
+      title: item.title,
+      url: item.url,
+      domain: item.domain,
+      tier: item.tier,
+      sourceType: item.sourceType,
+      stance: "",
+      snippet: item.snippet
+    })),
+    notes: notes.map((item) => String(item).slice(0, 180)).slice(0, 5),
+    riskFlags: riskFlags.map((item) => String(item).slice(0, 120)).slice(0, 5)
+  };
+}
+
+async function fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous = {}) {
+  const candidates = buildMediaCandidates(match, preview);
+  const fallback = buildHeuristicMediaConsensus(match, candidates, previous);
+  const config = openAiConfig?.apiKey ? openAiConfig : await getOpenAiConfig();
+  if (!config.apiKey || !candidates.length) return fallback;
+
+  const prompt = {
+    task: "你是世界杯赛前媒体信息过滤器。只根据给出的公开来源摘要，提炼中立媒体/专家共识，并输出保守 JSON。",
+    sourcePolicy: [
+      "中立媒体优先：Guardian/AP/Reuters/ESPN/BBC/Sky/The Analyst 等。",
+      "投注技巧、赔率和博彩文章只能作为 market-context，不能当作中立专家结论。",
+      "不能编造首发、伤停、战术、现场状态；没有明确来源就写低置信或不调整。",
+      "调整必须进入同一套 xG/比分分布，幅度很小。"
+    ],
+    match: {
+      id: match.id,
+      home: match.homeName,
+      away: match.awayName,
+      kickoffShanghai: match.kickoffShanghai,
+      venue: match.venue
+    },
+    sources: candidates.map((item) => ({
+      title: item.title,
+      domain: item.domain,
+      tier: item.tier,
+      url: item.url,
+      snippet: item.snippet
+    })),
+    outputJson: {
+      summary: "中文，一段话总结媒体共识与证据强弱",
+      consensusLabel: "中文短标签，例如 偏向小球/BTTS偏热/强队优势但谨慎",
+      confidence: "low|medium|high",
+      impacts: {
+        homeXgDelta: "number, -0.06 到 0.06",
+        awayXgDelta: "number, -0.06 到 0.06",
+        bttsDelta: "number, -0.035 到 0.035",
+        over25Delta: "number, -0.035 到 0.035",
+        drawDelta: "number, -0.025 到 0.025"
+      },
+      notes: ["中文证据点"],
+      riskFlags: ["中文风险或缺口"]
+    }
+  };
+
+  const responsesUrl = `${config.baseUrl}/v1/responses`;
+  const result = await withTimeout(timedFetchJson(responsesUrl, {
+    method: "POST",
+    timeoutMs: OPENAI_TIMEOUT_MS,
+    headers: {
+      "authorization": `Bearer ${config.apiKey}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_output_tokens: 760,
+      reasoning: {
+        effort: "none"
+      },
+      input: [
+        {
+          role: "system",
+          content: "你只输出 JSON，不输出 Markdown。必须区分中立媒体与投注技巧，必须保守。"
+        },
+        {
+          role: "user",
+          content: JSON.stringify(prompt)
+        }
+      ]
+    })
+  }), MEDIA_OPENAI_TIMEOUT_MS, "openai media consensus");
+
+  if (!result.ok) {
+    return {
+      ...fallback,
+      status: fallback.ok ? fallback.status : "source-unavailable",
+      lastError: result.error || "OpenAI media consensus failed"
+    };
+  }
+
+  const parsed = safeJsonFromText(extractOpenAiText(result.data));
+  return normalizeMediaConsensus(parsed, config, candidates, fallback);
+}
+
 function searchQueries(match) {
   const homeEn = match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName;
   const awayEn = match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName;
   return [
     `${homeEn} vs ${awayEn} World Cup preview team news lineups injuries`,
+    `${homeEn} vs ${awayEn} World Cup neutral preview tactical analysis form expert`,
     `${homeEn} XI vs ${awayEn} predicted lineup confirmed team news injury latest World Cup`,
     `${awayEn} XI vs ${homeEn} predicted lineup confirmed team news injury latest World Cup`,
-    `${homeEn} ${awayEn} predicted lineups injury news World Cup`,
     `${homeEn} ${awayEn} head to head recent form`,
     `${homeEn} ${awayEn} H2H results last meetings football`,
     `${match.homeName} ${match.awayName} 世界杯 伤停 首发 阵容`
@@ -1936,6 +2457,7 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
     away: awayRecentFormRecord
   };
   const tacticalMatchup = baselineTacticalMatchup(match, fifaRankings, effectiveAiAnalysis);
+  const mediaConsensus = await fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous.mediaConsensus);
 
   const lineups = {
     status: confirmedLineup ? "confirmed" : projectedLineup ? "projected" : "unavailable",
@@ -1972,6 +2494,7 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
     tacticalMatchup,
     riskFlags: effectiveAiAnalysis.ok ? effectiveAiAnalysis.riskFlags : [],
     aiAnalysis: effectiveAiAnalysis,
+    mediaConsensus,
     headToHead: buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides, match.headToHead || previous.headToHead),
     weather: {
       summary: weather.summary || "天气源未同步，暂不调整总进球。",
@@ -2026,6 +2549,14 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
         updatedAt: effectiveAiAnalysis.updatedAt || null,
         url: `${openAiConfig.baseUrl}/v1/responses`,
         error: effectiveAiAnalysis.fallback ? "AI接口不可用，使用公开源/规则低置信兜底" : effectiveAiAnalysis.ok ? (effectiveAiAnalysis.stale ? effectiveAiAnalysis.lastError || "" : "") : aiAnalysis.error || "AI 综合分析未启用"
+      },
+      mediaConsensus: {
+        ok: Boolean(mediaConsensus.ok),
+        status: mediaConsensus.status || (mediaConsensus.ok ? "synced" : "missing"),
+        confidence: mediaConsensus.confidence || "low",
+        updatedAt: mediaConsensus.updatedAt || null,
+        url: (mediaConsensus.sources || []).map((item) => item.url).filter(Boolean).slice(0, 3).join(" | "),
+        error: mediaConsensus.ok ? (mediaConsensus.lastError || "") : mediaConsensus.summary || "媒体共识未同步"
       }
     }
   };

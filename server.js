@@ -1404,6 +1404,42 @@ function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
   };
 }
 
+function mediaConsensusSignal(match) {
+  const media = match?.context?.mediaConsensus || match?.mediaConsensus;
+  if (!media || media.ok === false) return null;
+  const sourceCount = Number(media.sourceCount) || (Array.isArray(media.sources) ? media.sources.length : 0);
+  if (!sourceCount && !media.summary) return null;
+  const neutralSourceCount = Number(media.neutralSourceCount) || 0;
+  const marketSourceCount = Number(media.marketSourceCount) || 0;
+  const confidence = String(media.confidence || "low").toLowerCase();
+  const confidenceWeight = confidence === "high" ? 0.9 : confidence === "medium" ? 0.7 : 0.45;
+  const sourceWeight = neutralSourceCount >= 2 ? 1 : neutralSourceCount >= 1 ? 0.78 : 0.52;
+  const staleWeight = media.stale || media.status === "stale" ? 0.55 : 1;
+  const weight = confidenceWeight * sourceWeight * staleWeight;
+  const raw = media.impacts || {};
+  const impacts = {
+    homeXgDelta: clamp((Number(raw.homeXgDelta) || 0) * weight, -0.055, 0.055),
+    awayXgDelta: clamp((Number(raw.awayXgDelta) || 0) * weight, -0.055, 0.055),
+    bttsDelta: clamp((Number(raw.bttsDelta) || 0) * weight, -0.03, 0.03),
+    over25Delta: clamp((Number(raw.over25Delta) || 0) * weight, -0.03, 0.03),
+    drawDelta: clamp((Number(raw.drawDelta) || 0) * weight, -0.018, 0.018)
+  };
+  return {
+    ok: true,
+    status: media.status === "synced" && neutralSourceCount ? "synced" : "partial",
+    confidence,
+    sourceCount,
+    neutralSourceCount,
+    marketSourceCount,
+    summary: String(media.summary || "").slice(0, 360),
+    consensusLabel: media.consensusLabel || "",
+    impacts,
+    sources: Array.isArray(media.sources) ? media.sources.slice(0, 6) : [],
+    notes: Array.isArray(media.notes) ? media.notes.slice(0, 4) : [],
+    updatedAt: media.updatedAt || null
+  };
+}
+
 function buildContextSignals(match) {
   const homeTournament = teamRecentTournamentProfile(match, "home");
   const awayTournament = teamRecentTournamentProfile(match, "away");
@@ -1411,6 +1447,7 @@ function buildContextSignals(match) {
   const awayRest = restProfile(match, "away");
   const h2h = h2hStrength(match);
   const community = communityTipsterSignal(match);
+  const mediaConsensus = mediaConsensusSignal(match);
   const signals = [];
   const impacts = {
     homeXgDelta: 0,
@@ -1488,11 +1525,31 @@ function buildContextSignals(match) {
     });
   }
 
+  if (mediaConsensus) {
+    const mediaImpact = mediaConsensus.impacts || {};
+    impacts.homeXgDelta += mediaImpact.homeXgDelta || 0;
+    impacts.awayXgDelta += mediaImpact.awayXgDelta || 0;
+    impacts.bttsDelta += mediaImpact.bttsDelta || 0;
+    impacts.over25Delta += mediaImpact.over25Delta || 0;
+    impacts.drawDelta += mediaImpact.drawDelta || 0;
+    const sourceText = `${mediaConsensus.neutralSourceCount || 0} 个中立源 / ${mediaConsensus.sourceCount || 0} 个总来源`;
+    const marketText = mediaConsensus.marketSourceCount ? `，${mediaConsensus.marketSourceCount} 个投注技巧源仅作市场语境` : "";
+    signals.push({
+      id: "neutral-media-consensus",
+      label: "中立媒体/专家共识",
+      status: mediaConsensus.status,
+      homeXgDelta: roundTo(mediaImpact.homeXgDelta || 0, 3),
+      awayXgDelta: roundTo(mediaImpact.awayXgDelta || 0, 3),
+      reason: `${mediaConsensus.summary || "媒体共识只给出弱信号"}（${sourceText}${marketText}）。`
+    });
+  }
+
   const missing = [];
   if (!homeTournament || !awayTournament) missing.push("本届队内状态样本不足");
   if (!Number.isFinite(homeRest.restDays) || !Number.isFinite(awayRest.restDays)) missing.push("休息天数未匹配");
   if (!h2h) missing.push("近20年交手未结构化");
   if (!community) missing.push("公开 tipster 信号未匹配");
+  if (!mediaConsensus) missing.push("中立媒体/专家共识未同步");
   missing.push("裁判尺度/黄牌停赛/点球手/门将扑救质量需要独立结构化源，当前不入模");
 
   return {
@@ -1505,6 +1562,7 @@ function buildContextSignals(match) {
     rest: { home: homeRest, away: awayRest },
     h2h,
     community,
+    mediaConsensus,
     missing,
     updatedAt: new Date().toISOString()
   };
@@ -4516,6 +4574,17 @@ function aiPredictionEvidence(match, top, rows) {
       detail: `样本 ${match.tournamentTrend.sampleSize} 场：BTTS ${formatPercent(rates.btts)}，大 2.5 ${formatPercent(rates.over25)}，平局 ${formatPercent(rates.draw)}。`
     });
     if (match.tournamentTrend.notes?.length) drivers.push(`赛会趋势：${match.tournamentTrend.notes.slice(0, 2).join(" ")}`);
+  }
+  const mediaConsensus = match.contextSignals?.mediaConsensus || context.mediaConsensus;
+  if (mediaConsensus?.summary) {
+    const neutralCount = Number(mediaConsensus.neutralSourceCount) || 0;
+    const sourceCount = Number(mediaConsensus.sourceCount) || (Array.isArray(mediaConsensus.sources) ? mediaConsensus.sources.length : 0);
+    evidence.push({
+      label: "媒体/专家共识",
+      status: mediaConsensus.status === "synced" || neutralCount ? "synced" : "partial",
+      detail: `${mediaConsensus.summary} 来源 ${neutralCount} 个中立源 / ${sourceCount} 个总来源；只作低权重模型修正。`
+    });
+    drivers.push(`媒体/专家共识：${mediaConsensus.summary}`);
   }
   if (match.contextSignals?.ok) {
     const syncedSignals = (match.contextSignals.signals || []).filter((item) => item.status === "synced").slice(0, 4);

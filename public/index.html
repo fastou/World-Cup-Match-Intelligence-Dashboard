@@ -3637,6 +3637,11 @@
         return value.toFixed(digits);
       };
 
+      const fmtSignedNumber = (value, digits = 3) => {
+        if (typeof value !== "number" || !Number.isFinite(value)) return "+0";
+        return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+      };
+
       const fmtEdge = (value) => {
         if (typeof value !== "number") return "-";
         return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
@@ -4286,8 +4291,12 @@
 
       const statusLabel = (status) => ({
         synced: currentLang === "en" ? "Synced" : "已同步",
+        partial: currentLang === "en" ? "Partial" : "部分同步",
         stale: currentLang === "en" ? "Stale / pending" : "过期/待确认",
         queried: currentLang === "en" ? "Queried / pending" : "已查询/待确认",
+        "rule-fallback": currentLang === "en" ? "Rule fallback" : "规则兜底",
+        "low-signal": currentLang === "en" ? "Low signal" : "低信号",
+        "source-unavailable": currentLang === "en" ? "Source unavailable" : "来源不可用",
         missing: currentLang === "en" ? "Missing" : "缺失"
       })[status] || (currentLang === "en" ? "Unknown" : "未知");
 
@@ -5020,6 +5029,8 @@
           : "无关键限制，按 edge 和价格纪律判断。";
         const reasons = (prediction.reasons || []).slice(0, 3);
         const evidence = Array.isArray(prediction.evidence) ? prediction.evidence : [];
+        const mediaEvidence = evidence.find((item) => /媒体|Media|expert|专家/i.test(item.label || ""));
+        const visibleEvidence = evidence.filter((item) => item !== mediaEvidence);
         const drivers = Array.isArray(prediction.modelDrivers) ? prediction.modelDrivers : [];
         const dataGaps = Array.isArray(prediction.dataGaps) ? prediction.dataGaps : [];
         const goalLean = goalLeanDisplay(match.probabilities || {});
@@ -5069,9 +5080,10 @@
                 `).join("")}
               </div>
               ${prediction.marketRead ? `<div class="form-summary">${escapeHtml(prediction.marketRead)}</div>` : ""}
-              ${evidence.length ? `
+              ${mediaEvidence?.detail ? `<div class="form-summary">${escapeHtml(currentLang === "en" ? "Media consensus: " : "媒体共识：")}${escapeHtml(mediaEvidence.detail.slice(0, 220))}</div>` : ""}
+              ${visibleEvidence.length ? `
                 <div class="prediction-evidence-grid">
-                  ${evidence.map((item) => `
+                  ${visibleEvidence.map((item) => `
                     <div class="prediction-evidence-card">
                       <strong>${escapeHtml(item.label || "-")}<em class="prediction-evidence-status">${escapeHtml(statusText(item.status))}</em></strong>
                       <span>${escapeHtml(item.detail || "")}</span>
@@ -6377,6 +6389,56 @@
         `;
       }
 
+      function renderMediaConsensus(media, match) {
+        const sourceCount = Number(media?.sourceCount) || (Array.isArray(media?.sources) ? media.sources.length : 0);
+        const neutralCount = Number(media?.neutralSourceCount) || 0;
+        const marketCount = Number(media?.marketSourceCount) || 0;
+        const impacts = media?.impacts || {};
+        const notes = Array.isArray(media?.notes) ? media.notes : [];
+        const riskFlags = Array.isArray(media?.riskFlags) ? media.riskFlags : [];
+        const sources = Array.isArray(media?.sources) ? media.sources : [];
+        const status = media?.ok
+          ? `${statusLabel(media.status || "synced")} · ${confidenceLabel(media.confidence || "low")}`
+          : (currentLang === "en" ? "Not synced" : "未同步");
+        const sourceLine = currentLang === "en"
+          ? `${neutralCount} neutral sources / ${sourceCount} total sources${marketCount ? ` · ${marketCount} betting-tip sources used only as market context` : ""}`
+          : `${neutralCount} 个中立源 / ${sourceCount} 个总来源${marketCount ? ` · ${marketCount} 个投注技巧源仅作市场语境` : ""}`;
+        const impactLine = [
+          `${homeName(match) || "主队"} xG ${fmtSignedNumber(impacts.homeXgDelta, 3)}`,
+          `${awayName(match) || "客队"} xG ${fmtSignedNumber(impacts.awayXgDelta, 3)}`,
+          `BTTS ${fmtEdge(impacts.bttsDelta)}`,
+          `${currentLang === "en" ? "Over 2.5" : "大 2.5"} ${fmtEdge(impacts.over25Delta)}`,
+          `${currentLang === "en" ? "Draw" : "平局"} ${fmtEdge(impacts.drawDelta)}`
+        ].join(" · ");
+        if (!media?.ok && !sourceCount) {
+          return `
+            <section class="intel-block wide">
+              <h4>${currentLang === "en" ? "Media / Expert Preview" : "媒体/专家赛前信息"}</h4>
+              <ul class="info-list">
+                <li><strong>${currentLang === "en" ? "Status" : "状态"}</strong><span>${escapeHtml(media?.summary || (currentLang === "en" ? "No usable neutral media preview has been synced yet." : "暂未同步可用中立媒体赛前信息。"))}</span></li>
+              </ul>
+            </section>
+          `;
+        }
+        return `
+          <section class="intel-block wide">
+            <h4>${currentLang === "en" ? "Media / Expert Preview" : "媒体/专家赛前信息"}</h4>
+            <ul class="info-list">
+              <li><strong>${currentLang === "en" ? "Status" : "状态"}</strong><span>${escapeHtml(status)} · ${fmtTime(media?.updatedAt)}</span></li>
+              <li><strong>${currentLang === "en" ? "Source filter" : "来源过滤"}</strong><span>${escapeHtml(sourceLine)}</span></li>
+              <li><strong>${currentLang === "en" ? "Consensus" : "共识摘要"}</strong><span>${escapeHtml(media?.summary || (currentLang === "en" ? "Low signal." : "信号较弱。"))}</span></li>
+              <li><strong>${currentLang === "en" ? "Model impact" : "入模影响"}</strong><span>${escapeHtml(impactLine)}</span></li>
+              ${notes.length ? `<li><strong>${currentLang === "en" ? "Evidence" : "证据点"}</strong><span>${escapeHtml(notes.slice(0, 4).join(" / "))}</span></li>` : ""}
+              ${riskFlags.length ? `<li><strong>${currentLang === "en" ? "Limits" : "限制"}</strong><span>${escapeHtml(riskFlags.slice(0, 4).join(" / "))}</span></li>` : ""}
+              ${sources.length ? `<li><strong>${currentLang === "en" ? "Sources" : "来源"}</strong><span>${sources.slice(0, 6).map((source) => {
+                const label = `${source.domain || source.title || "source"}${source.tier ? ` · ${source.tier}` : ""}`;
+                return source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>` : escapeHtml(label);
+              }).join(" · ")}</span></li>` : ""}
+            </ul>
+          </section>
+        `;
+      }
+
       function renderResearchFramework(framework) {
         const dimensions = framework?.staticDimensions || [];
         if (!dimensions.length) {
@@ -6404,6 +6466,7 @@
         };
         const impacts = dynamicModel.modelImpacts || [];
         const ai = context.aiAnalysis || {};
+        const mediaConsensus = context.mediaConsensus || match.contextSignals?.mediaConsensus || {};
         const riskFlags = Array.isArray(context.riskFlags) ? context.riskFlags : [];
         const sources = context.sources || {};
         const sourceStateLabel = (source = {}) => {
@@ -6454,6 +6517,8 @@
                 <li><strong>对位判断</strong><span>${escapeHtml(context.tacticalMatchup || "等待阵容和赛前 preview")}</span></li>
               </ul>
             </section>
+
+            ${renderMediaConsensus(mediaConsensus, match)}
 
             <section class="intel-block">
               <h4>天气和场地</h4>
