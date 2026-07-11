@@ -6397,6 +6397,11 @@
         const notes = Array.isArray(media?.notes) ? media.notes : [];
         const riskFlags = Array.isArray(media?.riskFlags) ? media.riskFlags : [];
         const sources = Array.isArray(media?.sources) ? media.sources : [];
+        const scoreConsensus = media?.scoreConsensus || {};
+        const referenceScores = media?.referenceScores || {};
+        const scoreRows = Array.isArray(scoreConsensus?.scores) ? scoreConsensus.scores : [];
+        const scorePredictions = Array.isArray(scoreConsensus?.predictions) ? scoreConsensus.predictions : [];
+        const referenceScoreRows = Array.isArray(referenceScores?.scores) ? referenceScores.scores : [];
         const status = media?.ok
           ? `${statusLabel(media.status || "synced")} · ${confidenceLabel(media.confidence || "low")}`
           : (currentLang === "en" ? "Not synced" : "未同步");
@@ -6410,6 +6415,33 @@
           `${currentLang === "en" ? "Over 2.5" : "大 2.5"} ${fmtEdge(impacts.over25Delta)}`,
           `${currentLang === "en" ? "Draw" : "平局"} ${fmtEdge(impacts.drawDelta)}`
         ].join(" · ");
+        const scoreSummary = currentLang === "en"
+          ? scoreConsensus.summaryEn || scoreConsensus.summary || "No explicit media score predictions have been synced yet."
+          : scoreConsensus.summary || "暂未抓到明确媒体预测比分。";
+        const outcome = scoreConsensus.outcomeBreakdown || {};
+        const scoreOutcomeLine = scoreConsensus.ok
+          ? [
+              `${homeName(match) || (currentLang === "en" ? "Home" : "主队")} ${fmtPct(outcome.home)}`,
+              `${currentLang === "en" ? "Draw" : "平局"} ${fmtPct(outcome.draw)}`,
+              `${awayName(match) || (currentLang === "en" ? "Away" : "客队")} ${fmtPct(outcome.away)}`,
+              `BTTS ${fmtPct(outcome.btts)}`,
+              `${currentLang === "en" ? "Over 2.5" : "大2.5"} ${fmtPct(outcome.over25)}`
+            ].join(" · ")
+          : (currentLang === "en" ? "Waiting for explicit predicted-score sources." : "等待明确比分预测来源。");
+        const scoreDistributionLine = scoreRows.length
+          ? scoreRows.slice(0, 5).map((row) => `${row.score} (${row.count || 0}${currentLang === "en" ? " source(s)" : "家"} · ${fmtPct(row.share)})`).join(" · ")
+          : (currentLang === "en" ? "No score cluster yet." : "暂无比分分布。");
+        const scorePredictionLinks = scorePredictions.length
+          ? scorePredictions.slice(0, 6).map((prediction) => {
+              const label = `${prediction.score || "-"} · ${prediction.domain || prediction.sourceTitle || "source"}${prediction.tier ? ` · ${prediction.tier}` : ""}`;
+              return prediction.sourceUrl
+                ? `<a href="${escapeHtml(prediction.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+                : escapeHtml(label);
+            }).join(" · ")
+          : "";
+        const referenceScoreLine = referenceScores.ok && referenceScoreRows.length
+          ? `${referenceScoreRows.slice(0, 4).map((row) => `${row.score}${row.tier ? ` · ${row.tier}` : ""}`).join(" / ")} · ${currentLang === "en" ? referenceScores.summaryEn || referenceScores.summary : referenceScores.summary}`
+          : "";
         if (!media?.ok && !sourceCount) {
           return `
             <section class="intel-block wide">
@@ -6418,6 +6450,8 @@
                 <li><strong>${currentLang === "en" ? "Status" : "状态"}</strong><span>${escapeHtml(status)} · ${fmtTime(media?.updatedAt)}</span></li>
                 <li><strong>${currentLang === "en" ? "Source filter" : "来源过滤"}</strong><span>${escapeHtml(sourceLine)}</span></li>
                 <li><strong>${currentLang === "en" ? "Consensus" : "共识摘要"}</strong><span>${escapeHtml(media?.summary || (currentLang === "en" ? "No usable neutral media preview has been synced yet." : "暂未同步可用中立媒体赛前信息。"))}</span></li>
+                <li><strong>${currentLang === "en" ? "Media score" : "媒体预测比分"}</strong><span>${escapeHtml(scoreConsensus?.consensusScore ? `${scoreConsensus.consensusScore} · ${scoreSummary}` : scoreSummary)}</span></li>
+                ${referenceScoreLine ? `<li><strong>${currentLang === "en" ? "AI score reference" : "AI媒体参考比分"}</strong><span>${escapeHtml(referenceScoreLine)}</span></li>` : ""}
                 <li><strong>${currentLang === "en" ? "Model impact" : "入模影响"}</strong><span>${escapeHtml(impactLine)}</span></li>
                 <li><strong>${currentLang === "en" ? "Next sync" : "后续同步"}</strong><span>${escapeHtml(currentLang === "en" ? "Direct Guardian/ESPN discovery will be tried before search-proxy fallback." : "后续会优先尝试 Guardian/ESPN 直连发现，再使用搜索代理兜底。")}</span></li>
               </ul>
@@ -6431,6 +6465,10 @@
               <li><strong>${currentLang === "en" ? "Status" : "状态"}</strong><span>${escapeHtml(status)} · ${fmtTime(media?.updatedAt)}</span></li>
               <li><strong>${currentLang === "en" ? "Source filter" : "来源过滤"}</strong><span>${escapeHtml(sourceLine)}</span></li>
               <li><strong>${currentLang === "en" ? "Consensus" : "共识摘要"}</strong><span>${escapeHtml(media?.summary || (currentLang === "en" ? "Low signal." : "信号较弱。"))}</span></li>
+              <li><strong>${currentLang === "en" ? "Media score" : "媒体预测比分"}</strong><span>${escapeHtml(scoreConsensus?.consensusScore ? `${scoreConsensus.consensusScore} · ${scoreSummary}` : scoreSummary)}</span></li>
+              ${referenceScoreLine ? `<li><strong>${currentLang === "en" ? "AI score reference" : "AI媒体参考比分"}</strong><span>${escapeHtml(referenceScoreLine)}</span></li>` : ""}
+              <li><strong>${currentLang === "en" ? "Score split" : "比分分布"}</strong><span>${escapeHtml(`${scoreDistributionLine}${scoreConsensus.ok ? ` · ${scoreOutcomeLine}` : ""}`)}</span></li>
+              ${scorePredictionLinks ? `<li><strong>${currentLang === "en" ? "Score sources" : "比分来源"}</strong><span>${scorePredictionLinks}</span></li>` : ""}
               <li><strong>${currentLang === "en" ? "Model impact" : "入模影响"}</strong><span>${escapeHtml(impactLine)}</span></li>
               ${notes.length ? `<li><strong>${currentLang === "en" ? "Evidence" : "证据点"}</strong><span>${escapeHtml(notes.slice(0, 4).join(" / "))}</span></li>` : ""}
               ${riskFlags.length ? `<li><strong>${currentLang === "en" ? "Limits" : "限制"}</strong><span>${escapeHtml(riskFlags.slice(0, 4).join(" / "))}</span></li>` : ""}

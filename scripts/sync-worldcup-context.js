@@ -14,7 +14,7 @@ const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 8000);
 const MATCH_SYNC_TIMEOUT_MS = Number(process.env.MATCH_SYNC_TIMEOUT_MS || 120000);
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 360000);
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
-const MEDIA_OPENAI_TIMEOUT_MS = Number(process.env.MEDIA_OPENAI_TIMEOUT_MS || 15000);
+const MEDIA_OPENAI_TIMEOUT_MS = Number(process.env.MEDIA_OPENAI_TIMEOUT_MS || 30000);
 const CONTEXT_ARCHIVE_TIMEOUT_MS = Number(process.env.CONTEXT_ARCHIVE_TIMEOUT_MS || 20000);
 const WEATHER_REQUEST_SPACING_MS = 350;
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
@@ -29,6 +29,7 @@ const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/
 const ESPN_ALL_SOCCER_TEAM_SCHEDULE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams";
 const ESPN_SEARCH_API = "https://site.web.api.espn.com/apis/search/v2";
 const GUARDIAN_SEARCH_API = "https://content.guardianapis.com/search";
+const MEDIA_SCORE_PARSER_VERSION = "2026-07-11-strict-score-cue-v2";
 
 const VENUE_COORDINATES = {
   "BMO Field": { latitude: 43.6332, longitude: -79.4186, label: "BMO Field, Toronto" },
@@ -325,6 +326,11 @@ const MEDIA_SIGNAL_KEYWORDS = [
   "both teams to score",
   "over 2.5",
   "under 2.5",
+  "predicted score",
+  "score prediction",
+  "prediction",
+  "we say",
+  "our prediction",
   "extra time",
   "penalties",
   "淘汰赛",
@@ -982,7 +988,8 @@ function buildMediaCandidates(match, preview) {
       tier,
       sourceType,
       weight: mediaTierWeight(tier),
-      snippet: snippet.slice(0, 760)
+      snippet: snippet.slice(0, 760),
+      fullText: cleanText.slice(0, 3600)
     });
   };
 
@@ -1972,6 +1979,342 @@ function countMediaSources(candidates) {
   };
 }
 
+function mediaScoreRound(value, digits = 2) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const factor = 10 ** digits;
+  return Math.round(numeric * factor) / factor;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function scorePredictionAliases(match, side) {
+  const raw = side === "home"
+    ? [match.homeName, match.homeEnglishName, TEAM_SEARCH_NAMES[match.home], match.home]
+    : [match.awayName, match.awayEnglishName, TEAM_SEARCH_NAMES[match.away], match.away];
+  return raw
+    .filter(Boolean)
+    .map((item) => String(item).trim())
+    .filter((item, index, list) => item && list.findIndex((value) => value.toLowerCase() === item.toLowerCase()) === index)
+    .sort((a, b) => b.length - a.length);
+}
+
+function aliasRegex(aliases) {
+  const escaped = aliases.map(escapeRegExp).filter(Boolean);
+  if (!escaped.length) return null;
+  return new RegExp(`(?:${escaped.join("|")})`, "i");
+}
+
+function textContainsAlias(text, aliases) {
+  const lower = String(text || "").toLowerCase();
+  return aliases.some((alias) => lower.includes(String(alias).toLowerCase()));
+}
+
+function firstAliasIndex(text, aliases) {
+  const lower = String(text || "").toLowerCase();
+  let index = -1;
+  for (const alias of aliases) {
+    const found = lower.indexOf(String(alias).toLowerCase());
+    if (found >= 0 && (index < 0 || found < index)) index = found;
+  }
+  return index;
+}
+
+function scorePredictionCue(text) {
+  return /predicted score|score prediction|prediction|we say|our prediction|forecast|forecasts|predict|predicts|预测比分|比分预测|推荐比分|预计比分|预测/i.test(String(text || ""));
+}
+
+function predictionChunks(text) {
+  return stripHtml(text)
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?。！？])\s+|(?=\bWe say:)|(?=\bPrediction:)|(?=\bPredicted score:)|(?=\bScore prediction:)/i)
+    .map((item) => item.trim())
+    .filter((item) => item && /\d{1,2}\s*[-–]\s*\d{1,2}/.test(item))
+    .slice(0, 28);
+}
+
+function inferScoreOrientation(chunk, scoreIndex, match, sourceHeader = "") {
+  const homeAliases = scorePredictionAliases(match, "home");
+  const awayAliases = scorePredictionAliases(match, "away");
+  const before = chunk.slice(Math.max(0, scoreIndex - 120), scoreIndex);
+  const after = chunk.slice(scoreIndex, Math.min(chunk.length, scoreIndex + 140));
+  const chunkHasHome = textContainsAlias(chunk, homeAliases);
+  const chunkHasAway = textContainsAlias(chunk, awayAliases);
+  const beforeHome = textContainsAlias(before, homeAliases);
+  const beforeAway = textContainsAlias(before, awayAliases);
+  const afterHome = textContainsAlias(after, homeAliases);
+  const afterAway = textContainsAlias(after, awayAliases);
+
+  if (beforeHome && afterAway) return { orientation: "home-away", confidence: "high", reason: "team-score-team" };
+  if (beforeAway && afterHome) return { orientation: "away-home", confidence: "high", reason: "team-score-team-reversed" };
+
+  if (chunkHasHome && chunkHasAway) {
+    const homeIndex = firstAliasIndex(chunk, homeAliases);
+    const awayIndex = firstAliasIndex(chunk, awayAliases);
+    if (homeIndex >= 0 && awayIndex >= 0 && homeIndex < awayIndex) {
+      return { orientation: "home-away", confidence: "medium", reason: "team-order-in-sentence" };
+    }
+    if (homeIndex >= 0 && awayIndex >= 0 && awayIndex < homeIndex) {
+      return { orientation: "away-home", confidence: "medium", reason: "team-order-in-sentence" };
+    }
+  }
+
+  const headerHasHome = textContainsAlias(sourceHeader, homeAliases);
+  const headerHasAway = textContainsAlias(sourceHeader, awayAliases);
+  if (headerHasHome && headerHasAway && scorePredictionCue(chunk)) {
+    const homeIndex = firstAliasIndex(sourceHeader, homeAliases);
+    const awayIndex = firstAliasIndex(sourceHeader, awayAliases);
+    return {
+      orientation: homeIndex >= 0 && awayIndex >= 0 && awayIndex < homeIndex ? "away-home" : "home-away",
+      confidence: "medium",
+      reason: "source-title-order"
+    };
+  }
+
+  return { orientation: "", confidence: "low", reason: "orientation-unresolved" };
+}
+
+function extractScorePredictionsFromCandidate(match, candidate) {
+  const header = `${candidate.title || ""} ${candidate.url || ""}`;
+  const fullText = `${candidate.title || ""}. ${candidate.fullText || candidate.snippet || ""}`;
+  const chunks = predictionChunks(fullText);
+  const predictions = [];
+  const seen = new Set();
+
+  for (const chunk of chunks) {
+    if (!scorePredictionCue(chunk)) continue;
+    const pattern = /(\d{1,2})\s*[-–]\s*(\d{1,2})/g;
+    let matchScore;
+    while ((matchScore = pattern.exec(chunk)) !== null) {
+      const left = Number(matchScore[1]);
+      const right = Number(matchScore[2]);
+      if (!Number.isInteger(left) || !Number.isInteger(right)) continue;
+      if (left < 0 || right < 0 || left > 9 || right > 9) continue;
+      const orientation = inferScoreOrientation(chunk, matchScore.index, match, header);
+      if (!orientation.orientation || orientation.confidence === "low") continue;
+      const homeGoals = orientation.orientation === "away-home" ? right : left;
+      const awayGoals = orientation.orientation === "away-home" ? left : right;
+      const score = `${homeGoals}-${awayGoals}`;
+      if (seen.has(score)) continue;
+      seen.add(score);
+      predictions.push({
+        score,
+        homeGoals,
+        awayGoals,
+        confidence: orientation.confidence,
+        reason: orientation.reason,
+        sourceTitle: candidate.title,
+        sourceUrl: candidate.url,
+        domain: candidate.domain,
+        tier: candidate.tier,
+        sourceType: candidate.sourceType,
+        snippet: chunk.replace(/\s+/g, " ").slice(0, 260)
+      });
+    }
+  }
+
+  return predictions.slice(0, 2);
+}
+
+function mediaScoreOutcome(score) {
+  const homeGoals = Number(score.homeGoals);
+  const awayGoals = Number(score.awayGoals);
+  if (homeGoals > awayGoals) return "home";
+  if (homeGoals < awayGoals) return "away";
+  return "draw";
+}
+
+function mediaScoreSourceWeight(prediction) {
+  const tierWeight = prediction.tier === "neutral" ? 1.15 : prediction.tier === "market-context" ? 0.82 : 1;
+  const confidenceWeight = prediction.confidence === "high" ? 1 : 0.84;
+  return tierWeight * confidenceWeight;
+}
+
+function buildMediaScoreConsensus(match, candidates, previous = {}) {
+  const predictions = [];
+  const sourceSeen = new Set();
+  for (const candidate of candidates) {
+    const sourceKey = candidate.url || `${candidate.domain}:${candidate.title}`;
+    if (sourceSeen.has(sourceKey)) continue;
+    const extracted = extractScorePredictionsFromCandidate(match, candidate);
+    if (!extracted.length) continue;
+    sourceSeen.add(sourceKey);
+    predictions.push(extracted[0]);
+  }
+
+  if (!predictions.length) {
+    if (previous?.ok && previous.parserVersion === MEDIA_SCORE_PARSER_VERSION) {
+      return {
+        ...previous,
+        status: "stale",
+        stale: true,
+        updatedAt: shanghaiIso(),
+        summary: "本轮未抓到明确媒体预测比分，沿用上一版比分共识，仅作参考。",
+        summaryEn: "No explicit media score predictions were found in this sync; using the previous score consensus as reference only."
+      };
+    }
+    return {
+      ok: false,
+      status: "missing",
+      updatedAt: shanghaiIso(),
+      source: "媒体预测比分聚合",
+      parserVersion: MEDIA_SCORE_PARSER_VERSION,
+      summary: "暂未抓到多家媒体明确预测比分。",
+      summaryEn: "No explicit multi-source media score prediction has been found yet.",
+      sourceCount: 0,
+      consensusScore: "",
+      agreement: "none",
+      scores: [],
+      predictions: [],
+      outcomeBreakdown: { home: 0, draw: 0, away: 0, btts: 0, over25: 0, under25: 0 }
+    };
+  }
+
+  const scoreMap = new Map();
+  const outcome = { home: 0, draw: 0, away: 0, btts: 0, over25: 0, under25: 0 };
+  let totalWeight = 0;
+  for (const prediction of predictions) {
+    const weight = mediaScoreSourceWeight(prediction);
+    totalWeight += weight;
+    const existing = scoreMap.get(prediction.score) || {
+      score: prediction.score,
+      homeGoals: prediction.homeGoals,
+      awayGoals: prediction.awayGoals,
+      count: 0,
+      weightedCount: 0,
+      sources: []
+    };
+    existing.count += 1;
+    existing.weightedCount += weight;
+    existing.sources.push({
+      title: prediction.sourceTitle,
+      domain: prediction.domain,
+      tier: prediction.tier,
+      url: prediction.sourceUrl
+    });
+    scoreMap.set(prediction.score, existing);
+
+    const side = mediaScoreOutcome(prediction);
+    outcome[side] += weight;
+    if (prediction.homeGoals > 0 && prediction.awayGoals > 0) outcome.btts += weight;
+    if (prediction.homeGoals + prediction.awayGoals > 2.5) outcome.over25 += weight;
+    else outcome.under25 += weight;
+  }
+
+  const scores = [...scoreMap.values()]
+    .map((item) => ({
+      ...item,
+      weightedCount: mediaScoreRound(item.weightedCount, 2),
+      share: totalWeight ? mediaScoreRound(item.weightedCount / totalWeight, 3) : 0,
+      sources: item.sources.slice(0, 4)
+    }))
+    .sort((a, b) => b.weightedCount - a.weightedCount || b.count - a.count || a.score.localeCompare(b.score));
+  const top = scores[0] || {};
+  const normalizedOutcome = Object.fromEntries(Object.entries(outcome).map(([key, value]) => [
+    key,
+    totalWeight ? mediaScoreRound(value / totalWeight, 3) : 0
+  ]));
+  const agreement = predictions.length >= 3 && top.share >= 0.5
+    ? "high"
+    : predictions.length >= 2 && top.share >= 0.38
+      ? "medium"
+      : "low";
+  const directionLabel = normalizedOutcome.home > normalizedOutcome.away && normalizedOutcome.home > normalizedOutcome.draw
+    ? `${teamLabel(match, "home")}方向`
+    : normalizedOutcome.away > normalizedOutcome.home && normalizedOutcome.away > normalizedOutcome.draw
+      ? `${teamLabel(match, "away")}方向`
+      : "平局/低比分方向";
+
+  return {
+    ok: true,
+    status: predictions.length >= 2 ? "synced" : "partial",
+    updatedAt: shanghaiIso(),
+    source: "媒体预测比分聚合",
+    parserVersion: MEDIA_SCORE_PARSER_VERSION,
+    sourceCount: predictions.length,
+    consensusScore: top.score || "",
+    agreement,
+    summary: `抓到 ${predictions.length} 家明确比分预测，最多指向 ${top.score || "无共识"}；整体偏 ${directionLabel}，仅作外部参考。`,
+    summaryEn: `${predictions.length} explicit media score prediction(s) found; the top clustered score is ${top.score || "none"}. Use as external reference only.`,
+    scores: scores.slice(0, 6),
+    predictions: predictions.map((prediction) => ({
+      score: prediction.score,
+      homeGoals: prediction.homeGoals,
+      awayGoals: prediction.awayGoals,
+      confidence: prediction.confidence,
+      sourceTitle: prediction.sourceTitle,
+      sourceUrl: prediction.sourceUrl,
+      domain: prediction.domain,
+      tier: prediction.tier,
+      sourceType: prediction.sourceType,
+      snippet: prediction.snippet
+    })).slice(0, 10),
+    outcomeBreakdown: normalizedOutcome
+  };
+}
+
+function normalizeMediaReferenceScores(raw = {}, previous = {}) {
+  const sourceScores = Array.isArray(raw.scores)
+    ? raw.scores
+    : Array.isArray(raw.referenceScores)
+      ? raw.referenceScores
+      : Array.isArray(raw)
+        ? raw
+        : [];
+  const scores = sourceScores.map((item) => {
+    const scoreText = typeof item === "string" ? item : item.score;
+    const matchScore = String(scoreText || "").match(/(\d{1,2})\s*[-–]\s*(\d{1,2})/);
+    if (!matchScore) return null;
+    const homeGoals = Number(matchScore[1]);
+    const awayGoals = Number(matchScore[2]);
+    if (!Number.isInteger(homeGoals) || !Number.isInteger(awayGoals) || homeGoals > 9 || awayGoals > 9) return null;
+    return {
+      score: `${homeGoals}-${awayGoals}`,
+      homeGoals,
+      awayGoals,
+      tier: String(item.tier || item.role || "reference").slice(0, 40),
+      rationale: String(item.rationale || item.reason || "").replace(/\s+/g, " ").trim().slice(0, 180),
+      rationaleEn: String(item.rationaleEn || "").replace(/\s+/g, " ").trim().slice(0, 180)
+    };
+  }).filter(Boolean).slice(0, 5);
+
+  const summary = String(raw.summary || raw.referenceScoreSummary || "").replace(/\s+/g, " ").trim().slice(0, 260);
+  const summaryEn = String(raw.summaryEn || "").replace(/\s+/g, " ").trim().slice(0, 260);
+  if (!scores.length) {
+    if (previous?.ok && previous.status === "ai-inferred") {
+      return {
+        ...previous,
+        status: "stale",
+        stale: true,
+        updatedAt: shanghaiIso(),
+        summary: "本轮 AI 未输出媒体参考比分，沿用上一版，仅作参考。",
+        summaryEn: "The AI did not produce inferred media reference scores in this sync; using the previous version as reference only."
+      };
+    }
+    return {
+      ok: false,
+      status: "missing",
+      updatedAt: shanghaiIso(),
+      source: "AI媒体参考比分",
+      summary: "暂无 AI 媒体参考比分。",
+      summaryEn: "No AI-inferred media reference scores are available.",
+      scores: []
+    };
+  }
+
+  return {
+    ok: true,
+    status: "ai-inferred",
+    updatedAt: shanghaiIso(),
+    source: "AI媒体参考比分",
+    summary: summary || `AI 基于已抓到的媒体摘要给出 ${scores.map((item) => item.score).join(" / ")} 作为参考比分；这不是媒体原文预测。`,
+    summaryEn: summaryEn || `AI inferred ${scores.map((item) => item.score).join(" / ")} from the synced media summaries. This is not an explicit source prediction.`,
+    scores
+  };
+}
+
 function teamSentenceScore(text, aliases) {
   const positive = [
     "strong",
@@ -2028,6 +2371,8 @@ function teamSentenceScore(text, aliases) {
 }
 
 function buildHeuristicMediaConsensus(match, candidates, previous = {}) {
+  const scoreConsensus = buildMediaScoreConsensus(match, candidates, previous.scoreConsensus);
+  const referenceScores = normalizeMediaReferenceScores({}, previous.referenceScores);
   if (!candidates.length) {
     if (previous?.ok) {
       return {
@@ -2049,6 +2394,8 @@ function buildHeuristicMediaConsensus(match, candidates, previous = {}) {
       neutralSourceCount: 0,
       marketSourceCount: 0,
       impacts: normalizeMediaImpacts({}),
+      scoreConsensus,
+      referenceScores,
       sources: [],
       notes: [],
       riskFlags: ["媒体共识未同步"]
@@ -2104,6 +2451,8 @@ function buildHeuristicMediaConsensus(match, candidates, previous = {}) {
     confidence: normalizeMediaConfidence("low", counts.neutralSourceCount, counts.sourceCount),
     ...counts,
     impacts: normalizeMediaImpacts(impacts),
+    scoreConsensus,
+    referenceScores,
     sources: candidates.map((item) => ({
       title: item.title,
       url: item.url,
@@ -2124,6 +2473,12 @@ function normalizeMediaConsensus(raw, config, candidates, fallback) {
   if (!summary) return fallback;
   const notes = Array.isArray(raw.notes) ? raw.notes : [];
   const riskFlags = Array.isArray(raw.riskFlags) ? raw.riskFlags : [];
+  const scoreConsensus = fallback.scoreConsensus || buildMediaScoreConsensus({}, candidates);
+  const referenceScores = normalizeMediaReferenceScores(raw.referenceScores || {
+    summary: raw.referenceScoreSummary,
+    summaryEn: raw.referenceScoreSummaryEn,
+    scores: raw.mediaReferenceScores
+  }, fallback.referenceScores);
   return {
     ok: true,
     status: counts.neutralSourceCount ? "synced" : "partial",
@@ -2135,6 +2490,8 @@ function normalizeMediaConsensus(raw, config, candidates, fallback) {
     confidence: normalizeMediaConfidence(raw.confidence, counts.neutralSourceCount, counts.sourceCount),
     ...counts,
     impacts: normalizeMediaImpacts(raw.impacts || fallback.impacts || {}),
+    scoreConsensus,
+    referenceScores,
     sources: candidates.map((item) => ({
       title: item.title,
       url: item.url,
@@ -2161,6 +2518,7 @@ async function fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous 
       "中立媒体优先：Guardian/AP/Reuters/ESPN/BBC/Sky/The Analyst 等。",
       "投注技巧、赔率和博彩文章只能作为 market-context，不能当作中立专家结论。",
       "不能编造首发、伤停、战术、现场状态；没有明确来源就写低置信或不调整。",
+      "如果来源没有明确写出预测比分，可以给 AI 媒体参考比分，但必须标明这是根据媒体摘要推导，不是媒体原文比分。",
       "调整必须进入同一套 xG/比分分布，幅度很小。"
     ],
     match: {
@@ -2188,6 +2546,18 @@ async function fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous 
         over25Delta: "number, -0.035 到 0.035",
         drawDelta: "number, -0.025 到 0.025"
       },
+      referenceScores: {
+        summary: "中文一句话：基于媒体摘要推导的参考比分，并明确不是媒体原文预测",
+        summaryEn: "English one sentence with the same caveat",
+        scores: [
+          {
+            score: "例如 1-1",
+            tier: "primary|cover|tail",
+            rationale: "中文，为什么这个比分符合媒体摘要",
+            rationaleEn: "English rationale"
+          }
+        ]
+      },
       notes: ["中文证据点"],
       riskFlags: ["中文风险或缺口"]
     }
@@ -2203,7 +2573,7 @@ async function fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous 
     },
     body: JSON.stringify({
       model: config.model,
-      max_output_tokens: 760,
+      max_output_tokens: 980,
       reasoning: {
         effort: "none"
       },

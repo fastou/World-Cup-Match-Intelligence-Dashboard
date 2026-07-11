@@ -1436,6 +1436,8 @@ function mediaConsensusSignal(match) {
     impacts,
     sources: Array.isArray(media.sources) ? media.sources.slice(0, 6) : [],
     notes: Array.isArray(media.notes) ? media.notes.slice(0, 4) : [],
+    scoreConsensus: media.scoreConsensus || null,
+    referenceScores: media.referenceScores || null,
     updatedAt: media.updatedAt || null
   };
 }
@@ -1534,13 +1536,19 @@ function buildContextSignals(match) {
     impacts.drawDelta += mediaImpact.drawDelta || 0;
     const sourceText = `${mediaConsensus.neutralSourceCount || 0} 个中立源 / ${mediaConsensus.sourceCount || 0} 个总来源`;
     const marketText = mediaConsensus.marketSourceCount ? `，${mediaConsensus.marketSourceCount} 个投注技巧源仅作市场语境` : "";
+    const referenceScores = mediaConsensus.referenceScores || {};
+    const scoreText = mediaConsensus.scoreConsensus?.ok && mediaConsensus.scoreConsensus?.consensusScore
+      ? `；媒体预测比分聚合最多指向 ${mediaConsensus.scoreConsensus.consensusScore}（${mediaConsensus.scoreConsensus.sourceCount || 0} 家明确预测，仅作参考）`
+      : referenceScores.ok && Array.isArray(referenceScores.scores) && referenceScores.scores.length
+        ? `；AI媒体参考比分 ${referenceScores.scores.slice(0, 3).map((item) => item.score).join(" / ")}（不是媒体原文预测）`
+      : "";
     signals.push({
       id: "neutral-media-consensus",
       label: "中立媒体/专家共识",
       status: mediaConsensus.status,
       homeXgDelta: roundTo(mediaImpact.homeXgDelta || 0, 3),
       awayXgDelta: roundTo(mediaImpact.awayXgDelta || 0, 3),
-      reason: `${mediaConsensus.summary || "媒体共识只给出弱信号"}（${sourceText}${marketText}）。`
+      reason: `${mediaConsensus.summary || "媒体共识只给出弱信号"}（${sourceText}${marketText}${scoreText}）。`
     });
   }
 
@@ -4579,10 +4587,17 @@ function aiPredictionEvidence(match, top, rows) {
   if (mediaConsensus?.summary) {
     const neutralCount = Number(mediaConsensus.neutralSourceCount) || 0;
     const sourceCount = Number(mediaConsensus.sourceCount) || (Array.isArray(mediaConsensus.sources) ? mediaConsensus.sources.length : 0);
+    const scoreConsensus = mediaConsensus.scoreConsensus || {};
+    const referenceScores = mediaConsensus.referenceScores || {};
+    const scoreText = scoreConsensus.ok && scoreConsensus.consensusScore
+      ? ` 媒体预测比分最多指向 ${scoreConsensus.consensusScore}（${scoreConsensus.sourceCount || 0} 家明确预测）。`
+      : referenceScores.ok && Array.isArray(referenceScores.scores) && referenceScores.scores.length
+        ? ` AI媒体参考比分：${referenceScores.scores.slice(0, 3).map((item) => item.score).join(" / ")}（不是媒体原文预测）。`
+      : "";
     evidence.push({
       label: "媒体/专家共识",
       status: mediaConsensus.status === "synced" || neutralCount ? "synced" : "partial",
-      detail: `${mediaConsensus.summary} 来源 ${neutralCount} 个中立源 / ${sourceCount} 个总来源；只作低权重模型修正。`
+      detail: `${mediaConsensus.summary} 来源 ${neutralCount} 个中立源 / ${sourceCount} 个总来源；只作低权重模型修正。${scoreText}`
     });
     drivers.push(`媒体/专家共识：${mediaConsensus.summary}`);
   }
