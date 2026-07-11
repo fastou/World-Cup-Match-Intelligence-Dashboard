@@ -6415,7 +6415,11 @@
             <section class="intel-block wide">
               <h4>${currentLang === "en" ? "Media / Expert Preview" : "媒体/专家赛前信息"}</h4>
               <ul class="info-list">
-                <li><strong>${currentLang === "en" ? "Status" : "状态"}</strong><span>${escapeHtml(media?.summary || (currentLang === "en" ? "No usable neutral media preview has been synced yet." : "暂未同步可用中立媒体赛前信息。"))}</span></li>
+                <li><strong>${currentLang === "en" ? "Status" : "状态"}</strong><span>${escapeHtml(status)} · ${fmtTime(media?.updatedAt)}</span></li>
+                <li><strong>${currentLang === "en" ? "Source filter" : "来源过滤"}</strong><span>${escapeHtml(sourceLine)}</span></li>
+                <li><strong>${currentLang === "en" ? "Consensus" : "共识摘要"}</strong><span>${escapeHtml(media?.summary || (currentLang === "en" ? "No usable neutral media preview has been synced yet." : "暂未同步可用中立媒体赛前信息。"))}</span></li>
+                <li><strong>${currentLang === "en" ? "Model impact" : "入模影响"}</strong><span>${escapeHtml(impactLine)}</span></li>
+                <li><strong>${currentLang === "en" ? "Next sync" : "后续同步"}</strong><span>${escapeHtml(currentLang === "en" ? "Direct Guardian/ESPN discovery will be tried before search-proxy fallback." : "后续会优先尝试 Guardian/ESPN 直连发现，再使用搜索代理兜底。")}</span></li>
               </ul>
             </section>
           `;
@@ -6469,6 +6473,31 @@
         const mediaConsensus = context.mediaConsensus || match.contextSignals?.mediaConsensus || {};
         const riskFlags = Array.isArray(context.riskFlags) ? context.riskFlags : [];
         const sources = context.sources || {};
+        const sourceNameLabel = (key) => ({
+          lineups: currentLang === "en" ? "Lineups" : "阵容",
+          injuries: currentLang === "en" ? "Injuries" : "伤停",
+          teamNews: currentLang === "en" ? "Team news" : "球队新闻",
+          weather: currentLang === "en" ? "Weather" : "天气",
+          aiAnalysis: currentLang === "en" ? "AI synthesis" : "AI综合",
+          schedule: currentLang === "en" ? "Schedule" : "赛程",
+          recentForm: currentLang === "en" ? "Recent form" : "近期战绩",
+          mediaConsensus: currentLang === "en" ? "Media consensus" : "媒体/专家共识"
+        })[key] || key;
+        const compactSourceError = (error = "") => {
+          const text = String(error || "").replace(/\s+/g, " ").trim();
+          if (!text) return "";
+          if (/AuthenticationRequiredError|You have been blocked|HTTP 401|40103|search proxy blocked/i.test(text)) {
+            return currentLang === "en"
+              ? "Search proxy blocked; using direct sources or low-confidence fallback."
+              : "搜索代理被上游拦截；已改用直接来源或低置信兜底。";
+          }
+          return text.length > 180 ? `${text.slice(0, 180)}...` : text;
+        };
+        const renderSourceLinks = (urlText = "") => {
+          const urls = String(urlText || "").split("|").map((item) => item.trim()).filter(Boolean).slice(0, 3);
+          if (!urls.length) return "";
+          return urls.map((url, index) => `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(currentLang === "en" ? `Source ${index + 1}` : `来源${index + 1}`)}</a>`).join(" · ");
+        };
         const sourceStateLabel = (source = {}) => {
           if (source.status === "queried-unconfirmed") return currentLang === "en" ? "Queried / unconfirmed" : "已查询/未确认";
           if (source.status === "rule-fallback") return currentLang === "en" ? "Rule fallback" : "规则兜底";
@@ -6477,11 +6506,21 @@
           if (source.status === "queried-low-signal") return currentLang === "en" ? "Queried / low signal" : "已查询/低信号";
           if (source.status === "verified-or-summarized") return currentLang === "en" ? "Summarized" : "已摘要";
           if (source.status === "summarized") return currentLang === "en" ? "Summarized" : "已摘要";
+          if (source.status === "partial") return currentLang === "en" ? "Partial" : "部分同步";
+          if (source.status === "missing") return currentLang === "en" ? "Missing" : "缺失";
+          if (source.status === "low-signal") return currentLang === "en" ? "Low signal" : "低信号";
+          if (source.status === "source-unavailable") return currentLang === "en" ? "Source unavailable" : "来源不可用";
           return source.ok ? (currentLang === "en" ? "OK" : "正常") : (currentLang === "en" ? "Failed" : "失败");
         };
-        const sourceRows = Object.entries(sources).map(([key, source]) => `
-          <li><strong>${escapeHtml(key)}</strong><span>${escapeHtml(sourceStateLabel(source))}${source.confidence ? ` · ${confidenceLabel(source.confidence)}` : ""}${source.error ? ` · ${escapeHtml(source.error)}` : ""} · ${fmtTime(source.updatedAt)} ${source.url ? `· ${escapeHtml(source.url)}` : ""}</span></li>
-        `).join("");
+        const sourceRows = Object.entries(sources).map(([key, source]) => {
+          const errorText = key === "mediaConsensus"
+            ? (mediaConsensus.summary || compactSourceError(source.error))
+            : compactSourceError(source.error);
+          const links = renderSourceLinks(source.url);
+          return `
+            <li><strong>${escapeHtml(sourceNameLabel(key))}</strong><span>${escapeHtml(sourceStateLabel(source))}${source.confidence ? ` · ${confidenceLabel(source.confidence)}` : ""}${errorText ? ` · ${escapeHtml(errorText)}` : ""} · ${fmtTime(source.updatedAt)}${links ? ` · ${links}` : ""}</span></li>
+          `;
+        }).join("");
         return `
           <div class="intel-grid">
             <section class="intel-block wide">

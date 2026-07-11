@@ -1,5 +1,6 @@
 const fs = require("fs/promises");
 const path = require("path");
+const os = require("os");
 const { recordContextSnapshot } = require("./history-store");
 
 const DASHBOARD_PATH = path.join(__dirname, "..", "data", "worldcup-dashboard.json");
@@ -7,6 +8,8 @@ const CONTEXT_PATH = path.join(__dirname, "..", "data", "worldcup-context.json")
 const FIFA_RANKINGS_PATH = path.join(__dirname, "..", "data", "fifa-rankings.json");
 const H2H_OVERRIDES_PATH = path.join(__dirname, "..", "data", "head-to-head-overrides.json");
 const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
+const CODEX_CONFIG_PATH = process.env.CODEX_CONFIG_PATH || path.join(os.homedir(), ".codex", "config.toml");
+const CODEX_AUTH_PATH = process.env.CODEX_AUTH_PATH || path.join(os.homedir(), ".codex", "auth.json");
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 8000);
 const MATCH_SYNC_TIMEOUT_MS = Number(process.env.MATCH_SYNC_TIMEOUT_MS || 120000);
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS || 360000);
@@ -24,6 +27,8 @@ const SOURCE_SYNC_CONCURRENCY = Number(process.env.SOURCE_SYNC_CONCURRENCY || 3)
 const SOURCE_REQUEST_SPACING_MS = Number(process.env.SOURCE_REQUEST_SPACING_MS || 250);
 const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard";
 const ESPN_ALL_SOCCER_TEAM_SCHEDULE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams";
+const ESPN_SEARCH_API = "https://site.web.api.espn.com/apis/search/v2";
+const GUARDIAN_SEARCH_API = "https://content.guardianapis.com/search";
 
 const VENUE_COORDINATES = {
   "BMO Field": { latitude: 43.6332, longitude: -79.4186, label: "BMO Field, Toronto" },
@@ -367,6 +372,7 @@ const DIRECT_MATCH_SOURCES = {
 };
 
 let envFileCache = null;
+let codexOpenAiConfigCache = null;
 let weatherQueue = Promise.resolve();
 const weatherCache = new Map();
 
@@ -411,18 +417,49 @@ async function readEnvFile() {
   return env;
 }
 
+function tomlStringValue(raw, key) {
+  const pattern = new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']\\s*$`, "m");
+  const match = String(raw || "").match(pattern);
+  return match ? match[1] : "";
+}
+
+async function readCodexOpenAiConfig() {
+  if (codexOpenAiConfigCache) return codexOpenAiConfigCache;
+  const config = {};
+  try {
+    const rawConfig = await fs.readFile(CODEX_CONFIG_PATH, "utf8");
+    config.model = tomlStringValue(rawConfig, "model") || "";
+    config.baseUrl = tomlStringValue(rawConfig, "base_url") || "";
+  } catch {
+    // Optional Codex config.
+  }
+  try {
+    const rawAuth = await fs.readFile(CODEX_AUTH_PATH, "utf8");
+    const auth = JSON.parse(rawAuth);
+    config.apiKey = auth.OPENAI_API_KEY || auth.openai_api_key || "";
+  } catch {
+    // Optional Codex auth.
+  }
+  codexOpenAiConfigCache = config;
+  return config;
+}
+
 async function getOpenAiConfig() {
   const env = await readEnvFile();
+  const codex = await readCodexOpenAiConfig();
   const config = {
-    apiKey: process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || "",
-    model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4o-mini",
-    baseUrl: (process.env.OPENAI_BASE_URL || env.OPENAI_BASE_URL || "https://api.openai.com").replace(/\/+$/, "")
+    apiKey: process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || codex.apiKey || "",
+    model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || codex.model || "gpt-4o-mini",
+    baseUrl: (process.env.OPENAI_BASE_URL || env.OPENAI_BASE_URL || codex.baseUrl || "https://api.openai.com").replace(/\/+$/, "")
   };
   if (process.env.DEBUG_OPENAI_CONFIG === "1") {
     console.error(JSON.stringify({
       envPath: ENV_PATH,
+      codexConfigPath: CODEX_CONFIG_PATH,
+      codexAuthPath: CODEX_AUTH_PATH,
       hasProcessKey: Boolean(process.env.OPENAI_API_KEY),
       envKeys: Object.keys(env),
+      hasCodexKey: Boolean(codex.apiKey),
       keyLen: config.apiKey.length,
       model: config.model,
       baseUrl: config.baseUrl
@@ -879,6 +916,49 @@ function textMentionsMatchTeams(text, match) {
   return homeNeedles.some((needle) => lower.includes(needle)) && awayNeedles.some((needle) => lower.includes(needle));
 }
 
+function teamAliasesForMatch(match, side) {
+  return side === "home"
+    ? [match.homeName, match.homeEnglishName, TEAM_SEARCH_NAMES[match.home], match.home]
+    : [match.awayName, match.awayEnglishName, TEAM_SEARCH_NAMES[match.away], match.away];
+}
+
+function containsAnyAlias(text, aliases) {
+  const lower = String(text || "").toLowerCase();
+  return aliases.filter(Boolean).some((alias) => lower.includes(String(alias).toLowerCase()));
+}
+
+function mediaArticleMatchScore(match, { title = "", url = "", text = "" } = {}) {
+  const homeAliases = teamAliasesForMatch(match, "home");
+  const awayAliases = teamAliasesForMatch(match, "away");
+  const titleUrl = `${title} ${url}`;
+  const full = `${titleUrl} ${text}`;
+  let score = 0;
+  if (containsAnyAlias(titleUrl, homeAliases) && containsAnyAlias(titleUrl, awayAliases)) score += 10;
+  if (containsAnyAlias(url, homeAliases) && containsAnyAlias(url, awayAliases)) score += 6;
+  if (containsAnyAlias(full, homeAliases) && containsAnyAlias(full, awayAliases)) score += 2;
+  if (/(preview|quarter-final|semi-final|world cup|team news|lineup|line-up|how to watch|v-|vs| v )/i.test(titleUrl)) score += 1;
+  return score;
+}
+
+function rankMediaResultsByMatch(results, match, { limit = 4 } = {}) {
+  const ranked = results
+    .map((item) => ({
+      item,
+      score: mediaArticleMatchScore(match, {
+        title: item.name || item.title || "",
+        url: item.originalUrl || item.url || "",
+        text: item.cleanText || item.text || ""
+      })
+    }))
+    .filter((entry) => entry.score >= 2)
+    .sort((a, b) => b.score - a.score);
+  const hasFocused = ranked.some((entry) => entry.score >= 10);
+  return ranked
+    .filter((entry) => !hasFocused || entry.score >= 10)
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
 function buildMediaCandidates(match, preview) {
   const candidates = [];
   const seen = new Set();
@@ -913,6 +993,16 @@ function buildMediaCandidates(match, preview) {
       text: result.cleanText || result.text,
       name: result.name || "",
       sourceType: "direct"
+    });
+  }
+
+  for (const result of preview.mediaDiscovery?.results || []) {
+    if (!result.ok) continue;
+    pushCandidate({
+      url: result.originalUrl || result.url,
+      text: result.cleanText || result.text,
+      name: result.name || "",
+      sourceType: result.sourceType || "direct-media"
     });
   }
 
@@ -966,6 +1056,14 @@ function isSearchProxyUrl(url) {
   return value.includes("duckduckgo.com") || value.includes("r.jina.ai/http://duckduckgo.com");
 }
 
+function isBlockedSearchText(text) {
+  const lower = String(text || "").toLowerCase();
+  return lower.includes("authenticationrequirederror")
+    || lower.includes("you have been blocked")
+    || lower.includes("status\":40103")
+    || lower.includes("http 401:");
+}
+
 async function fetchReadableArticle(url) {
   const proxiedUrl = readableProxyUrl(url);
   const result = await withTimeout(timedFetchText(proxiedUrl), FETCH_TIMEOUT_MS + 1500, "article");
@@ -993,6 +1091,144 @@ async function fetchDirectSources(match) {
     ok: results.some((result) => result.ok),
     results,
     text: results.filter((result) => result.ok).map((result) => `${result.name}: ${result.cleanText}`).join("\n")
+  };
+}
+
+function matchEnglishNames(match) {
+  return {
+    home: match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName,
+    away: match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName
+  };
+}
+
+function publicMediaQuery(match) {
+  const names = matchEnglishNames(match);
+  return `${names.home} ${names.away} World Cup`;
+}
+
+function mediaDiscoveryResult({ name, originalUrl, cleanText, sourceType }) {
+  return {
+    ok: true,
+    name,
+    originalUrl,
+    cleanText: textFromHtml(cleanText).slice(0, 12000),
+    sourceType
+  };
+}
+
+async function fetchGuardianMediaSources(match) {
+  const query = publicMediaQuery(match);
+  const params = new URLSearchParams({
+    q: query,
+    section: "football",
+    "show-fields": "trailText,bodyText,standfirst",
+    "order-by": "relevance",
+    "page-size": "6",
+    "api-key": process.env.GUARDIAN_API_KEY || "test"
+  });
+  const url = `${GUARDIAN_SEARCH_API}?${params.toString()}`;
+  const result = await withTimeout(timedFetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS + 2500 }), FETCH_TIMEOUT_MS + 3500, "guardian media");
+  if (!result.ok) {
+    return { ok: false, source: "Guardian Content API", url, error: result.error || "Guardian search failed", results: [], text: "" };
+  }
+  const rows = Array.isArray(result.data?.response?.results) ? result.data.response.results : [];
+  const rawResults = rows.map((item) => {
+    const fields = item.fields || {};
+    const cleanText = [
+      item.webTitle,
+      fields.standfirst,
+      fields.trailText,
+      fields.bodyText
+    ].filter(Boolean).join("\n");
+    return mediaDiscoveryResult({
+      name: `Guardian: ${item.webTitle || "World Cup preview"}`,
+      originalUrl: item.webUrl,
+      cleanText,
+      sourceType: "guardian-api"
+    });
+  }).filter((item) => item.originalUrl && item.cleanText && textMentionsMatchTeams(`${item.name}\n${item.cleanText}`, match));
+  const results = rankMediaResultsByMatch(rawResults, match, { limit: 3 });
+  return {
+    ok: results.length > 0,
+    source: "Guardian Content API",
+    url,
+    error: results.length ? "" : "Guardian 未返回同时命中两队的文章",
+    results,
+    text: results.map((item) => `${item.name}: ${item.cleanText}`).join("\n")
+  };
+}
+
+function flattenEspnSearchContents(results) {
+  const contents = [];
+  const visit = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (node.type || node.headline || node.title || node.description) contents.push(node);
+    if (Array.isArray(node.contents)) visit(node.contents);
+    if (Array.isArray(node.children)) visit(node.children);
+  };
+  visit(results);
+  return contents;
+}
+
+async function fetchEspnMediaSources(match) {
+  const query = publicMediaQuery(match);
+  const params = new URLSearchParams({ query, limit: "8" });
+  const url = `${ESPN_SEARCH_API}?${params.toString()}`;
+  const result = await withTimeout(timedFetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS + 2500 }), FETCH_TIMEOUT_MS + 3500, "espn media");
+  if (!result.ok) {
+    return { ok: false, source: "ESPN Search API", url, error: result.error || "ESPN search failed", results: [], text: "" };
+  }
+  const contents = flattenEspnSearchContents(result.data?.results || []);
+  const seen = new Set();
+  const rawResults = [];
+  for (const item of contents) {
+    const originalUrl = item.link?.web || item.links?.web?.href || item.url || "";
+    if (!originalUrl || seen.has(originalUrl)) continue;
+    const cleanText = [
+      item.headline,
+      item.title,
+      item.displayName,
+      item.description,
+      item.summary
+    ].filter(Boolean).join("\n");
+    if (!cleanText || !textMentionsMatchTeams(`${cleanText}\n${query}`, match)) continue;
+    seen.add(originalUrl);
+    rawResults.push(mediaDiscoveryResult({
+      name: `ESPN: ${item.headline || item.title || "World Cup preview"}`,
+      originalUrl,
+      cleanText,
+      sourceType: "espn-search-api"
+    }));
+  }
+  const results = rankMediaResultsByMatch(rawResults, match, { limit: 4 });
+  return {
+    ok: results.length > 0,
+    source: "ESPN Search API",
+    url,
+    error: results.length ? "" : "ESPN 未返回同时命中两队的文章",
+    results,
+    text: results.map((item) => `${item.name}: ${item.cleanText}`).join("\n")
+  };
+}
+
+async function fetchMediaDiscoverySources(match) {
+  const [guardian, espn] = await Promise.all([
+    fetchGuardianMediaSources(match),
+    fetchEspnMediaSources(match)
+  ]);
+  const results = rankMediaResultsByMatch([...(guardian.results || []), ...(espn.results || [])], match, { limit: 6 });
+  return {
+    ok: results.length > 0,
+    source: "direct-media-discovery",
+    results,
+    providers: { guardian, espn },
+    text: results.map((item) => `${item.name}: ${item.cleanText}`).join("\n"),
+    errors: [guardian, espn].filter((item) => !item.ok).map((item) => `${item.source}: ${item.error}`).filter(Boolean)
   };
 }
 
@@ -1663,7 +1899,7 @@ async function fetchOpenAiAnalysis(match, preview, weather) {
   const responsesUrl = `${config.baseUrl}/v1/responses`;
   const result = await withTimeout(timedFetchJson(responsesUrl, {
     method: "POST",
-    timeoutMs: MEDIA_OPENAI_TIMEOUT_MS,
+    timeoutMs: OPENAI_TIMEOUT_MS,
     headers: {
       "authorization": `Bearer ${config.apiKey}`,
       "content-type": "application/json"
@@ -1960,7 +2196,7 @@ async function fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous 
   const responsesUrl = `${config.baseUrl}/v1/responses`;
   const result = await withTimeout(timedFetchJson(responsesUrl, {
     method: "POST",
-    timeoutMs: OPENAI_TIMEOUT_MS,
+    timeoutMs: MEDIA_OPENAI_TIMEOUT_MS,
     headers: {
       "authorization": `Bearer ${config.apiKey}`,
       "content-type": "application/json"
@@ -2011,7 +2247,10 @@ function searchQueries(match) {
 }
 
 async function fetchSearchPreview(match) {
-  const direct = await fetchDirectSources(match);
+  const [direct, mediaDiscovery] = await Promise.all([
+    fetchDirectSources(match),
+    fetchMediaDiscoverySources(match)
+  ]);
   const queries = searchQueries(match);
   const searches = [];
   for (const queryText of queries) {
@@ -2019,17 +2258,23 @@ async function fetchSearchPreview(match) {
     const query = encodeURIComponent(queryText);
     const url = `https://r.jina.ai/http://duckduckgo.com/html/?q=${query}`;
     const result = await withTimeout(timedFetchText(url), FETCH_TIMEOUT_MS + 1500, "search preview");
-    searches.push({ ...result, queryText });
+    searches.push(isBlockedSearchText(result.text)
+      ? { ...result, ok: false, error: "search proxy blocked by upstream source", queryText }
+      : { ...result, queryText });
   }
 
   const okSearches = searches.filter((result) => result.ok);
   const combinedText = okSearches.map((result) => result.text).join("\n");
-  if (!okSearches.length && !direct.ok) {
+  if (!okSearches.length && !direct.ok && !mediaDiscovery.ok) {
     return {
       ok: false,
       url: searches[0]?.url || "",
-      error: searches.map((result) => result.error).filter(Boolean).join("; ") || "search failed",
+      error: [
+        ...searches.map((result) => result.error).filter(Boolean),
+        ...(mediaDiscovery.errors || [])
+      ].join("; ") || "search failed",
       direct,
+      mediaDiscovery,
       searches
     };
   }
@@ -2043,7 +2288,7 @@ async function fetchSearchPreview(match) {
   const firstArticleText = firstArticles.filter((article) => article.ok).map((article) => article.text).join("\n");
   const expandedLinks = uniqueUrls([
     ...links,
-    ...extractArticleLinks(`${direct.text || ""}\n${combinedText}\n${firstArticleText}`, 10)
+    ...extractArticleLinks(`${direct.text || ""}\n${mediaDiscovery.text || ""}\n${combinedText}\n${firstArticleText}`, 10)
   ], 12);
   const extraLinks = expandedLinks.filter((url) => !links.includes(url)).slice(0, 4);
   const extraArticles = [];
@@ -2054,12 +2299,16 @@ async function fetchSearchPreview(match) {
   const articles = [...firstArticles, ...extraArticles];
   const okArticles = articles.filter((article) => article.ok);
   const articleText = okArticles.map((article) => article.text).join("\n");
-  const text = `${direct.text || ""}\n${combinedText}\n${articleText}`;
+  const text = `${direct.text || ""}\n${mediaDiscovery.text || ""}\n${combinedText}\n${articleText}`;
 
   return {
     ok: true,
-    url: direct.results?.find((result) => result.ok)?.originalUrl || okSearches[0]?.url || "",
+    url: direct.results?.find((result) => result.ok)?.originalUrl
+      || mediaDiscovery.results?.find((result) => result.ok)?.originalUrl
+      || okSearches[0]?.url
+      || "",
     direct,
+    mediaDiscovery,
     searches,
     articles,
     articleLinks: expandedLinks,
