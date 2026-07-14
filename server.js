@@ -1722,6 +1722,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   let lambdaHome = baseHome;
   let lambdaAway = baseAway;
   let goalkeeperAgeAdjustment = null;
+  let physicalMatchupAdjustment = null;
 
   const homeRank = rankingNumber(match.home, fifaRankings) || match.homeTeam?.worldRanking?.rank;
   const awayRank = rankingNumber(match.away, fifaRankings) || match.awayTeam?.worldRanking?.rank;
@@ -1806,6 +1807,23 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
         homeXgDelta: roundTo(homeGkAgeDelta, 3),
         awayXgDelta: roundTo(awayGkAgeDelta, 3),
         reason: goalkeeperAgeAdjustment.signals.slice(0, 3).map((item) => item.reason).join(" ")
+      });
+    }
+  }
+
+  physicalMatchupAdjustment = buildPhysicalMatchupAdjustment(match, { lambdaHome, lambdaAway });
+  if (physicalMatchupAdjustment.ok) {
+    const impact = physicalMatchupAdjustment.impacts || {};
+    const homePhysicalDelta = clamp(Number(impact.homeXgDelta) || 0, -0.12, 0.12);
+    const awayPhysicalDelta = clamp(Number(impact.awayXgDelta) || 0, -0.12, 0.12);
+    if (homePhysicalDelta || awayPhysicalDelta) {
+      lambdaHome += homePhysicalDelta;
+      lambdaAway += awayPhysicalDelta;
+      drivers.push({
+        label: "身体对抗/分线错配",
+        homeXgDelta: roundTo(homePhysicalDelta, 3),
+        awayXgDelta: roundTo(awayPhysicalDelta, 3),
+        reason: physicalMatchupAdjustment.signals.slice(0, 3).map((item) => item.reason).join(" ")
       });
     }
   }
@@ -1897,6 +1915,25 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       });
     }
   }
+  if (physicalMatchupAdjustment?.ok) {
+    const deltas = physicalMatchupAdjustment.probabilityDeltas || {};
+    const bttsDelta = clamp(Number(deltas.btts) || 0, -0.03, 0.03);
+    const over25Delta = clamp(Number(deltas.over25) || 0, -0.03, 0.03);
+    const drawDelta = clamp(Number(deltas.draw) || 0, 0, 0.035);
+    if (bttsDelta || over25Delta || drawDelta) {
+      probabilities = applyProbabilityDeltasThroughScoreGrid(probabilities, {
+        btts: bttsDelta,
+        over25: over25Delta,
+        draw: drawDelta
+      });
+      drivers.push({
+        label: "身体错配衍生修正",
+        homeXgDelta: 0,
+        awayXgDelta: 0,
+        reason: `身体/对抗错配通过同一比分分布修正 BTTS ${bttsDelta >= 0 ? "+" : ""}${formatPercent(bttsDelta)}、大2.5 ${over25Delta >= 0 ? "+" : ""}${formatPercent(over25Delta)}、平局 ${drawDelta >= 0 ? "+" : ""}${formatPercent(drawDelta)}。`
+      });
+    }
+  }
   if (contextSignals?.ok) {
     const impact = contextSignals.impacts || {};
     const bttsDelta = clamp(Number(impact.bttsDelta) || 0, -0.035, 0.035);
@@ -1982,7 +2019,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.06.30",
+    version: "2026.07.14",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -1993,7 +2030,8 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     },
     calibration,
     goalkeeperAgeAdjustment,
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 10),
+    physicalMatchupAdjustment,
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 10),
     probabilities
   };
 }
@@ -2014,6 +2052,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     version: modelV2.version,
     calibration: modelV2.calibration,
     drivers: modelV2.drivers,
+    physicalMatchupAdjustment: modelV2.physicalMatchupAdjustment,
     topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
   };
   return match;
@@ -10178,6 +10217,245 @@ function buildGoalkeeperAgeModelAdjustment(match, fifaRankings = {}) {
     },
     signals,
     summary: signals.map((item) => item.reason).join(" ")
+  };
+}
+
+function profileGroups(profile) {
+  return profile?.groups || {};
+}
+
+function sideValue(side, homeValue, awayValue) {
+  return side === "home" ? homeValue : awayValue;
+}
+
+function otherSide(side) {
+  return side === "home" ? "away" : side === "away" ? "home" : "even";
+}
+
+function sideDisplayName(match, side) {
+  return side === "home" ? match.homeName : side === "away" ? match.awayName : "";
+}
+
+function addPhysicalImpact(impacts, side, value) {
+  if (side === "home") impacts.homeXgDelta += value;
+  if (side === "away") impacts.awayXgDelta += value;
+}
+
+function physicalTierFactor(match, side) {
+  const homeTier = topTierShare(match.homeTeam?.squadProfile?.groups?.all);
+  const awayTier = topTierShare(match.awayTeam?.squadProfile?.groups?.all);
+  if (!homeTier && !awayTier) return 1;
+  const sideTier = sideValue(side, homeTier, awayTier);
+  const oppTier = sideValue(otherSide(side), homeTier, awayTier);
+  const diff = sideTier - oppTier;
+  if (diff >= 0.18) return 1.08;
+  if (diff <= -0.28) return 0.78;
+  if (diff <= -0.14) return 0.88;
+  return 1;
+}
+
+function physicalMismatchLabel(match, side) {
+  const name = sideDisplayName(match, side);
+  return name ? `${name}身体/争抢` : "身体/争抢";
+}
+
+function buildPhysicalMatchupAdjustment(match, options = {}) {
+  const homeProfile = match.homeTeam?.squadProfile;
+  const awayProfile = match.awayTeam?.squadProfile;
+  if (!homeProfile?.ok || !awayProfile?.ok) {
+    return {
+      ok: false,
+      status: "missing",
+      reason: "阵容身高/分线 profile 未覆盖两队。"
+    };
+  }
+
+  const h = profileGroups(homeProfile);
+  const a = profileGroups(awayProfile);
+  const values = {
+    homeAll: avgHeight(h.all),
+    awayAll: avgHeight(a.all),
+    homeDf: avgHeight(h.DF),
+    awayDf: avgHeight(a.DF),
+    homeMf: avgHeight(h.MF),
+    awayMf: avgHeight(a.MF),
+    homeFw: avgHeight(h.FW),
+    awayFw: avgHeight(a.FW)
+  };
+  if (!values.homeAll || !values.awayAll || !values.homeDf || !values.awayDf || !values.homeMf || !values.awayMf || !values.homeFw || !values.awayFw) {
+    return {
+      ok: false,
+      status: "partial",
+      reason: "身高分线字段不完整，身体错配不入模。"
+    };
+  }
+
+  const knockoutWeight = useRound16PlusLogic(match) ? 1.38 : isKnockoutMatch(match) ? 1.2 : 1;
+  const lambdaHome = Number(options.lambdaHome);
+  const lambdaAway = Number(options.lambdaAway);
+  const lambdaGap = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? lambdaHome - lambdaAway : 0;
+  const favoriteSide = Math.abs(lambdaGap) >= 0.16 ? (lambdaGap > 0 ? "home" : "away") : "even";
+  const favoriteName = sideDisplayName(match, favoriteSide);
+  const signals = [];
+  const impacts = {
+    homeXgDelta: 0,
+    awayXgDelta: 0,
+    bttsDelta: 0,
+    over25Delta: 0,
+    drawDelta: 0
+  };
+
+  const addSignal = (signal) => {
+    signals.push({
+      status: "synced",
+      confidence: "medium",
+      ...signal
+    });
+  };
+
+  const applyFavFriction = (side, amount, reason) => {
+    const impact = clamp(amount * knockoutWeight, 0.012, 0.085);
+    addPhysicalImpact(impacts, side, -impact);
+    impacts.drawDelta += clamp(impact * 0.22, 0.004, 0.022);
+    impacts.over25Delta -= clamp(impact * 0.12, 0.002, 0.014);
+    addSignal({
+      label: "热门身体错配降级",
+      side,
+      homeXgDelta: side === "home" ? roundTo(-impact, 3) : 0,
+      awayXgDelta: side === "away" ? roundTo(-impact, 3) : 0,
+      reason
+    });
+  };
+
+  const overallDiff = values.homeAll - values.awayAll;
+  if (Math.abs(overallDiff) >= 4) {
+    const side = overallDiff > 0 ? "home" : "away";
+    const sideFactor = physicalTierFactor(match, side);
+    const impact = clamp((Math.abs(overallDiff) - 3) * 0.007 * knockoutWeight * sideFactor, 0.012, 0.048);
+    addPhysicalImpact(impacts, side, impact * 0.55);
+    addPhysicalImpact(impacts, otherSide(side), -impact * 0.3);
+    impacts.drawDelta += favoriteSide !== "even" && side !== favoriteSide ? clamp(impact * 0.18, 0.002, 0.012) : 0;
+    addSignal({
+      label: "整体身高/二点球",
+      side,
+      homeXgDelta: roundTo(side === "home" ? impact * 0.55 : -impact * 0.3, 3),
+      awayXgDelta: roundTo(side === "away" ? impact * 0.55 : -impact * 0.3, 3),
+      reason: `${sideDisplayName(match, side)} 全队均高 ${side === "home" ? values.homeAll : values.awayAll}cm，高于对手约 ${roundTo(Math.abs(overallDiff), 1)}cm；定位球、二点球和争抢作为低权重 xG 修正。`
+    });
+  }
+
+  const midfieldDiff = values.homeMf - values.awayMf;
+  if (Math.abs(midfieldDiff) >= 4) {
+    const side = midfieldDiff > 0 ? "home" : "away";
+    const impact = clamp((Math.abs(midfieldDiff) - 3) * 0.006 * knockoutWeight * physicalTierFactor(match, side), 0.01, 0.04);
+    addPhysicalImpact(impacts, side, impact * 0.45);
+    addPhysicalImpact(impacts, otherSide(side), -impact * 0.3);
+    if (favoriteSide !== "even" && side !== favoriteSide) {
+      impacts.drawDelta += clamp(impact * 0.22, 0.003, 0.014);
+      impacts.over25Delta -= clamp(impact * 0.08, 0.001, 0.006);
+    }
+    addSignal({
+      label: "中场争抢/推进摩擦",
+      side,
+      homeXgDelta: roundTo(side === "home" ? impact * 0.45 : -impact * 0.3, 3),
+      awayXgDelta: roundTo(side === "away" ? impact * 0.45 : -impact * 0.3, 3),
+      reason: `${sideDisplayName(match, side)} 中场均高 ${side === "home" ? values.homeMf : values.awayMf}cm，高于对手约 ${roundTo(Math.abs(midfieldDiff), 1)}cm；16强后这类二点球/对抗优势会降低纯排名先验。`
+    });
+  }
+
+  const lineMismatches = [
+    {
+      attackSide: "home",
+      fwHeight: values.homeFw,
+      defenceSide: "away",
+      dfHeight: values.awayDf,
+      attackName: match.homeName,
+      defenceName: match.awayName
+    },
+    {
+      attackSide: "away",
+      fwHeight: values.awayFw,
+      defenceSide: "home",
+      dfHeight: values.homeDf,
+      attackName: match.awayName,
+      defenceName: match.homeName
+    }
+  ];
+
+  for (const item of lineMismatches) {
+    const diff = item.fwHeight - item.dfHeight;
+    const isFavoriteAttack = favoriteSide === item.attackSide;
+    if (diff <= -7) {
+      const base = clamp((Math.abs(diff) - 6) * 0.008, 0.018, 0.062);
+      const impact = base * knockoutWeight;
+      addPhysicalImpact(impacts, item.attackSide, -impact);
+      impacts.drawDelta += isFavoriteAttack ? clamp(impact * 0.24, 0.004, 0.02) : clamp(impact * 0.08, 0.001, 0.007);
+      impacts.over25Delta -= clamp(impact * 0.13, 0.002, 0.014);
+      impacts.bttsDelta -= clamp(impact * 0.08, 0.001, 0.01);
+      addSignal({
+        label: "锋线对后防身高错配",
+        side: item.defenceSide,
+        homeXgDelta: roundTo(item.attackSide === "home" ? -impact : 0, 3),
+        awayXgDelta: roundTo(item.attackSide === "away" ? -impact : 0, 3),
+        reason: `${item.attackName} 锋线均高 ${item.fwHeight}cm，对 ${item.defenceName} 后防 ${item.dfHeight}cm，低约 ${roundTo(Math.abs(diff), 1)}cm；高球、背身和禁区争抢效率降级。`
+      });
+      if (isFavoriteAttack && favoriteName) {
+        applyFavFriction(item.attackSide, base * 0.45, `${favoriteName} 是赛前较强侧，但锋线对后防存在明显身高/对抗错配，热门90分钟胜与第二球路径降级。`);
+      }
+    } else if (diff >= 5) {
+      const impact = clamp((diff - 4) * 0.006 * knockoutWeight * physicalTierFactor(match, item.attackSide), 0.01, 0.045);
+      addPhysicalImpact(impacts, item.attackSide, impact * 0.65);
+      impacts.bttsDelta += clamp(impact * 0.12, 0.001, 0.01);
+      impacts.over25Delta += clamp(impact * 0.08, 0.001, 0.008);
+      addSignal({
+        label: "锋线制空/定位球威胁",
+        side: item.attackSide,
+        homeXgDelta: roundTo(item.attackSide === "home" ? impact * 0.65 : 0, 3),
+        awayXgDelta: roundTo(item.attackSide === "away" ? impact * 0.65 : 0, 3),
+        reason: `${item.attackName} 锋线均高 ${item.fwHeight}cm，高于 ${item.defenceName} 后防约 ${roundTo(diff, 1)}cm；定位球和传中路线小幅加权。`
+      });
+    }
+  }
+
+  impacts.homeXgDelta = roundTo(clamp(impacts.homeXgDelta, -0.12, 0.12), 3);
+  impacts.awayXgDelta = roundTo(clamp(impacts.awayXgDelta, -0.12, 0.12), 3);
+  impacts.bttsDelta = roundTo(clamp(impacts.bttsDelta, -0.03, 0.03), 3);
+  impacts.over25Delta = roundTo(clamp(impacts.over25Delta, -0.03, 0.03), 3);
+  impacts.drawDelta = roundTo(clamp(impacts.drawDelta, 0, 0.035), 3);
+
+  const totalImpact = Math.abs(impacts.homeXgDelta) + Math.abs(impacts.awayXgDelta) + Math.abs(impacts.bttsDelta) + Math.abs(impacts.over25Delta) + Math.abs(impacts.drawDelta);
+  return {
+    ok: signals.length > 0 && totalImpact >= 0.006,
+    status: signals.length ? "synced" : "no-material-mismatch",
+    source: homeProfile.source || awayProfile.source || "squad profile",
+    updatedAt: homeProfile.updatedAt || awayProfile.updatedAt || new Date().toISOString(),
+    version: "2026.07.14",
+    stageWeight: roundTo(knockoutWeight, 2),
+    favoriteSide,
+    measurements: {
+      home: {
+        allAvgHeightCm: values.homeAll,
+        dfAvgHeightCm: values.homeDf,
+        mfAvgHeightCm: values.homeMf,
+        fwAvgHeightCm: values.homeFw,
+        topTierShare: topTierShare(h.all)
+      },
+      away: {
+        allAvgHeightCm: values.awayAll,
+        dfAvgHeightCm: values.awayDf,
+        mfAvgHeightCm: values.awayMf,
+        fwAvgHeightCm: values.awayFw,
+        topTierShare: topTierShare(a.all)
+      }
+    },
+    impacts,
+    probabilityDeltas: {
+      btts: impacts.bttsDelta,
+      over25: impacts.over25Delta,
+      draw: impacts.drawDelta
+    },
+    signals,
+    summary: signals.slice(0, 3).map((item) => item.reason).join(" ")
   };
 }
 

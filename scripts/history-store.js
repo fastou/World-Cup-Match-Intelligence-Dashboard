@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS match_snapshots (
   group_situation_away_status TEXT,
   group_situation_home_xg_delta REAL,
   group_situation_away_xg_delta REAL,
+  physical_matchup_summary TEXT,
+  physical_home_xg_delta REAL,
+  physical_away_xg_delta REAL,
+  physical_draw_delta REAL,
   payload_json TEXT NOT NULL,
   FOREIGN KEY(run_id) REFERENCES dashboard_runs(run_id)
 );
@@ -533,6 +537,10 @@ WHERE mk.market_type = 'moneyline';
   await ensureColumn("match_snapshots", "group_situation_away_status", "TEXT");
   await ensureColumn("match_snapshots", "group_situation_home_xg_delta", "REAL");
   await ensureColumn("match_snapshots", "group_situation_away_xg_delta", "REAL");
+  await ensureColumn("match_snapshots", "physical_matchup_summary", "TEXT");
+  await ensureColumn("match_snapshots", "physical_home_xg_delta", "REAL");
+  await ensureColumn("match_snapshots", "physical_away_xg_delta", "REAL");
+  await ensureColumn("match_snapshots", "physical_draw_delta", "REAL");
 }
 
 function json(value) {
@@ -592,6 +600,8 @@ async function recordDashboardSnapshot(payload, options = {}) {
     const snapshotId = `${id}:${match.id}`;
     const groupSituation = match.groupSituation || {};
     const groupImpact = (groupSituation.modelImpacts || [])[0] || {};
+    const physicalAdjustment = match.modelV2?.physicalMatchupAdjustment || match.dynamicModel?.goldmanStyle?.physicalMatchupAdjustment || {};
+    const physicalImpact = physicalAdjustment.impacts || {};
     operations.push({
       sql: "DELETE FROM market_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
@@ -630,8 +640,10 @@ async function recordDashboardSnapshot(payload, options = {}) {
         completeness_mode, completeness_score, lambda_home, lambda_away,
         elite_active_positions, elite_active_traders, elite_current_value, elite_total_bought,
         group_situation_summary, group_situation_home_status, group_situation_away_status,
-        group_situation_home_xg_delta, group_situation_away_xg_delta, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        group_situation_home_xg_delta, group_situation_away_xg_delta,
+        physical_matchup_summary, physical_home_xg_delta, physical_away_xg_delta, physical_draw_delta,
+        payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       params: [
         snapshotId,
         id,
@@ -658,6 +670,10 @@ async function recordDashboardSnapshot(payload, options = {}) {
         textOrNull(groupSituation.away?.status),
         numberOrNull(groupImpact.homeXgDelta),
         numberOrNull(groupImpact.awayXgDelta),
+        textOrNull(physicalAdjustment.summary),
+        numberOrNull(physicalImpact.homeXgDelta),
+        numberOrNull(physicalImpact.awayXgDelta),
+        numberOrNull(physicalImpact.drawDelta),
         archivedJson(match)
       ]
     });
