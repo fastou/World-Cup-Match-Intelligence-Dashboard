@@ -602,6 +602,15 @@
         border-bottom: 1px solid var(--line);
       }
 
+      .match-header-actions {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: flex-start;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
       .teams {
         min-width: 0;
       }
@@ -628,6 +637,27 @@
         color: #2d493c;
         font-size: 12px;
         white-space: nowrap;
+      }
+
+      .polymarket-event-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 26px;
+        padding: 0 9px;
+        border: 1px solid rgba(31, 107, 84, 0.24);
+        border-radius: 8px;
+        background: #f3faf6;
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 780;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .polymarket-event-link:hover {
+        border-color: rgba(31, 107, 84, 0.44);
+        background: #e8f2ee;
       }
 
       .confidence-panel {
@@ -3124,6 +3154,10 @@
 
         .match-header {
           flex-direction: column;
+        }
+
+        .match-header-actions {
+          justify-content: flex-start;
         }
 
         .confidence-panel,
@@ -6423,6 +6457,23 @@
         return "";
       }
 
+      function polymarketMatchUrl(match = {}) {
+        const direct = match.competition?.eventUrl;
+        if (direct && /^https?:\/\//i.test(direct)) return direct;
+        const directSlug = match.polymarketBaseSlug || match.polymarketEventSlug || match.competition?.baseSlug || match.competition?.eventSlug;
+        if (directSlug) return `https://polymarket.com/event/${encodeURIComponent(directSlug)}`;
+        const catalogSlug = (match.marketCatalog?.categories || [])
+          .flatMap((category) => category.markets || [])
+          .map((market) => market.eventSlug)
+          .find(Boolean);
+        if (catalogSlug) return `https://polymarket.com/event/${encodeURIComponent(catalogSlug)}`;
+        const chartSlug = (match.recommendations || [])
+          .map((rec) => rec.chart?.eventSlug)
+          .find(Boolean);
+        if (chartSlug) return `https://polymarket.com/event/${encodeURIComponent(chartSlug)}`;
+        return "";
+      }
+
       function fmtSignedPct(value) {
         if (typeof value !== "number" || !Number.isFinite(value)) return "-";
         const sign = value > 0 ? "+" : "";
@@ -6992,6 +7043,7 @@
         const badgeText = match.autoBaseline
           ? (match.autoBaselineSource === "polymarket-soccer-games" ? competitionName : "赛程自动基线")
           : `第 ${match.matchday} 比赛日`;
+        const polymarketUrl = polymarketMatchUrl(match);
 
         return `
           <article class="match-card" data-match="${escapeHtml(match.id)}">
@@ -7000,7 +7052,10 @@
                 <h3>${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</h3>
                 <div class="meta-line">${escapeHtml(competitionName)} · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
               </div>
-              <span class="badge">${escapeHtml(badgeText)}</span>
+              <div class="match-header-actions">
+                <span class="badge">${escapeHtml(badgeText)}</span>
+                ${polymarketUrl ? `<a class="polymarket-event-link" href="${escapeHtml(polymarketUrl)}" target="_blank" rel="noreferrer">${escapeHtml(currentLang === "en" ? "Open Polymarket" : "打开 Polymarket")}↗</a>` : ""}
+              </div>
             </div>
 
             ${renderAiPrediction(match)}
