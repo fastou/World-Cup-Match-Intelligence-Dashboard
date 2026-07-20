@@ -559,22 +559,22 @@ const SOCCER_COMPETITION_CATEGORIES = {
 };
 
 const SOCCER_COMPETITION_DEFINITIONS = [
-  { key: "world-cup", categoryKey: "international", label: "世界杯", labelEn: "FIFA World Cup", tier: 1, patterns: ["fifwc", "fifa world cup", "world cup", "fifa-world-cup"] },
-  { key: "euro", categoryKey: "international", label: "欧洲杯", labelEn: "UEFA Euro", tier: 1, patterns: ["uefa euro", "euro 202", "euro-", "european championship"] },
-  { key: "copa-america", categoryKey: "international", label: "美洲杯", labelEn: "Copa America", tier: 1, patterns: ["copa america", "copa-america"] },
-  { key: "uefa-champions-league", categoryKey: "europeanClub", label: "欧冠", labelEn: "UEFA Champions League", tier: 1, patterns: ["ucl", "champions league", "uefa champions league"] },
-  { key: "uefa-europa-league", categoryKey: "europeanClub", label: "欧联杯", labelEn: "UEFA Europa League", tier: 1, patterns: ["uel", "uefa europa league", "europa league", "uefa-europa-league"] },
-  { key: "uefa-conference-league", categoryKey: "europeanClub", label: "欧协联", labelEn: "UEFA Conference League", tier: 2, patterns: ["conference league", "uefa conference", "uecl"] },
-  { key: "epl", categoryKey: "domesticLeagues", label: "英超", labelEn: "Premier League", tier: 1, patterns: ["epl-", "premier league", "english premier league"] },
-  { key: "la-liga", categoryKey: "domesticLeagues", label: "西甲", labelEn: "La Liga", tier: 1, patterns: ["la liga", "laliga"] },
-  { key: "serie-a", categoryKey: "domesticLeagues", label: "意甲", labelEn: "Serie A", tier: 1, patterns: ["serie a", "italy-serie-a"] },
-  { key: "bundesliga", categoryKey: "domesticLeagues", label: "德甲", labelEn: "Bundesliga", tier: 1, patterns: ["bundesliga"] },
-  { key: "ligue-1", categoryKey: "domesticLeagues", label: "法甲", labelEn: "Ligue 1", tier: 1, patterns: ["ligue 1", "ligue-1"] },
-  { key: "mls", categoryKey: "americas", label: "MLS", labelEn: "MLS", tier: 2, patterns: ["mls", "major league soccer"] },
-  { key: "liga-mx", categoryKey: "americas", label: "墨西哥联赛", labelEn: "Liga MX", tier: 2, patterns: ["liga mx", "liga-mx"] },
-  { key: "libertadores", categoryKey: "americas", label: "解放者杯", labelEn: "Copa Libertadores", tier: 1, patterns: ["libertadores", "copa libertadores"] },
-  { key: "sudamericana", categoryKey: "americas", label: "南美杯", labelEn: "Copa Sudamericana", tier: 2, patterns: ["sudamericana", "copa sudamericana"] },
-  { key: "concacaf", categoryKey: "americas", label: "中北美赛事", labelEn: "CONCACAF", tier: 2, patterns: ["concacaf"] }
+  { key: "world-cup", categoryKey: "international", label: "世界杯", labelEn: "FIFA World Cup", tier: 1, teamType: "national", stageType: "tournament", patterns: ["fifwc", "fifa world cup", "world cup", "fifa-world-cup"] },
+  { key: "euro", categoryKey: "international", label: "欧洲杯", labelEn: "UEFA Euro", tier: 1, teamType: "national", stageType: "tournament", patterns: ["uefa euro", "euro 202", "euro-", "european championship"] },
+  { key: "copa-america", categoryKey: "international", label: "美洲杯", labelEn: "Copa America", tier: 1, teamType: "national", stageType: "tournament", patterns: ["copa america", "copa-america"] },
+  { key: "uefa-champions-league", categoryKey: "europeanClub", label: "欧冠", labelEn: "UEFA Champions League", tier: 1, teamType: "club", stageType: "uefa-club", patterns: ["ucl", "champions league", "uefa champions league"] },
+  { key: "uefa-europa-league", categoryKey: "europeanClub", label: "欧联杯", labelEn: "UEFA Europa League", tier: 1, teamType: "club", stageType: "uefa-club", patterns: ["uel", "uefa europa league", "europa league", "uefa-europa-league"] },
+  { key: "uefa-conference-league", categoryKey: "europeanClub", label: "欧协联", labelEn: "UEFA Conference League", tier: 2, teamType: "club", stageType: "uefa-club", patterns: ["conference league", "uefa conference", "uecl"] },
+  { key: "epl", categoryKey: "domesticLeagues", label: "英超", labelEn: "Premier League", tier: 1, teamType: "club", stageType: "league", patterns: ["epl-", "premier league", "english premier league"] },
+  { key: "la-liga", categoryKey: "domesticLeagues", label: "西甲", labelEn: "La Liga", tier: 1, teamType: "club", stageType: "league", patterns: ["la liga", "laliga"] },
+  { key: "serie-a", categoryKey: "domesticLeagues", label: "意甲", labelEn: "Serie A", tier: 1, teamType: "club", stageType: "league", patterns: ["serie a", "italy-serie-a"] },
+  { key: "bundesliga", categoryKey: "domesticLeagues", label: "德甲", labelEn: "Bundesliga", tier: 1, teamType: "club", stageType: "league", patterns: ["bundesliga"] },
+  { key: "ligue-1", categoryKey: "domesticLeagues", label: "法甲", labelEn: "Ligue 1", tier: 1, teamType: "club", stageType: "league", patterns: ["ligue 1", "ligue-1"] },
+  { key: "mls", categoryKey: "americas", label: "MLS", labelEn: "MLS", tier: 2, teamType: "club", stageType: "league", patterns: ["mls", "major league soccer"] },
+  { key: "liga-mx", categoryKey: "americas", label: "墨西哥联赛", labelEn: "Liga MX", tier: 2, teamType: "club", stageType: "league", patterns: ["liga mx", "liga-mx"] },
+  { key: "libertadores", categoryKey: "americas", label: "解放者杯", labelEn: "Copa Libertadores", tier: 1, teamType: "club", stageType: "continental-club", patterns: ["libertadores", "copa libertadores"] },
+  { key: "sudamericana", categoryKey: "americas", label: "南美杯", labelEn: "Copa Sudamericana", tier: 2, teamType: "club", stageType: "continental-club", patterns: ["sudamericana", "copa sudamericana"] },
+  { key: "concacaf", categoryKey: "americas", label: "中北美赛事", labelEn: "CONCACAF", tier: 2, teamType: "club", stageType: "continental-club", patterns: ["concacaf"] }
 ];
 
 const NON_MATCH_SOCCER_EVENT_KEYWORDS = [
@@ -625,6 +625,42 @@ function titleCaseFromSlug(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase()) || "Soccer";
 }
 
+function uefaClubStageInfo(raw = {}, definition = {}) {
+  if (definition.stageType !== "uefa-club") return {};
+  const text = soccerEventText(raw);
+  const kickoff = soccerEventKickoffIso(raw);
+  const month = kickoff ? new Date(kickoff).getUTCMonth() + 1 : 0;
+  const isQualifier = /\bqualif(ying|ication|ier|iers)?\b|\bpreliminary\b|\bplay-?off\b/i.test(text)
+    || (month >= 6 && month <= 8);
+  const labels = {
+    "uefa-champions-league": ["欧冠资格赛", "UEFA Champions League Qualifying"],
+    "uefa-europa-league": ["欧联杯资格赛", "UEFA Europa League Qualifying"],
+    "uefa-conference-league": ["欧协联资格赛", "UEFA Conference League Qualifying"]
+  };
+  if (!isQualifier) {
+    return {
+      stageType: "main-stage",
+      stageLabel: "正赛/联赛阶段",
+      stageLabelEn: "Main/league phase",
+      parentKey: definition.key,
+      parentLabel: definition.label,
+      parentLabelEn: definition.labelEn
+    };
+  }
+  const [label, labelEn] = labels[definition.key] || [definition.label, definition.labelEn];
+  return {
+    key: `${definition.key}-qualifying`,
+    label,
+    labelEn,
+    stageType: "qualifying",
+    stageLabel: "资格赛",
+    stageLabelEn: "Qualifying",
+    parentKey: definition.key,
+    parentLabel: definition.label,
+    parentLabelEn: definition.labelEn
+  };
+}
+
 function classifySoccerCompetition(raw = {}) {
   const text = soccerEventText(raw);
   const found = SOCCER_COMPETITION_DEFINITIONS.find((definition) =>
@@ -633,16 +669,26 @@ function classifySoccerCompetition(raw = {}) {
   const categoryKey = found?.categoryKey || "other";
   const category = SOCCER_COMPETITION_CATEGORIES[categoryKey] || SOCCER_COMPETITION_CATEGORIES.other;
   if (found) {
+    const stage = uefaClubStageInfo(raw, found);
     return {
-      key: found.key,
-      label: found.label,
-      labelEn: found.labelEn,
+      key: stage.key || found.key,
+      label: stage.label || found.label,
+      labelEn: stage.labelEn || found.labelEn,
       categoryKey: category.key,
       categoryLabel: category.label,
       categoryLabelEn: category.labelEn,
       categoryOrder: category.order,
       tier: found.tier,
       authoritative: found.tier <= 2,
+      teamType: found.teamType || (category.key === "international" ? "national" : "club"),
+      teamTypeLabel: (found.teamType || (category.key === "international" ? "national" : "club")) === "national" ? "国家队赛事" : "俱乐部赛事",
+      teamTypeLabelEn: (found.teamType || (category.key === "international" ? "national" : "club")) === "national" ? "National teams" : "Club teams",
+      stageType: stage.stageType || found.stageType || "",
+      stageLabel: stage.stageLabel || "",
+      stageLabelEn: stage.stageLabelEn || "",
+      parentKey: stage.parentKey || "",
+      parentLabel: stage.parentLabel || "",
+      parentLabelEn: stage.parentLabelEn || "",
       seriesSlug: raw.seriesSlug || ""
     };
   }
@@ -658,6 +704,15 @@ function classifySoccerCompetition(raw = {}) {
     categoryOrder: category.order,
     tier: 5,
     authoritative: false,
+    teamType: "club",
+    teamTypeLabel: "俱乐部赛事",
+    teamTypeLabelEn: "Club teams",
+    stageType: "",
+    stageLabel: "",
+    stageLabelEn: "",
+    parentKey: "",
+    parentLabel: "",
+    parentLabelEn: "",
     seriesSlug: raw.seriesSlug || ""
   };
 }

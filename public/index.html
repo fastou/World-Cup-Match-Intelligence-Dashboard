@@ -4351,7 +4351,10 @@
         labelEn: "FIFA World Cup",
         categoryKey: "international",
         categoryLabel: "国家队大赛",
-        categoryLabelEn: "International tournaments"
+        categoryLabelEn: "International tournaments",
+        teamType: "national",
+        teamTypeLabel: "国家队赛事",
+        teamTypeLabelEn: "National teams"
       };
 
       const matchCompetition = (match = {}) => match.competition || competitionFallback;
@@ -4359,6 +4362,15 @@
       const competitionText = (competition = {}) => {
         if (currentLang === "en") return competition.labelEn || competition.label || "Soccer";
         return competition.label || competition.labelEn || "足球赛事";
+      };
+
+      const competitionTeamTypeText = (competition = {}) => {
+        if (currentLang === "en") return competition.teamTypeLabelEn || (competition.teamType === "national" ? "National teams" : "Club teams");
+        return competition.teamTypeLabel || (competition.teamType === "national" ? "国家队赛事" : "俱乐部赛事");
+      };
+
+      const competitionMetaText = (competition = {}) => {
+        return [competitionText(competition), competitionTeamTypeText(competition)].filter(Boolean).join(" · ");
       };
 
       function deriveCompetitionSummaryFromMatches(matches = []) {
@@ -7039,7 +7051,9 @@
           ...match.homeTeam.watchItems.map((item) => [`${homeName(match)}`, item]),
           ...match.awayTeam.watchItems.map((item) => [`${awayName(match)}`, item])
         ];
-        const competitionName = competitionText(matchCompetition(match));
+        const competition = matchCompetition(match);
+        const competitionName = competitionText(competition);
+        const competitionMeta = competitionMetaText(competition);
         const badgeText = match.autoBaseline
           ? (match.autoBaselineSource === "polymarket-soccer-games" ? competitionName : "赛程自动基线")
           : `第 ${match.matchday} 比赛日`;
@@ -7050,7 +7064,7 @@
             <div class="match-header">
               <div class="teams">
                 <h3>${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</h3>
-                <div class="meta-line">${escapeHtml(competitionName)} · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
+                <div class="meta-line">${escapeHtml(competitionMeta)} · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
               </div>
               <div class="match-header-actions">
                 <span class="badge">${escapeHtml(badgeText)}</span>
@@ -7168,7 +7182,7 @@
           return `
           <button class="match-tab ${index === 0 ? "active" : ""}" data-match-tab="${escapeHtml(match.id)}" type="button">
             <span class="match-tab-title">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</span>
-            <span class="match-tab-meta">${escapeHtml(competitionText(matchCompetition(match)))} · ${escapeHtml(statusLabel)} · ${fmtTime(match.kickoffShanghai)}</span>
+            <span class="match-tab-meta">${escapeHtml(competitionMetaText(matchCompetition(match)))} · ${escapeHtml(statusLabel)} · ${fmtTime(match.kickoffShanghai)}</span>
           </button>
         `;
         }).join("");
