@@ -59,6 +59,7 @@ const POLYMARKET_SOCCER_EVENT_LIMIT = Number(process.env.POLYMARKET_SOCCER_EVENT
 const POLYMARKET_SOCCER_GAME_EVENT_LIMIT = Number(process.env.POLYMARKET_SOCCER_GAME_EVENT_LIMIT || 240);
 const POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT = Number(process.env.POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT || 40);
 const POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME = Number(process.env.POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME || 10000);
+const POLYMARKET_INCLUDE_OTHER_SOCCER = process.env.POLYMARKET_INCLUDE_OTHER_SOCCER === "1";
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
@@ -418,7 +419,7 @@ const SOCCER_POSITION_KEYWORDS = [
   "champions league",
   "europa league",
   "ucl",
-  "epl",
+  "epl-",
   "premier league",
   "la liga",
   "serie a",
@@ -525,7 +526,28 @@ const NON_SOCCER_POSITION_KEYWORDS = [
   "super bowl",
   "formula 1",
   "f1",
-  "golf"
+  "golf",
+  "dota",
+  "dota2",
+  "dota 2",
+  "bo3",
+  "bo 3",
+  "bo5",
+  "bo 5",
+  "esports",
+  "e-sports",
+  "counter-strike",
+  "counter strike",
+  "cs2",
+  "cs:go",
+  "league of legends",
+  "lol",
+  "valorant",
+  "overwatch",
+  "starcraft",
+  "rocket league",
+  "epl masters",
+  "epl-masters"
 ];
 
 const SOCCER_COMPETITION_CATEGORIES = {
@@ -543,7 +565,7 @@ const SOCCER_COMPETITION_DEFINITIONS = [
   { key: "uefa-champions-league", categoryKey: "europeanClub", label: "欧冠", labelEn: "UEFA Champions League", tier: 1, patterns: ["ucl", "champions league", "uefa champions league"] },
   { key: "uefa-europa-league", categoryKey: "europeanClub", label: "欧联杯", labelEn: "UEFA Europa League", tier: 1, patterns: ["uel", "uefa europa league", "europa league", "uefa-europa-league"] },
   { key: "uefa-conference-league", categoryKey: "europeanClub", label: "欧协联", labelEn: "UEFA Conference League", tier: 2, patterns: ["conference league", "uefa conference", "uecl"] },
-  { key: "epl", categoryKey: "domesticLeagues", label: "英超", labelEn: "Premier League", tier: 1, patterns: ["epl", "premier league", "english premier league"] },
+  { key: "epl", categoryKey: "domesticLeagues", label: "英超", labelEn: "Premier League", tier: 1, patterns: ["epl-", "premier league", "english premier league"] },
   { key: "la-liga", categoryKey: "domesticLeagues", label: "西甲", labelEn: "La Liga", tier: 1, patterns: ["la liga", "laliga"] },
   { key: "serie-a", categoryKey: "domesticLeagues", label: "意甲", labelEn: "Serie A", tier: 1, patterns: ["serie a", "italy-serie-a"] },
   { key: "bundesliga", categoryKey: "domesticLeagues", label: "德甲", labelEn: "Bundesliga", tier: 1, patterns: ["bundesliga"] },
@@ -714,7 +736,8 @@ function shouldIncludePolymarketSoccerGame(event = {}, nowMs = Date.now()) {
     status: event.closed ? "STATUS_FINAL" : "STATUS_SCHEDULED"
   }, nowMs)) return false;
   const competition = classifySoccerCompetition(event);
-  return competition.authoritative || soccerEventVolume(event) >= POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME;
+  if (competition.authoritative) return true;
+  return POLYMARKET_INCLUDE_OTHER_SOCCER && soccerEventVolume(event) >= POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME;
 }
 
 function soccerCompetitionSummaryFromMatches(matches = []) {
@@ -15552,7 +15575,7 @@ async function buildDashboard({
         ok: polymarket.soccerEvents?.ok !== false,
         lastUpdated: polymarket.soccerEvents?.lastUpdated || "",
         error: polymarket.soccerEvents?.error,
-        detail: `${soccerCompetitions.categoryCount || 0} 个分类 · ${soccerCompetitions.matchCount || 0} 场当前窗口比赛 · Polymarket games 可见 ${polymarket.soccerEvents?.visibleGameCount || 0} 场`
+        detail: `${soccerCompetitions.categoryCount || 0} 个分类 · ${soccerCompetitions.matchCount || 0} 场当前窗口比赛 · 权威白名单可见 ${polymarket.soccerEvents?.visibleGameCount || 0} 场`
       },
       {
         source: "本届赛会趋势",

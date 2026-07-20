@@ -4453,10 +4453,10 @@
         if (!categories.length) return `<div class="confidence-note">${escapeHtml(labels.competitionEmpty)}</div>`;
         const allCount = summary.matchCount || (data?.matches || []).length || 0;
         const categoryButtons = [
-          `<button class="competition-chip ${selectedCompetitionCategory === "all" ? "active" : ""}" type="button" data-competition-category="all">${escapeHtml(labels.allCategories)}<small>${escapeHtml(allCount)}</small></button>`,
+          `<button class="competition-chip ${selectedCompetitionCategory === "all" ? "active" : ""}" type="button" data-competition-category="all">${escapeHtml(labels.allCategories)}<small>· ${escapeHtml(allCount)}</small></button>`,
           ...categories.map((category) => {
             const label = currentLang === "en" ? category.labelEn || category.label : category.label || category.labelEn;
-            return `<button class="competition-chip ${selectedCompetitionCategory === category.key ? "active" : ""}" type="button" data-competition-category="${escapeHtml(category.key)}">${escapeHtml(label)}<small>${escapeHtml(category.matchCount || 0)}</small></button>`;
+            return `<button class="competition-chip ${selectedCompetitionCategory === category.key ? "active" : ""}" type="button" data-competition-category="${escapeHtml(category.key)}">${escapeHtml(label)}<small>· ${escapeHtml(category.matchCount || 0)}</small></button>`;
           })
         ].join("");
         const visibleCategories = selectedCompetitionCategory === "all"
@@ -4464,10 +4464,10 @@
           : categories.filter((category) => category.key === selectedCompetitionCategory);
         const competitions = visibleCategories.flatMap((category) => category.competitions || []);
         const competitionButtons = [
-          `<button class="competition-chip ${selectedCompetitionKey === "all" ? "active" : ""}" type="button" data-competition-key="all">${escapeHtml(labels.allCompetitions)}<small>${escapeHtml(competitions.reduce((sum, item) => sum + Number(item.matchCount || 0), 0) || allCount)}</small></button>`,
+          `<button class="competition-chip ${selectedCompetitionKey === "all" ? "active" : ""}" type="button" data-competition-key="all">${escapeHtml(labels.allCompetitions)}<small>· ${escapeHtml(competitions.reduce((sum, item) => sum + Number(item.matchCount || 0), 0) || allCount)}</small></button>`,
           ...competitions.map((competition) => {
             const label = currentLang === "en" ? competition.labelEn || competition.label : competition.label || competition.labelEn;
-            return `<button class="competition-chip ${selectedCompetitionKey === competition.key ? "active" : ""}" type="button" data-competition-key="${escapeHtml(competition.key)}">${escapeHtml(label)}<small>${escapeHtml(competition.matchCount || 0)}</small></button>`;
+            return `<button class="competition-chip ${selectedCompetitionKey === competition.key ? "active" : ""}" type="button" data-competition-key="${escapeHtml(competition.key)}">${escapeHtml(label)}<small>· ${escapeHtml(competition.matchCount || 0)}</small></button>`;
           })
         ].join("");
         return `
