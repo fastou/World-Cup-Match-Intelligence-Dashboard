@@ -483,6 +483,49 @@
         display: block;
       }
 
+      .competition-filters {
+        display: grid;
+        gap: 9px;
+        margin: 0 0 14px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfa;
+      }
+
+      .competition-filter-row {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+
+      .competition-chip {
+        flex: 0 0 auto;
+        min-height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 760;
+      }
+
+      .competition-chip.active {
+        border-color: #1f6b54;
+        background: #e8f2ee;
+        color: var(--green);
+      }
+
+      .competition-chip small {
+        margin-left: 6px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+      }
+
       .match-switcher {
         display: flex;
         gap: 8px;
@@ -3155,6 +3198,7 @@
             <h2 id="matchesTitle">未来三天比赛与模型信号</h2>
             <div class="last-update" id="lastUpdate"></div>
           </div>
+          <div id="competitionFilters" class="competition-filters"></div>
           <div id="matches" class="match-grid"></div>
         </section>
 
@@ -3215,14 +3259,17 @@
     <script>
       const APP_LABELS = {
         zh: {
-          appTitle: "世界杯 AI分析平台",
+          appTitle: "足球赛事 AI分析平台",
           loading: "加载中",
           refreshTitle: "刷新数据",
-          matchesTitle: "未来三天比赛与模型信号",
+          matchesTitle: "足球赛事与模型信号",
           sourcesTitle: "数据源状态",
-          marketsTitle: "世界杯市场池",
-          eliteTitle: "世界杯账号 Top 10",
+          marketsTitle: "足球市场池",
+          eliteTitle: "足球账号监控",
           methodTitle: "研究方法",
+          allCategories: "全部分类",
+          allCompetitions: "全部赛事",
+          competitionEmpty: "当前没有可筛选的足球赛事分类。",
           opportunityLabel: "机会雷达",
           opportunityTitle: "AI 机会雷达",
           opportunityMetaEmpty: "每小时扫描一次；只展示未过期机会。",
@@ -3231,7 +3278,7 @@
           opportunityReviewTab: "预测复盘",
           opportunityEliteTab: "高手账号",
           opportunityReviewEmpty: "还没有可复盘的完赛预测。赛果入库后会显示。",
-          opportunityEliteEmpty: "暂未筛到世界杯账号样本。",
+          opportunityEliteEmpty: "暂未筛到足球账号样本。",
           methodItems: [
             ["概率差", "模型概率与公开价格差异超过阈值时标记"],
             ["置信度", "阵容、伤停、天气和新闻越完整，信号越可靠"],
@@ -3242,14 +3289,17 @@
           methodNote: "页面给的是比赛研究信号和概率辅助。实时源失败时会明确显示，不会隐藏为正常数据。"
         },
         en: {
-          appTitle: "World Cup Match Intelligence Dashboard",
+          appTitle: "Soccer Match Intelligence Dashboard",
           loading: "Loading",
           refreshTitle: "Refresh data",
-          matchesTitle: "Next Three Days: Matches and Model Signals",
+          matchesTitle: "Soccer Matches and Model Signals",
           sourcesTitle: "Data Sources",
-          marketsTitle: "World Cup Market Pool",
-          eliteTitle: "World Cup Accounts Top 10",
+          marketsTitle: "Soccer Market Pool",
+          eliteTitle: "Soccer Account Monitor",
           methodTitle: "Research Method",
+          allCategories: "All categories",
+          allCompetitions: "All competitions",
+          competitionEmpty: "No soccer competition category is available yet.",
           opportunityLabel: "Radar",
           opportunityTitle: "AI Opportunity Radar",
           opportunityMetaEmpty: "Scans hourly; only active items are shown.",
@@ -3258,7 +3308,7 @@
           opportunityReviewTab: "Review",
           opportunityEliteTab: "Elite Accounts",
           opportunityReviewEmpty: "No settled forecast is available yet. Reviews appear after results are recorded.",
-          opportunityEliteEmpty: "No World Cup account sample is available yet.",
+          opportunityEliteEmpty: "No soccer account sample is available yet.",
           methodItems: [
             ["Probability Gap", "Flag outcomes when model probability differs from public prices."],
             ["Confidence", "Lineups, injuries, weather, and news improve signal reliability."],
@@ -3271,10 +3321,12 @@
       };
 
       const UI_TRANSLATIONS = {
-        "世界杯 AI分析平台": "World Cup Match Intelligence Dashboard",
+        "世界杯 AI分析平台": "Soccer Match Intelligence Dashboard",
+        "足球赛事 AI分析平台": "Soccer Match Intelligence Dashboard",
         "加载中": "Loading",
         "今日比赛与模型信号": "Today’s Matches and Model Signals",
         "未来三天比赛与模型信号": "Next Three Days: Matches and Model Signals",
+        "足球赛事与模型信号": "Soccer Matches and Model Signals",
         "自动基线": "Auto Baseline",
         "赛程自动基线": "Schedule Auto Baseline",
         "已纳入三天赛程窗口，并用保守球队评分生成基础概率。": "Included in the three-day schedule window with conservative team-rating baseline probabilities.",
@@ -3283,8 +3335,9 @@
         "比赛状态": "Match status",
         "待确认": "Pending",
         "数据源状态": "Data Sources",
-        "世界杯市场池": "World Cup Market Pool",
-        "足球表现 Top 100": "World Cup Accounts Top 10",
+        "世界杯市场池": "Soccer Market Pool",
+        "足球市场池": "Soccer Market Pool",
+        "足球表现 Top 100": "Soccer Accounts Top 100",
         "研究方法": "Research Method",
         "机会雷达": "Radar",
         "AI 机会雷达": "AI Opportunity Radar",
@@ -3538,6 +3591,8 @@
 
       let currentLang = localStorage.getItem("worldcup-dashboard-lang") || "zh";
       let currentDashboard = null;
+      let selectedCompetitionCategory = "all";
+      let selectedCompetitionKey = "all";
       let currentOpportunities = { meta: {}, items: [] };
       let currentOpportunityTab = "current";
       let currentOpportunityReview = { meta: {}, totals: {}, items: [] };
@@ -4255,6 +4310,141 @@
         if (matchDates.length === 1) return matchDates[0];
         return `${matchDates[0]} - ${matchDates[matchDates.length - 1]}`;
       };
+
+      const competitionFallback = {
+        key: "world-cup",
+        label: "世界杯",
+        labelEn: "FIFA World Cup",
+        categoryKey: "international",
+        categoryLabel: "国家队大赛",
+        categoryLabelEn: "International tournaments"
+      };
+
+      const matchCompetition = (match = {}) => match.competition || competitionFallback;
+
+      const competitionText = (competition = {}) => {
+        if (currentLang === "en") return competition.labelEn || competition.label || "Soccer";
+        return competition.label || competition.labelEn || "足球赛事";
+      };
+
+      function deriveCompetitionSummaryFromMatches(matches = []) {
+        const byCategory = new Map();
+        for (const match of matches || []) {
+          const competition = matchCompetition(match);
+          const categoryKey = competition.categoryKey || "other-soccer";
+          if (!byCategory.has(categoryKey)) {
+            byCategory.set(categoryKey, {
+              key: categoryKey,
+              label: competition.categoryLabel || "其他足球赛事",
+              labelEn: competition.categoryLabelEn || "Other soccer",
+              matchCount: 0,
+              competitions: new Map()
+            });
+          }
+          const category = byCategory.get(categoryKey);
+          category.matchCount += 1;
+          const compKey = competition.key || "unknown";
+          if (!category.competitions.has(compKey)) {
+            category.competitions.set(compKey, {
+              key: compKey,
+              label: competition.label || "足球赛事",
+              labelEn: competition.labelEn || "Soccer",
+              categoryKey,
+              matchCount: 0,
+              totalVolume: 0
+            });
+          }
+          const comp = category.competitions.get(compKey);
+          comp.matchCount += 1;
+          comp.totalVolume += Number(competition.eventVolume || 0);
+        }
+        const categories = [...byCategory.values()].map((category) => ({
+          ...category,
+          competitions: [...category.competitions.values()].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0))
+        }));
+        return {
+          ok: true,
+          matchCount: (matches || []).length,
+          categoryCount: categories.length,
+          categories
+        };
+      }
+
+      function competitionSummary(data = currentDashboard) {
+        const provided = data?.soccerCompetitions;
+        if (provided?.categories?.length) return provided;
+        return deriveCompetitionSummaryFromMatches(data?.matches || []);
+      }
+
+      function allCompetitionKeys(summary) {
+        return new Set((summary?.categories || []).flatMap((category) => [
+          category.key,
+          ...(category.competitions || []).map((competition) => competition.key)
+        ]).filter(Boolean));
+      }
+
+      function normalizeCompetitionSelection(data = currentDashboard) {
+        const summary = competitionSummary(data);
+        const keys = allCompetitionKeys(summary);
+        if (selectedCompetitionCategory !== "all" && !keys.has(selectedCompetitionCategory)) {
+          selectedCompetitionCategory = "all";
+          selectedCompetitionKey = "all";
+        }
+        if (selectedCompetitionKey !== "all" && !keys.has(selectedCompetitionKey)) {
+          selectedCompetitionKey = "all";
+        }
+        if (selectedCompetitionKey !== "all") {
+          const owningCategory = (summary.categories || []).find((category) =>
+            (category.competitions || []).some((competition) => competition.key === selectedCompetitionKey)
+          );
+          if (owningCategory && selectedCompetitionCategory !== "all" && selectedCompetitionCategory !== owningCategory.key) {
+            selectedCompetitionKey = "all";
+          }
+        }
+      }
+
+      function matchesForCompetition(matches = []) {
+        return visibleMatchWindowMatches(matches).filter((match) => {
+          const competition = matchCompetition(match);
+          const categoryOk = selectedCompetitionCategory === "all" || competition.categoryKey === selectedCompetitionCategory;
+          const competitionOk = selectedCompetitionKey === "all" || competition.key === selectedCompetitionKey;
+          return categoryOk && competitionOk;
+        });
+      }
+
+      function renderCompetitionFilters(data = currentDashboard) {
+        const labels = APP_LABELS[currentLang];
+        const summary = competitionSummary(data);
+        const categories = summary.categories || [];
+        if (!categories.length) return `<div class="confidence-note">${escapeHtml(labels.competitionEmpty)}</div>`;
+        const allCount = summary.matchCount || (data?.matches || []).length || 0;
+        const categoryButtons = [
+          `<button class="competition-chip ${selectedCompetitionCategory === "all" ? "active" : ""}" type="button" data-competition-category="all">${escapeHtml(labels.allCategories)}<small>${escapeHtml(allCount)}</small></button>`,
+          ...categories.map((category) => {
+            const label = currentLang === "en" ? category.labelEn || category.label : category.label || category.labelEn;
+            return `<button class="competition-chip ${selectedCompetitionCategory === category.key ? "active" : ""}" type="button" data-competition-category="${escapeHtml(category.key)}">${escapeHtml(label)}<small>${escapeHtml(category.matchCount || 0)}</small></button>`;
+          })
+        ].join("");
+        const visibleCategories = selectedCompetitionCategory === "all"
+          ? categories
+          : categories.filter((category) => category.key === selectedCompetitionCategory);
+        const competitions = visibleCategories.flatMap((category) => category.competitions || []);
+        const competitionButtons = [
+          `<button class="competition-chip ${selectedCompetitionKey === "all" ? "active" : ""}" type="button" data-competition-key="all">${escapeHtml(labels.allCompetitions)}<small>${escapeHtml(competitions.reduce((sum, item) => sum + Number(item.matchCount || 0), 0) || allCount)}</small></button>`,
+          ...competitions.map((competition) => {
+            const label = currentLang === "en" ? competition.labelEn || competition.label : competition.label || competition.labelEn;
+            return `<button class="competition-chip ${selectedCompetitionKey === competition.key ? "active" : ""}" type="button" data-competition-key="${escapeHtml(competition.key)}">${escapeHtml(label)}<small>${escapeHtml(competition.matchCount || 0)}</small></button>`;
+          })
+        ].join("");
+        return `
+          <div class="competition-filter-row" role="tablist" aria-label="${escapeHtml(currentLang === "en" ? "Competition categories" : "赛事分类")}">
+            ${categoryButtons}
+          </div>
+          <div class="competition-filter-row" role="tablist" aria-label="${escapeHtml(currentLang === "en" ? "Competitions" : "具体赛事")}">
+            ${competitionButtons}
+          </div>
+        `;
+      }
 
       const fmtTime = (value) => {
         if (!value) return "-";
@@ -5209,7 +5399,7 @@
       function renderPolymarket(polymarket) {
         const root = document.getElementById("polymarket");
         if (!polymarket || !polymarket.ok) {
-          root.innerHTML = `<div class="error">Polymarket 实时源不可用：${escapeHtml(polymarket?.error || "未知错误")}。本机网络当前无法直连 Polymarket API；部署到可访问 Polymarket 的服务器后会显示真实曲线。</div>`;
+          root.innerHTML = `<div class="error">Polymarket 实时源不可用：${escapeHtml(polymarket?.error || "未知错误")}。请刷新或等待服务器下一轮同步；页面不会把缺失数据显示成正常盘口。</div>`;
           return;
         }
         const markets = Array.isArray(polymarket.markets) ? polymarket.markets : [];
@@ -5233,7 +5423,7 @@
           return `
             <div class="market-item">
               <div class="market-question">${escapeHtml(market.question)}</div>
-              <div class="market-meta">成交量 ${Math.round(market.volume || 0).toLocaleString()} · 流动性 ${Math.round(market.liquidity || 0).toLocaleString()}</div>
+              <div class="market-meta">${escapeHtml(market.competition ? competitionText(market.competition) : "Soccer")} · 成交量 ${Math.round(market.volume || 0).toLocaleString()} · 流动性 ${Math.round(market.liquidity || 0).toLocaleString()}</div>
               ${tokenRows ? `<div class="token-list">${tokenRows}</div>` : '<div class="empty">这个市场没有可画曲线的 token。</div>'}
             </div>
           `;
@@ -5245,13 +5435,13 @@
         const root = document.getElementById("eliteTraders");
         if (!root) return;
         if (!eliteTraders || !eliteTraders.ok) {
-          root.innerHTML = `<div class="error">世界杯账号不可用：${escapeHtml(eliteTraders?.error || "等待服务器同步")}。</div>`;
+          root.innerHTML = `<div class="error">足球账号监控不可用：${escapeHtml(eliteTraders?.error || "等待服务器同步")}。</div>`;
           return;
         }
         const traders = eliteTraders.traders || [];
         const watchlist = eliteTraders.watchlist || [];
         if (!traders.length && !watchlist.length) {
-          root.innerHTML = '<div class="empty">暂未筛到世界杯账号样本。</div>';
+          root.innerHTML = '<div class="empty">暂未筛到足球账号样本。</div>';
           return;
         }
         const renderEliteMiniCard = (trader, index, watch = false) => {
@@ -6798,15 +6988,19 @@
           ...match.homeTeam.watchItems.map((item) => [`${homeName(match)}`, item]),
           ...match.awayTeam.watchItems.map((item) => [`${awayName(match)}`, item])
         ];
+        const competitionName = competitionText(matchCompetition(match));
+        const badgeText = match.autoBaseline
+          ? (match.autoBaselineSource === "polymarket-soccer-games" ? competitionName : "赛程自动基线")
+          : `第 ${match.matchday} 比赛日`;
 
         return `
           <article class="match-card" data-match="${escapeHtml(match.id)}">
             <div class="match-header">
               <div class="teams">
                 <h3>${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</h3>
-                <div class="meta-line">${escapeHtml(match.group)} 组 · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
+                <div class="meta-line">${escapeHtml(competitionName)} · ${escapeHtml(match.venue)} · 北京时间 ${fmtTime(match.kickoffShanghai)}</div>
               </div>
-              <span class="badge">${match.autoBaseline ? "赛程自动基线" : `第 ${escapeHtml(match.matchday)} 比赛日`}</span>
+              <span class="badge">${escapeHtml(badgeText)}</span>
             </div>
 
             ${renderAiPrediction(match)}
@@ -6904,11 +7098,11 @@
       }
 
       function renderMatchTabs(matches) {
-        const windowMatches = visibleMatchWindowMatches(matches);
+        const windowMatches = matchesForCompetition(matches);
         if (!windowMatches.length) {
           return `<div class="empty">${escapeHtml(currentLang === "en"
-            ? "No visible match is available in the three-day window."
-            : "当前三天窗口没有可显示的比赛。")}</div>`;
+            ? "No visible match is available for this competition filter."
+            : "当前赛事筛选下没有可显示的比赛。")}</div>`;
         }
         const windowDateLabel = matchWindowDateLabel(windowMatches);
         const tabs = windowMatches.map((match, index) => {
@@ -6919,7 +7113,7 @@
           return `
           <button class="match-tab ${index === 0 ? "active" : ""}" data-match-tab="${escapeHtml(match.id)}" type="button">
             <span class="match-tab-title">${escapeHtml(homeName(match))} vs ${escapeHtml(awayName(match))}</span>
-            <span class="match-tab-meta">${escapeHtml(statusLabel)} · ${fmtTime(match.kickoffShanghai)}</span>
+            <span class="match-tab-meta">${escapeHtml(competitionText(matchCompetition(match)))} · ${escapeHtml(statusLabel)} · ${fmtTime(match.kickoffShanghai)}</span>
           </button>
         `;
         }).join("");
@@ -6931,7 +7125,7 @@
         `).join("");
 
         return `
-          <div class="confidence-note">${escapeHtml(currentLang === "en" ? "Three-day fixture window" : "三天赛程窗口")} · ${windowMatches.length} ${escapeHtml(currentLang === "en" ? "matches" : "场")} · ${escapeHtml(windowDateLabel)}</div>
+          <div class="confidence-note">${escapeHtml(currentLang === "en" ? "Current competition filter" : "当前赛事筛选")} · ${windowMatches.length} ${escapeHtml(currentLang === "en" ? "matches" : "场")} · ${escapeHtml(windowDateLabel)}</div>
           <div class="match-switcher" role="tablist" aria-label="比赛切换">
             ${tabs}
           </div>
@@ -6952,6 +7146,40 @@
             });
             drawBigCharts(root);
             refreshVisibleLiveMatch();
+          });
+        });
+      }
+
+      function rerenderCompetitionMatches() {
+        normalizeCompetitionSelection(currentDashboard);
+        document.getElementById("competitionFilters").innerHTML = renderCompetitionFilters(currentDashboard);
+        document.getElementById("matches").innerHTML = renderMatchTabs(currentDashboard?.matches || []);
+        translateRenderedContent(document.getElementById("matches"));
+        wireCompetitionFilters();
+        wireMatchTabs();
+        wireTabs();
+        wireLivePanels();
+        wireOddsTabs();
+        wireRecommendationRows();
+        drawSparklines(document.getElementById("matches"));
+        drawBigCharts(document.getElementById("matches"));
+        refreshVisibleLiveMatch();
+      }
+
+      function wireCompetitionFilters() {
+        const root = document.getElementById("competitionFilters");
+        if (!root) return;
+        root.querySelectorAll("[data-competition-category]").forEach((button) => {
+          button.addEventListener("click", () => {
+            selectedCompetitionCategory = button.dataset.competitionCategory || "all";
+            selectedCompetitionKey = "all";
+            rerenderCompetitionMatches();
+          });
+        });
+        root.querySelectorAll("[data-competition-key]").forEach((button) => {
+          button.addEventListener("click", () => {
+            selectedCompetitionKey = button.dataset.competitionKey || "all";
+            rerenderCompetitionMatches();
           });
         });
       }
@@ -7127,6 +7355,7 @@
 
       function renderDashboard(data) {
         currentDashboard = data;
+        normalizeCompetitionSelection(data);
         applyLanguageStatic();
         document.getElementById("subhead").textContent = currentLang === "en"
           ? `${data.meta.tournament} · ${data.meta.timezone}`
@@ -7137,9 +7366,11 @@
         renderSources(data.sources);
         renderPolymarket(data.polymarket);
         renderEliteTradersPanel(data.eliteTraders);
+        document.getElementById("competitionFilters").innerHTML = renderCompetitionFilters(data);
         document.getElementById("matches").innerHTML = renderMatchTabs(data.matches);
         translateRenderedContent(document.body);
         wirePositionManagerDelegates();
+        wireCompetitionFilters();
         wireMatchTabs();
         wireTabs();
         wireLivePanels();

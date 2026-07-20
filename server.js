@@ -55,6 +55,10 @@ const POLYMARKET_HISTORY_BATCH_SIZE = 20;
 const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = Number(process.env.POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT || 180);
 const POLYMARKET_DERIVATIVE_EVENT_LIMIT = Number(process.env.POLYMARKET_DERIVATIVE_EVENT_LIMIT || 100);
 const POLYMARKET_PLAYER_PROP_MARKET_LIMIT_PER_EVENT = Number(process.env.POLYMARKET_PLAYER_PROP_MARKET_LIMIT_PER_EVENT || 40);
+const POLYMARKET_SOCCER_EVENT_LIMIT = Number(process.env.POLYMARKET_SOCCER_EVENT_LIMIT || 240);
+const POLYMARKET_SOCCER_GAME_EVENT_LIMIT = Number(process.env.POLYMARKET_SOCCER_GAME_EVENT_LIMIT || 240);
+const POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT = Number(process.env.POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT || 40);
+const POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME = Number(process.env.POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME || 10000);
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
@@ -523,6 +527,243 @@ const NON_SOCCER_POSITION_KEYWORDS = [
   "f1",
   "golf"
 ];
+
+const SOCCER_COMPETITION_CATEGORIES = {
+  international: { key: "international", label: "国家队大赛", labelEn: "International tournaments", order: 1 },
+  europeanClub: { key: "european-club", label: "欧洲俱乐部赛事", labelEn: "European club competitions", order: 2 },
+  domesticLeagues: { key: "domestic-leagues", label: "主流国内联赛", labelEn: "Major domestic leagues", order: 3 },
+  americas: { key: "americas", label: "美洲赛事", labelEn: "Americas competitions", order: 4 },
+  other: { key: "other-soccer", label: "其他高流动性足球", labelEn: "Other liquid soccer", order: 9 }
+};
+
+const SOCCER_COMPETITION_DEFINITIONS = [
+  { key: "world-cup", categoryKey: "international", label: "世界杯", labelEn: "FIFA World Cup", tier: 1, patterns: ["fifwc", "fifa world cup", "world cup", "fifa-world-cup"] },
+  { key: "euro", categoryKey: "international", label: "欧洲杯", labelEn: "UEFA Euro", tier: 1, patterns: ["uefa euro", "euro 202", "euro-", "european championship"] },
+  { key: "copa-america", categoryKey: "international", label: "美洲杯", labelEn: "Copa America", tier: 1, patterns: ["copa america", "copa-america"] },
+  { key: "uefa-champions-league", categoryKey: "europeanClub", label: "欧冠", labelEn: "UEFA Champions League", tier: 1, patterns: ["ucl", "champions league", "uefa champions league"] },
+  { key: "uefa-europa-league", categoryKey: "europeanClub", label: "欧联杯", labelEn: "UEFA Europa League", tier: 1, patterns: ["uel", "uefa europa league", "europa league", "uefa-europa-league"] },
+  { key: "uefa-conference-league", categoryKey: "europeanClub", label: "欧协联", labelEn: "UEFA Conference League", tier: 2, patterns: ["conference league", "uefa conference", "uecl"] },
+  { key: "epl", categoryKey: "domesticLeagues", label: "英超", labelEn: "Premier League", tier: 1, patterns: ["epl", "premier league", "english premier league"] },
+  { key: "la-liga", categoryKey: "domesticLeagues", label: "西甲", labelEn: "La Liga", tier: 1, patterns: ["la liga", "laliga"] },
+  { key: "serie-a", categoryKey: "domesticLeagues", label: "意甲", labelEn: "Serie A", tier: 1, patterns: ["serie a", "italy-serie-a"] },
+  { key: "bundesliga", categoryKey: "domesticLeagues", label: "德甲", labelEn: "Bundesliga", tier: 1, patterns: ["bundesliga"] },
+  { key: "ligue-1", categoryKey: "domesticLeagues", label: "法甲", labelEn: "Ligue 1", tier: 1, patterns: ["ligue 1", "ligue-1"] },
+  { key: "mls", categoryKey: "americas", label: "MLS", labelEn: "MLS", tier: 2, patterns: ["mls", "major league soccer"] },
+  { key: "liga-mx", categoryKey: "americas", label: "墨西哥联赛", labelEn: "Liga MX", tier: 2, patterns: ["liga mx", "liga-mx"] },
+  { key: "libertadores", categoryKey: "americas", label: "解放者杯", labelEn: "Copa Libertadores", tier: 1, patterns: ["libertadores", "copa libertadores"] },
+  { key: "sudamericana", categoryKey: "americas", label: "南美杯", labelEn: "Copa Sudamericana", tier: 2, patterns: ["sudamericana", "copa sudamericana"] },
+  { key: "concacaf", categoryKey: "americas", label: "中北美赛事", labelEn: "CONCACAF", tier: 2, patterns: ["concacaf"] }
+];
+
+const NON_MATCH_SOCCER_EVENT_KEYWORDS = [
+  "ballon d'or",
+  "golden boot",
+  "defender of the year",
+  "player of the year",
+  "players' player",
+  "transfer",
+  "president",
+  "photo",
+  "shake hands",
+  "manager",
+  "coach",
+  "top scorer",
+  "winner 202",
+  "champion 202",
+  "cup winner"
+];
+
+function soccerEventTags(event = {}) {
+  return (Array.isArray(event.tags) ? event.tags : [])
+    .map((tag) => String(tag?.slug || tag?.label || tag || "").toLowerCase().trim())
+    .filter(Boolean);
+}
+
+function soccerEventText(event = {}) {
+  return [
+    event.title,
+    event.slug,
+    event.description,
+    event.seriesSlug,
+    event.category,
+    event.subCategory,
+    event.eventTitle,
+    event.eventSlug,
+    event.sportsMarketType,
+    ...soccerEventTags(event)
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function titleCaseFromSlug(value) {
+  return String(value || "")
+    .replace(/\b20\d{2}\b/g, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || "Soccer";
+}
+
+function classifySoccerCompetition(raw = {}) {
+  const text = soccerEventText(raw);
+  const found = SOCCER_COMPETITION_DEFINITIONS.find((definition) =>
+    (definition.patterns || []).some((pattern) => text.includes(String(pattern).toLowerCase()))
+  );
+  const categoryKey = found?.categoryKey || "other";
+  const category = SOCCER_COMPETITION_CATEGORIES[categoryKey] || SOCCER_COMPETITION_CATEGORIES.other;
+  if (found) {
+    return {
+      key: found.key,
+      label: found.label,
+      labelEn: found.labelEn,
+      categoryKey: category.key,
+      categoryLabel: category.label,
+      categoryLabelEn: category.labelEn,
+      categoryOrder: category.order,
+      tier: found.tier,
+      authoritative: found.tier <= 2,
+      seriesSlug: raw.seriesSlug || ""
+    };
+  }
+  const seriesSlug = String(raw.seriesSlug || raw.slug || "").toLowerCase();
+  const derived = seriesSlug ? titleCaseFromSlug(seriesSlug) : "Soccer";
+  return {
+    key: `other-${seriesSlug.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "soccer"}`,
+    label: derived,
+    labelEn: derived,
+    categoryKey: category.key,
+    categoryLabel: category.label,
+    categoryLabelEn: category.labelEn,
+    categoryOrder: category.order,
+    tier: 5,
+    authoritative: false,
+    seriesSlug: raw.seriesSlug || ""
+  };
+}
+
+function isSoccerTaggedEvent(event = {}) {
+  const text = soccerEventText(event);
+  if (!text || NON_SOCCER_POSITION_KEYWORDS.some((keyword) => text.includes(keyword))) return false;
+  const tags = soccerEventTags(event);
+  return tags.includes("soccer")
+    || tags.includes("football")
+    || SOCCER_POSITION_KEYWORDS.some((keyword) => text.includes(keyword));
+}
+
+function baseSoccerEventSlug(slug) {
+  return String(slug || "")
+    .replace(/-more-markets$/, "")
+    .replace(/-exact-score$/, "")
+    .replace(/-player-props$/, "");
+}
+
+function isBaseSoccerGameEvent(event = {}) {
+  const title = String(event.title || "");
+  const slug = String(event.slug || "");
+  const text = soccerEventText(event);
+  const tags = soccerEventTags(event);
+  if (!isSoccerTaggedEvent(event)) return false;
+  if (!tags.includes("games")) return false;
+  if (!/\bvs\.?\b/i.test(title)) return false;
+  if (/-more-markets$|-exact-score$|-player-props$/i.test(slug)) return false;
+  if (NON_MATCH_SOCCER_EVENT_KEYWORDS.some((keyword) => text.includes(keyword))) return false;
+  return true;
+}
+
+function parseTeamsFromSoccerEventTitle(title) {
+  const clean = String(title || "").replace(/\s+-\s+(More Markets|Exact Score|Player Props).*$/i, "").trim();
+  const parts = clean.split(/\s+vs\.?\s+/i).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  return { homeName: parts[0], awayName: parts.slice(1).join(" vs ") };
+}
+
+function dateFromSoccerEventSlug(slug) {
+  const match = String(slug || "").match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (!match) return "";
+  return `${match[1]}-${match[2]}-${match[3]}T12:00:00Z`;
+}
+
+function soccerEventKickoffIso(event = {}) {
+  return event.endDate || event.startDate || dateFromSoccerEventSlug(event.slug) || "";
+}
+
+function polyTeamCode(name) {
+  const ascii = String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9\s]+/g, " ")
+    .trim();
+  const words = ascii.split(/\s+/).filter(Boolean);
+  const initials = words.filter((word) => !/^(fc|cf|sc|cd|club|the|de|da|do|ac|fk|sk)$/i.test(word))
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 5);
+  const fallback = ascii.replace(/[^a-zA-Z0-9]+/g, "").toUpperCase().slice(0, 5);
+  return initials || fallback || "TEAM";
+}
+
+function soccerEventVolume(event = {}) {
+  return Number(event.volume || event.volumeNum || event.volume24hr || event.volume1wk || 0) || 0;
+}
+
+function shouldIncludePolymarketSoccerGame(event = {}, nowMs = Date.now()) {
+  if (!isBaseSoccerGameEvent(event)) return false;
+  const kickoff = soccerEventKickoffIso(event);
+  if (!shouldKeepScheduledMatch(kickoff, {
+    completed: Boolean(event.closed),
+    status: event.closed ? "STATUS_FINAL" : "STATUS_SCHEDULED"
+  }, nowMs)) return false;
+  const competition = classifySoccerCompetition(event);
+  return competition.authoritative || soccerEventVolume(event) >= POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME;
+}
+
+function soccerCompetitionSummaryFromMatches(matches = []) {
+  const byCategory = new Map();
+  for (const match of matches || []) {
+    const competition = match.competition || classifySoccerCompetition({});
+    const categoryKey = competition.categoryKey || "other-soccer";
+    if (!byCategory.has(categoryKey)) {
+      byCategory.set(categoryKey, {
+        key: categoryKey,
+        label: competition.categoryLabel || SOCCER_COMPETITION_CATEGORIES.other.label,
+        labelEn: competition.categoryLabelEn || SOCCER_COMPETITION_CATEGORIES.other.labelEn,
+        order: competition.categoryOrder || 99,
+        matchCount: 0,
+        competitions: new Map()
+      });
+    }
+    const category = byCategory.get(categoryKey);
+    category.matchCount += 1;
+    const compKey = competition.key || "unknown";
+    if (!category.competitions.has(compKey)) {
+      category.competitions.set(compKey, {
+        key: compKey,
+        label: competition.label || "足球赛事",
+        labelEn: competition.labelEn || "Soccer",
+        categoryKey,
+        seriesSlug: competition.seriesSlug || "",
+        matchCount: 0,
+        totalVolume: 0
+      });
+    }
+    const comp = category.competitions.get(compKey);
+    comp.matchCount += 1;
+    comp.totalVolume += Number(match.competition?.eventVolume || 0);
+  }
+  const categories = [...byCategory.values()]
+    .sort((a, b) => (a.order || 99) - (b.order || 99) || String(a.label).localeCompare(String(b.label)))
+    .map((category) => ({
+      ...category,
+      competitions: [...category.competitions.values()].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0))
+    }));
+  return {
+    source: "Polymarket soccer games",
+    ok: true,
+    categoryCount: categories.length,
+    matchCount: (matches || []).length,
+    categories
+  };
+}
 
 function normalizeBasePath(value) {
   if (!value || value === "/") return "";
@@ -9276,6 +9517,167 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
+function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs = Date.now()) {
+  if (!shouldIncludePolymarketSoccerGame(event, nowMs)) return null;
+  const teams = parseTeamsFromSoccerEventTitle(event.title);
+  if (!teams) return null;
+  const competition = event.competition || classifySoccerCompetition(event);
+  const baseSlug = event.baseSlug || baseSoccerEventSlug(event.slug);
+  const key = matchScheduleKey(teams.homeName, teams.awayName);
+  if (modeledKeys.has(key)) return null;
+  if (hasRecordedFinal(`poly-${baseSlug}`, finalResults)) return null;
+
+  const scheduleEvent = {
+    scheduleId: `poly-${baseSlug}`,
+    kickoffUtc: soccerEventKickoffIso(event),
+    status: event.closed ? "STATUS_FINAL" : "STATUS_SCHEDULED",
+    statusDetail: event.closed ? "Closed" : "Polymarket active",
+    completed: Boolean(event.closed),
+    source: "Polymarket soccer games API",
+    stage: competition.label,
+    round: competition.label,
+    roundName: competition.label,
+    home: {
+      code: polyTeamCode(teams.homeName),
+      name: teams.homeName
+    },
+    away: {
+      code: polyTeamCode(teams.awayName),
+      name: teams.awayName
+    },
+    venue: {
+      name: "Polymarket soccer games",
+      city: "",
+      country: ""
+    }
+  };
+
+  const match = scheduleAutoBaselineFromEvent(scheduleEvent, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs);
+  if (!match) return null;
+  match.id = `poly-${baseSlug}`;
+  match.scheduleId = `poly-${baseSlug}`;
+  match.polymarketEventSlug = event.slug || baseSlug;
+  match.polymarketBaseSlug = baseSlug;
+  match.autoBaselineSource = "polymarket-soccer-games";
+  match.group = competition.label;
+  match.stage = competition.label;
+  match.round = competition.label;
+  match.roundName = competition.label;
+  match.phase = competition.label;
+  match.matchday = competition.label;
+  match.competition = {
+    ...competition,
+    eventSlug: event.slug || "",
+    baseSlug,
+    eventUrl: `https://polymarket.com/event/${baseSlug}`,
+    eventVolume: soccerEventVolume(event),
+    source: "Polymarket soccer games"
+  };
+  match.dynamic = {
+    ...(match.dynamic || {}),
+    status: "Polymarket 足球赛事自动基线；球队静态、阵容、伤停和媒体情报未结构化前，全部按低置信观察处理。",
+    injurySummary: "该赛事由 Polymarket games 自动发现；公开伤停/首发尚未进入结构化同步，不开放强信号。",
+    weatherSummary: "未接官方赛地坐标前，天气不参与模型。"
+  };
+  match.context = deepMerge(match.context || {}, {
+    sources: {
+      schedule: {
+        ok: true,
+        updatedAt: new Date().toISOString(),
+        url: `https://polymarket.com/event/${baseSlug}`,
+        source: "Polymarket soccer games",
+        error: ""
+      }
+    }
+  });
+  match.model.manualAdjustments = [
+    {
+      label: "Polymarket 足球赛事发现",
+      impact: `${competition.label} 由 Polymarket soccer/games 事件池自动纳入；缺少俱乐部/国家队静态评分时使用保守 xG，不把市场价直接当模型概率。`
+    },
+    ...(match.model.manualAdjustments || [])
+  ];
+  match.manualMarkets = polymarketMoneylineManualMarkets(match, polymarket, event);
+  match.completeness = buildCompleteness(match, polymarket);
+  match.tradingGate = buildTradingGate(match.completeness);
+  match.recommendations = buildRecommendations(match, match.probabilities);
+  return match;
+}
+
+function polymarketMoneylineManualMarkets(match, polymarket, event = {}) {
+  const base = autoBaselineManualMarkets(match, match.probabilities);
+  const prices = findPolymarketMoneylinePrices(match, polymarket, event);
+  if (!prices || ![prices.home, prices.draw, prices.away].some((value) => Number.isFinite(Number(value)))) return base;
+  return {
+    ...base,
+    moneyline: {
+      ...base.moneyline,
+      ...(Number.isFinite(Number(prices.home)) ? { home: roundTo(Number(prices.home), 4) } : {}),
+      ...(Number.isFinite(Number(prices.draw)) ? { draw: roundTo(Number(prices.draw), 4) } : {}),
+      ...(Number.isFinite(Number(prices.away)) ? { away: roundTo(Number(prices.away), 4) } : {})
+    },
+    source: "Polymarket 胜平负实时价 + 自动基线参考价",
+    sourceType: "auto-baseline",
+    polymarketMoneyline: {
+      sourceType: "polymarket",
+      marketIds: prices.marketIds || [],
+      conditionIds: prices.conditionIds || [],
+      eventSlug: event.slug || match.polymarketEventSlug || "",
+      baseSlug: event.baseSlug || match.polymarketBaseSlug || ""
+    },
+    lastUpdated: new Date().toISOString()
+  };
+}
+
+function findPolymarketMoneylinePrices(match, polymarket, event = {}) {
+  const markets = Array.isArray(polymarket?.markets) ? polymarket.markets : [];
+  if (!markets.length) return null;
+  const homeAliases = teamNameVariants(match.home, match.homeName);
+  const awayAliases = teamNameVariants(match.away, match.awayName);
+  const baseSlug = event.baseSlug || baseSoccerEventSlug(event.slug || match.polymarketBaseSlug);
+  const related = markets.filter((market) => {
+    const text = `${market.question || ""} ${market.slug || ""} ${market.eventTitle || ""} ${market.eventSlug || ""}`.toLowerCase();
+    const sameSlug = baseSlug && baseSoccerEventSlug(market.eventSlug || market.parentEventSlug || market.slug) === baseSlug;
+    const sameTeams = homeAliases.some((alias) => textContainsAlias(text, String(alias || "").toLowerCase().trim()))
+      && awayAliases.some((alias) => textContainsAlias(text, String(alias || "").toLowerCase().trim()));
+    return sameSlug || sameTeams;
+  });
+  const moneyline = related.filter((market) => marketCatalogCategory(market).key === "moneyline");
+  if (!moneyline.length) return null;
+  const pick = (aliases, kind) => {
+    const candidate = moneyline.find((market) => {
+      const core = `${market.question || ""} ${market.slug || ""} ${market.sportsMarketType || ""}`.toLowerCase();
+      if (kind === "draw") return /\bdraw\b|end in a draw|平局/.test(core);
+      return aliasesMatchText(aliases, core) && !/\bdraw\b|end in a draw|平局/.test(core);
+    }) || moneyline.find((market) => {
+      if (kind === "draw") return (market.tokens || []).some((token) => String(token.label || "").toLowerCase().includes("draw"));
+      return (market.tokens || []).some((token) => aliasesMatchText(aliases, token.label));
+    });
+    if (!candidate) return null;
+    const token = (candidate.tokens || []).find((item) => /^yes$/i.test(String(item.label || "")))
+      || (kind === "draw"
+        ? (candidate.tokens || []).find((item) => String(item.label || "").toLowerCase().includes("draw"))
+        : (candidate.tokens || []).find((item) => aliasesMatchText(aliases, item.label)))
+      || (candidate.tokens || [])[0];
+    if (!token || !Number.isFinite(Number(token.currentPrice))) return null;
+    return {
+      price: Number(token.currentPrice),
+      marketId: candidate.id || "",
+      conditionId: candidate.conditionId || ""
+    };
+  };
+  const home = pick(homeAliases, "home");
+  const draw = pick([], "draw");
+  const away = pick(awayAliases, "away");
+  return {
+    home: home?.price,
+    draw: draw?.price,
+    away: away?.price,
+    marketIds: [home?.marketId, draw?.marketId, away?.marketId].filter(Boolean),
+    conditionIds: [home?.conditionId, draw?.conditionId, away?.conditionId].filter(Boolean)
+  };
+}
+
 function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
@@ -9288,7 +9690,20 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
   const autoBaseline = (schedule.matches || [])
     .map((event) => scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs))
     .filter(Boolean);
-  const combined = [...visibleModeled, ...autoBaseline]
+  const modeledAndScheduleKeys = new Set([
+    ...modeledKeys,
+    ...autoBaseline.map((match) => matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName))
+  ]);
+  const polymarketAutoBaseline = (polymarket?.soccerEvents?.events || [])
+    .filter((event) => shouldIncludePolymarketSoccerGame(event, nowMs))
+    .sort((a, b) => (dateMs(soccerEventKickoffIso(a)) || 0) - (dateMs(soccerEventKickoffIso(b)) || 0) || soccerEventVolume(b) - soccerEventVolume(a))
+    .slice(0, POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT)
+    .map((event) => polymarketSoccerAutoBaselineFromEvent(event, modeledAndScheduleKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs))
+    .filter(Boolean);
+  for (const match of polymarketAutoBaseline) {
+    modeledAndScheduleKeys.add(matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName));
+  }
+  const combined = [...visibleModeled, ...autoBaseline, ...polymarketAutoBaseline]
     .sort((a, b) => (dateMs(a.kickoffShanghai) || 0) - (dateMs(b.kickoffShanghai) || 0));
 
   return {
@@ -9301,6 +9716,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
       modeledTotal: matches.length,
       modeledVisible: visibleModeled.length,
       autoBaseline: autoBaseline.length,
+      polymarketAutoBaseline: polymarketAutoBaseline.length,
       hiddenModeled: matches.length - visibleModeled.length,
       completedResults: finalResults.size,
       source: schedule.source,
@@ -11977,11 +12393,13 @@ async function fetchPolymarket(schedule = null) {
   const searches = buildPolymarketSearches(schedule);
   const eventSlugSearches = buildPolymarketEventSlugSearches(schedule);
   const sportsPageSearches = eventSlugSearches;
-  const [eventSlugResults, sportsPageResults, searchResults] = await Promise.all([
+  const [eventSlugResults, sportsPageResults, searchResults, soccerEvents] = await Promise.all([
     Promise.all(eventSlugSearches.map((search) => fetchPolymarketEventSlug(search))),
     Promise.all(sportsPageSearches.map((search) => fetchPolymarketSportsPageMarkets(search))),
-    Promise.all(searches.map((search) => fetchPolymarketSearch(search)))
+    Promise.all(searches.map((search) => fetchPolymarketSearch(search))),
+    fetchPolymarketSoccerEvents()
   ]);
+  const soccerEventResult = polymarketSoccerEventsToMarketResult(soccerEvents);
   const derivativeResults = await mapLimit(
     buildPolymarketDerivativeSearches(eventSlugResults),
     4,
@@ -11991,9 +12409,10 @@ async function fetchPolymarket(schedule = null) {
     ...eventSlugResults,
     ...derivativeResults,
     ...sportsPageResults,
+    soccerEventResult,
     ...searchResults.filter((result) => !result.worldCupOnly),
     ...searchResults.filter((result) => result.worldCupOnly)
-  ];
+  ].filter(Boolean);
   const results = prioritizedResults;
   const firstOk = results.find((result) => result.ok);
   if (!firstOk) {
@@ -12036,7 +12455,196 @@ async function fetchPolymarket(schedule = null) {
       error: result.error
     })),
     historySource: history,
+    soccerEvents: soccerEvents.ok ? {
+      ok: true,
+      source: soccerEvents.source,
+      url: soccerEvents.url,
+      lastUpdated: soccerEvents.lastUpdated,
+      eventCount: soccerEvents.events.length,
+      gameCount: soccerEvents.events.filter(isBaseSoccerGameEvent).length,
+      visibleGameCount: soccerEvents.events.filter((event) => shouldIncludePolymarketSoccerGame(event)).length,
+      categories: soccerEvents.categories,
+      events: soccerEvents.events.map(compactPolymarketSoccerEvent)
+    } : {
+      ok: false,
+      source: soccerEvents.source,
+      url: soccerEvents.url,
+      lastUpdated: soccerEvents.lastUpdated,
+      error: soccerEvents.error,
+      eventCount: 0,
+      gameCount: 0,
+      visibleGameCount: 0,
+      categories: [],
+      events: []
+    },
     markets: normalizedMarkets
+  };
+}
+
+async function fetchPolymarketSoccerEvents() {
+  const startedAt = Date.now();
+  const urls = [
+    `${POLYMARKET_GAMMA_API_BASE}/events?${new URLSearchParams({
+      active: "true",
+      closed: "false",
+      limit: String(POLYMARKET_SOCCER_EVENT_LIMIT),
+      tag_slug: "soccer",
+      order: "volume",
+      ascending: "false"
+    }).toString()}`,
+    `${POLYMARKET_GAMMA_API_BASE}/events?${new URLSearchParams({
+      active: "true",
+      closed: "false",
+      limit: String(POLYMARKET_SOCCER_GAME_EVENT_LIMIT),
+      tag_slug: "games",
+      order: "volume",
+      ascending: "false"
+    }).toString()}`
+  ];
+  const results = await Promise.all(urls.map((url) => timedFetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS })));
+  const events = uniquePolymarketEvents(results
+    .filter((result) => result.ok)
+    .flatMap((result) => extractPolymarketEvents(result.data))
+    .filter(isSoccerTaggedEvent)
+    .map(normalizePolymarketSoccerEvent));
+  const categories = buildSoccerEventCategorySummary(events);
+  const errors = results.filter((result) => !result.ok).map((result) => translateError(result.error));
+  return {
+    source: "Polymarket soccer games API",
+    ok: events.length > 0,
+    url: urls.join(" | "),
+    lastUpdated: new Date().toISOString(),
+    latencyMs: Date.now() - startedAt,
+    error: events.length ? (errors.length ? `部分来源失败：${errors.join("；")}` : undefined) : (errors.join("；") || "没有抓到 soccer/games 事件"),
+    events,
+    categories
+  };
+}
+
+function extractPolymarketEvents(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.events)) return data.events;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+}
+
+function uniquePolymarketEvents(events = []) {
+  const byKey = new Map();
+  for (const event of events || []) {
+    const key = String(event.id || event.slug || "");
+    if (!key) continue;
+    const current = byKey.get(key);
+    if (!current || soccerEventVolume(event) > soccerEventVolume(current)) byKey.set(key, event);
+  }
+  return [...byKey.values()];
+}
+
+function normalizePolymarketSoccerEvent(event = {}) {
+  const competition = classifySoccerCompetition(event);
+  return {
+    ...event,
+    tags: Array.isArray(event.tags) ? event.tags : [],
+    baseSlug: baseSoccerEventSlug(event.slug),
+    kickoffUtc: soccerEventKickoffIso(event),
+    competition
+  };
+}
+
+function compactPolymarketSoccerEvent(event = {}) {
+  return {
+    id: String(event.id || ""),
+    title: event.title || "",
+    slug: event.slug || "",
+    baseSlug: event.baseSlug || baseSoccerEventSlug(event.slug),
+    seriesSlug: event.seriesSlug || "",
+    startDate: event.startDate || "",
+    endDate: event.endDate || "",
+    kickoffUtc: event.kickoffUtc || soccerEventKickoffIso(event),
+    active: event.active,
+    closed: event.closed,
+    volume: soccerEventVolume(event),
+    tags: Array.isArray(event.tags) ? event.tags : [],
+    marketCount: Array.isArray(event.markets) ? event.markets.length : 0,
+    competition: event.competition || classifySoccerCompetition(event)
+  };
+}
+
+function buildSoccerEventCategorySummary(events = []) {
+  const byCategory = new Map();
+  for (const event of events || []) {
+    const competition = event.competition || classifySoccerCompetition(event);
+    const categoryKey = competition.categoryKey || "other-soccer";
+    if (!byCategory.has(categoryKey)) {
+      byCategory.set(categoryKey, {
+        key: categoryKey,
+        label: competition.categoryLabel,
+        labelEn: competition.categoryLabelEn,
+        order: competition.categoryOrder || 99,
+        eventCount: 0,
+        gameCount: 0,
+        competitions: new Map()
+      });
+    }
+    const category = byCategory.get(categoryKey);
+    category.eventCount += 1;
+    if (isBaseSoccerGameEvent(event)) category.gameCount += 1;
+    const compKey = competition.key || "unknown";
+    if (!category.competitions.has(compKey)) {
+      category.competitions.set(compKey, {
+        key: compKey,
+        label: competition.label,
+        labelEn: competition.labelEn,
+        seriesSlug: competition.seriesSlug || "",
+        eventCount: 0,
+        gameCount: 0,
+        totalVolume: 0
+      });
+    }
+    const comp = category.competitions.get(compKey);
+    comp.eventCount += 1;
+    if (isBaseSoccerGameEvent(event)) comp.gameCount += 1;
+    comp.totalVolume += soccerEventVolume(event);
+  }
+  return [...byCategory.values()]
+    .sort((a, b) => (a.order || 99) - (b.order || 99) || String(a.label).localeCompare(String(b.label)))
+    .map((category) => ({
+      ...category,
+      competitions: [...category.competitions.values()].sort((a, b) => Number(b.totalVolume || 0) - Number(a.totalVolume || 0))
+    }));
+}
+
+function polymarketSoccerEventsToMarketResult(soccerEvents) {
+  if (!soccerEvents?.ok) {
+    return {
+      label: "Polymarket soccer games",
+      ok: false,
+      latencyMs: soccerEvents?.latencyMs || 0,
+      error: soccerEvents?.error || "soccer games unavailable",
+      markets: []
+    };
+  }
+  const markets = uniqueMarkets((soccerEvents.events || [])
+    .flatMap((event) => {
+      const eventMarkets = Array.isArray(event.markets) ? event.markets : [];
+      const limitedMarkets = limitDerivativeEventMarkets(event, eventMarkets);
+      return limitedMarkets.map((market) => ({
+        ...market,
+        eventTitle: event.title || "",
+        eventSlug: event.slug || "",
+        parentEventSlug: event.baseSlug || baseSoccerEventSlug(event.slug),
+        seriesSlug: event.seriesSlug || "",
+        tags: event.tags || [],
+        competition: event.competition || classifySoccerCompetition(event)
+      }));
+    })
+    .filter(isSoccerMarket));
+  return {
+    label: "Polymarket soccer games",
+    ok: true,
+    latencyMs: soccerEvents.latencyMs || 0,
+    eventCount: soccerEvents.events.length,
+    marketCount: markets.length,
+    markets
   };
 }
 
@@ -12059,7 +12667,7 @@ async function fetchPolymarketEventSlug(search) {
       ...market,
       eventTitle: event.title,
       eventSlug: event.slug
-    })).filter(isWorldCupSoccerMarket)
+    })).filter(isSoccerMarket)
     : [];
   return {
     label: search.label,
@@ -12131,7 +12739,7 @@ async function fetchPolymarketDerivativeMarkets(search) {
         parentEventSlug: search.slug || ""
       }));
     })
-    .filter(isWorldCupSoccerMarket);
+    .filter(isSoccerMarket);
   return {
     label: search.label,
     slug: search.slug,
@@ -12151,7 +12759,10 @@ function limitDerivativeEventMarkets(event, markets) {
 }
 
 async function fetchPolymarketSportsPageMarkets(search) {
-  const url = `https://polymarket.com/sports/world-cup/${encodeURIComponent(search.slug)}`;
+  const pagePath = String(search.slug || "").startsWith("fifwc-")
+    ? `/sports/world-cup/${encodeURIComponent(search.slug)}`
+    : `/event/${encodeURIComponent(search.slug)}`;
+  const url = `https://polymarket.com${pagePath}`;
   const result = await timedFetchText(url);
   if (!result.ok) {
     return {
@@ -12165,7 +12776,7 @@ async function fetchPolymarketSportsPageMarkets(search) {
   }
   const eventSlugPrefix = search.moreMarkets ? String(search.slug || "").replace(/-more-markets$/, "") : search.slug;
   const markets = extractSportsPageMarkets(result.text, eventSlugPrefix)
-    .filter(isWorldCupSoccerMarket)
+    .filter(isSoccerMarket)
     .slice(0, POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT);
   return {
     label: `${search.label} sports page`,
@@ -12264,7 +12875,8 @@ function parseEmbeddedMarketObject(text) {
 
 function isSupportedSportsPageMarketSlug(slug) {
   const value = String(slug || "");
-  return /^fifwc-[a-z0-9-]+-\d{4}-\d{2}-\d{2}(?:-[a-z0-9-]+)?$/.test(value);
+  return /\b20\d{2}-\d{2}-\d{2}\b/.test(value)
+    && !/(?:nba|nfl|mlb|nhl|ufc|tennis|golf|formula|f1)/i.test(value);
 }
 
 function escapeRegExp(value) {
@@ -12855,7 +13467,7 @@ async function fetchPolymarketSearch(search) {
       eventTitle: event.title,
       eventSlug: event.slug
     })) : [])
-    .filter(isWorldCupSoccerMarket);
+    .filter(isSoccerMarket);
 
   return {
     label: search.label,
@@ -12904,7 +13516,7 @@ function needleMatchesText(needle, text) {
   return Boolean(value) && text.includes(value);
 }
 
-function isWorldCupSoccerMarket(market) {
+function isSoccerMarket(market) {
   const text = [
     market.question,
     market.title,
@@ -12914,28 +13526,11 @@ function isWorldCupSoccerMarket(market) {
     market.subCategory,
     market.eventTitle,
     market.eventSlug,
-    market.sportsMarketType
+    market.seriesSlug,
+    market.sportsMarketType,
+    ...(Array.isArray(market.tags) ? market.tags.map((tag) => tag?.slug || tag?.label || tag) : [])
   ].filter(Boolean).join(" ").toLowerCase();
-  const positive = [
-    "world cup",
-    "fifa",
-    "soccer",
-    "football",
-    ...Object.values(TEAM_SEARCH_NAMES).map((name) => String(name).toLowerCase()),
-    "mexico",
-    "south africa",
-    "south korea",
-    "czech",
-    "spain",
-    "france",
-    "england",
-    "brazil",
-    "argentina",
-    "portugal",
-    "germany",
-    "netherlands",
-    "italy"
-  ];
+  if (!text) return false;
   const negative = [
     "gta",
     "rihanna",
@@ -12943,6 +13538,10 @@ function isWorldCupSoccerMarket(market) {
     "super bowl",
     "nba",
     "nfl",
+    "mlb",
+    "nhl",
+    "ufc",
+    "tennis",
     "bitcoin",
     "ethereum",
     "crypto",
@@ -12950,9 +13549,21 @@ function isWorldCupSoccerMarket(market) {
     "announcers",
     "commentator",
     "commentators",
-    "broadcast phrase"
+    "broadcast phrase",
+    "trump",
+    "president",
+    "photo",
+    "shake hands"
   ];
-  return positive.some((word) => text.includes(word)) && !negative.some((word) => text.includes(word));
+  if (negative.some((word) => text.includes(word))) return false;
+  return isSoccerTaggedEvent(market)
+    || SOCCER_COMPETITION_DEFINITIONS.some((definition) => (definition.patterns || []).some((pattern) => text.includes(String(pattern).toLowerCase())))
+    || Object.values(TEAM_SEARCH_NAMES).some((name) => text.includes(String(name).toLowerCase()))
+    || /\b(?:vs|v)\.?\b/.test(text);
+}
+
+function isWorldCupSoccerMarket(market) {
+  return isSoccerMarket(market);
 }
 
 function demoPolymarket() {
@@ -13018,6 +13629,10 @@ function normalizePolymarketMarket(market) {
     slug: market.slug,
     eventTitle: market.eventTitle,
     eventSlug: market.eventSlug,
+    parentEventSlug: market.parentEventSlug || baseSoccerEventSlug(market.eventSlug || market.slug),
+    seriesSlug: market.seriesSlug || "",
+    tags: Array.isArray(market.tags) ? market.tags : [],
+    competition: market.competition || classifySoccerCompetition(market),
     sportsMarketType: market.sportsMarketType || market.marketType || "",
     volume: Number(market.volume || 0),
     liquidity: Number(market.liquidity || 0),
@@ -14389,6 +15004,15 @@ function buildPolymarketSourceSummary(polymarket) {
     ok: Boolean(polymarket?.ok),
     latencyMs: polymarket?.latencyMs,
     marketCount: Array.isArray(polymarket?.markets) ? polymarket.markets.length : 0,
+    soccerEvents: polymarket?.soccerEvents ? {
+      ok: polymarket.soccerEvents.ok,
+      source: polymarket.soccerEvents.source,
+      lastUpdated: polymarket.soccerEvents.lastUpdated,
+      eventCount: polymarket.soccerEvents.eventCount,
+      gameCount: polymarket.soccerEvents.gameCount,
+      visibleGameCount: polymarket.soccerEvents.visibleGameCount,
+      error: polymarket.soccerEvents.error
+    } : undefined,
     historySource: polymarket?.historySource ? {
       source: polymarket.historySource.source,
       ok: polymarket.historySource.ok,
@@ -14857,6 +15481,7 @@ async function buildDashboard({
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, trendSourceSchedule.matches || schedule.matches || [], finalResults);
   const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings);
   attachMarketCharts(matches, polymarket);
+  const soccerCompetitions = soccerCompetitionSummaryFromMatches(matches);
   const bettingExpert = await attachBettingExpertSignals(matches, { enabled: true });
   recomputeMatchesAfterExternalSignals(matches, polymarket, fifaRankings);
   let eliteTraders = await attachEliteSignals(matches, polymarket, { force, enabled: includeElite });
@@ -14867,6 +15492,8 @@ async function buildDashboard({
   const payload = {
     meta: {
       ...local.meta,
+      tournament: "Polymarket 足球赛事",
+      legacyTournament: local.meta?.tournament || "",
       generatedAt: new Date().toISOString(),
       modelVersion: DASHBOARD_MODEL_VERSION,
       cacheTtlSeconds: Math.round(CACHE_TTL_MS / 1000),
@@ -14918,7 +15545,14 @@ async function buildDashboard({
         ok: schedule.ok,
         lastUpdated: schedule.lastUpdated || "",
         error: schedule.error,
-        detail: `${visibility.modeledVisible} 场完整模型 · ${visibility.autoBaseline} 场自动基线 · ${visibility.hiddenModeled} 场已隐藏`
+        detail: `${visibility.modeledVisible} 场完整模型 · ${visibility.autoBaseline} 场赛程自动基线 · ${visibility.polymarketAutoBaseline || 0} 场 Polymarket 足球赛事 · ${visibility.hiddenModeled} 场已隐藏`
+      },
+      {
+        source: "Polymarket 足球赛事分类",
+        ok: polymarket.soccerEvents?.ok !== false,
+        lastUpdated: polymarket.soccerEvents?.lastUpdated || "",
+        error: polymarket.soccerEvents?.error,
+        detail: `${soccerCompetitions.categoryCount || 0} 个分类 · ${soccerCompetitions.matchCount || 0} 场当前窗口比赛 · Polymarket games 可见 ${polymarket.soccerEvents?.visibleGameCount || 0} 场`
       },
       {
         source: "本届赛会趋势",
@@ -14998,6 +15632,7 @@ async function buildDashboard({
       errors: groupStandings.errors || []
     },
     schedule,
+    soccerCompetitions,
     matches,
     bettingExpert,
     eliteTraders,

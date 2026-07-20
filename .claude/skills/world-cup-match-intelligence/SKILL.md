@@ -1,17 +1,18 @@
 ---
 name: world-cup-match-intelligence
-description: Use when building or maintaining football match intelligence workflows, including public source synchronization, lineup/news/weather context, market probability curves, AI synthesis, confidence downgrades, history archiving, backtesting, bilingual dashboard UI updates, and deployment checks. This repository includes a reference World Cup dashboard implementation.
+description: Use when building or maintaining football match intelligence workflows, including public source synchronization, lineup/news/weather context, Polymarket soccer competition discovery, market probability curves, AI synthesis, confidence downgrades, history archiving, backtesting, bilingual dashboard UI updates, and deployment checks. This repository includes a reference World Cup dashboard implementation that now generalizes to authoritative soccer competitions on Polymarket.
 ---
 
-# World Cup Match Intelligence
+# Soccer Match Intelligence
 
-Use this skill when building, modifying, operating, or extending a football match intelligence workflow. This repository includes a World Cup dashboard as a reference implementation.
+Use this skill when building, modifying, operating, or extending a football/soccer match intelligence workflow.
 
 ## Core Rules
 
 - Treat the dashboard as research and monitoring software. Do not automate orders, guarantee outcomes, or present outputs as financial advice.
 - Do not fabricate missing sports, odds, Polymarket, lineup, injury, weather, or account data. Mark unavailable inputs as missing, stale, or source-unreachable.
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
+- Keep match analysis competition-agnostic where possible: World Cup layers such as FIFA ranking/group/finals history apply only when relevant, while club or non-World-Cup fixtures keep those fields missing/fallback; discover Polymarket soccer fixtures from the soccer/games pool, classify major competition families such as World Cup, Euros, Copa America, UCL, Europa League, EPL, La Liga, Serie A, Bundesliga, Ligue 1, MLS, Liga MX, Libertadores, Sudamericana, CONCACAF, and other high-liquidity soccer, and only turn single `A vs B` games into match cards.
 - Comprehensive match forecasts should use a transparent xG-to-score-distribution layer: long-term strength/Elo-style baseline, recent form, World Cup record, dynamic context, tournament trend, Poisson score grid, and only a light market calibration. Do not present this as an official Goldman Sachs model unless using an official source; label it as Goldman-style public methodology when relevant.
 - Probability adjustments for win/draw/loss, totals, BTTS, and top correct scores must stay tied to one score-distribution grid. Do not patch BTTS or over/under percentages independently in a way that contradicts the displayed most-likely scores.
 - Comprehensive match forecasts should also check supplemental dimensions when data exists: rest days since the previous match, current-tournament team form, 20-year head-to-head, knockout-stage experience, public tipster consensus, travel/venue burden, referee/card risk, suspension accumulation, penalty taker/keeper evidence, goalkeeper shot-stopping evidence, goalkeeper proxy strength, and squad age/fatigue structure. Only the structured dimensions may enter the model; unverified dimensions stay as missing/watchlist items.
@@ -34,8 +35,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 
 ## Project Map
 
-- `server.js`: HTTP server, API routes, dashboard merge logic, Polymarket/public market fetches, elite account aggregation, probability calculations.
-- `public/index.html`: single-page bilingual dashboard UI.
+- `server.js`, `public/index.html`: HTTP/API/dashboard merge logic, Polymarket soccer competition discovery, probability calculations, and bilingual UI with competition category filters.
 - `data/worldcup-dashboard.json`, `data/research-framework.json`, `data/head-to-head-overrides.json`: seed/static match data, structured research dimensions, and verified H2H overrides.
 - `data/worldcup-context.json`: generated runtime context, ignored by Git.
 - `scripts/sync-worldcup-context.js`, `archive-dashboard.js`, `record-match-result.js`, `history-store.js`: public sync, history/archive, result recording, and SQLite persistence.
@@ -44,8 +44,7 @@ Use this skill when building, modifying, operating, or extending a football matc
 ## Workflow
 
 1. Inspect `git status --short --branch` before changes.
-2. Read the relevant project files before editing. Use `rg` or `rg --files` first.
-3. Preserve the dashboard's bilingual structure. Any new visible UI string needs Chinese and English copy.
+2. Read relevant files before editing with `rg`; preserve bilingual UI and add Chinese/English copy for new visible strings.
 4. Keep public source records attached to dynamic facts: source name, URL if available, timestamp, status, confidence, and reason.
 5. Recompute affected model outputs after data changes: win/draw/loss, handicap, totals, edge, max informational entry price, and observe/wait/reduce/add labels.
 6. Persist newly important fields through the archive layer when they matter for later analysis.
@@ -151,6 +150,7 @@ When maintaining public market data:
 - BTTS recommendations need a post-review discipline layer: downgrade BTTS Yes when low-score/clean-sheet paths dominate or underdog shot creation is unverified, but in knockout rounds do not over-downgrade it when current-tournament BTTS, underdog scoring, or team form supports both teams scoring.
 - Match Polymarket team names with exact team aliases or word-boundary tokens. Do not treat short team codes such as `SCO`, `MAR`, or `CAN` as arbitrary substrings, because they can appear inside unrelated words like `score`, `market`, or `canceled`.
 - Prioritize direct match sports slugs and sports-page payload markets ahead of broad tournament searches so long-term World Cup markets do not crowd out current fixture curves.
+- For generalized soccer support, prioritize Polymarket `sports/soccer/games` and Gamma `soccer`/`games` event discovery. Classify events by tags, `seriesSlug`, slug, and title; show category filters in the UI; and do not let stale active=false/closed=false historical events appear if their event end date is outside the current window.
 - Maintain explicit Polymarket team slug and alias overrides when market slugs or display names differ from schedule abbreviations, for example Cape Verde/Cabo Verde using `cvi` rather than `cpv`, and South Korea/Korea Republic using `kr` rather than `kor`.
 - Keep chart controls usable for each market type and each outcome.
 - Track elite World Cup accounts from public data by transparent criteria such as World Cup market realized PnL, win rate, sample size, and recent activity. General football/soccer history may be shown only as background context, not as the primary ranking for World Cup account monitoring.
