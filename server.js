@@ -121,6 +121,7 @@ const ELITE_ACTIVITY_LIMIT = 300;
 const USE_DEMO_POLYMARKET = process.env.DEMO_POLYMARKET === "1";
 const DISABLE_HISTORY_RECORDING = process.env.WORLDCUP_DISABLE_HISTORY === "1";
 const AUTO_BASELINE_DEFAULT_RATING = 68;
+const AUTO_BASELINE_CLUB_DEFAULT_RATING = 64;
 const AUTO_BASELINE_RATINGS = {
   ARG: 86,
   BRA: 85,
@@ -160,6 +161,106 @@ const AUTO_BASELINE_RATINGS = {
   CUW: 57,
   NZL: 61,
   RSA: 63
+};
+
+const CLUB_COMPETITION_BASE_RATINGS = {
+  "uefa-champions-league": 70,
+  "uefa-champions-league-qualifying": 66,
+  "uefa-europa-league": 68,
+  "uefa-europa-league-qualifying": 64,
+  "uefa-conference-league": 64,
+  "uefa-conference-league-qualifying": 61,
+  libertadores: 70,
+  sudamericana: 66,
+  mls: 65,
+  "liga-mx": 67,
+  epl: 80,
+  "la-liga": 79,
+  "serie-a": 78,
+  bundesliga: 78,
+  "ligue-1": 76
+};
+
+const CLUB_TEAM_RATING_OVERRIDES = {
+  "fenerbahce sk": 78,
+  fenerbahce: 78,
+  "gnk dinamo zagreb": 76,
+  "dinamo zagreb": 76,
+  "fk crvena zvezda": 76,
+  "crvena zvezda": 76,
+  "sk puntigamer sturm graz": 75,
+  "sturm graz": 75,
+  "santos fc": 72,
+  santos: 72,
+  "inter miami cf": 72,
+  "inter miami": 72,
+  "kks lech poznan": 72,
+  "lech poznan": 72,
+  "sk slovan bratislava": 72,
+  "slovan bratislava": 72,
+  "red bull bragantino": 70,
+  bragantino: 70,
+  "ca lanus": 70,
+  lanus: 70,
+  "fc cincinnati": 71,
+  "philadelphia union": 70,
+  "heart of midlothian fc": 69,
+  "heart of midlothian": 69,
+  hearts: 69,
+  "fc thun": 68,
+  "vancouver whitecaps fc": 67,
+  "vancouver whitecaps": 67,
+  "orlando city sc": 68,
+  "orlando city": 68,
+  "nashville sc": 67,
+  "new york red bulls": 66,
+  "mh hapoel beer sheva": 67,
+  "hapoel beer sheva": 67,
+  "gornik zabrze": 66,
+  "cs cristal": 66,
+  "sporting cristal": 66,
+  "charlotte fc": 66,
+  "san diego fc": 67,
+  "ifk goteborg": 66,
+  "as omonoia leukosias": 65,
+  omonoia: 65,
+  "portland timbers": 65,
+  "chicago fire fc": 64,
+  "chicago fire": 64,
+  "atlanta united fc": 63,
+  "atlanta united": 63,
+  "san jose earthquakes": 64,
+  "qairat fk": 64,
+  qairat: 64,
+  "fc dallas": 63,
+  "colorado rapids sc": 62,
+  "colorado rapids": 62,
+  "new england revolution": 63,
+  "cs cienciano": 63,
+  cienciano: 63,
+  "kuopion ps": 62,
+  kups: 62,
+  "shamrock rovers fc": 62,
+  "shamrock rovers": 62,
+  "riga fc": 62,
+  "sabah fk": 61,
+  "toronto fc": 61,
+  "bohemian fc": 60,
+  "ararat armenia fa": 60,
+  "ararat armenia": 60,
+  "cf montreal": 60,
+  "universidad central de venezuela fc": 60,
+  "kf vikingur": 58,
+  "fc ballkani": 58,
+  ballkani: 58,
+  "fc drita": 58,
+  drita: 58,
+  "fk vardar skopje": 57,
+  "fk vardar": 57,
+  "fci levadia": 56,
+  levadia: 56,
+  "larne fc": 56,
+  "floriana fc": 55
 };
 
 const VENUE_COORDINATES = {
@@ -2101,6 +2202,20 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
 
   const homeRank = rankingNumber(match.home, fifaRankings) || match.homeTeam?.worldRanking?.rank;
   const awayRank = rankingNumber(match.away, fifaRankings) || match.awayTeam?.worldRanking?.rank;
+  const homeRatingProfile = match.homeTeam?.ratingProfile;
+  const awayRatingProfile = match.awayTeam?.ratingProfile;
+  if (homeRatingProfile?.teamType === "club" || awayRatingProfile?.teamType === "club") {
+    const homeRating = Number(match.homeTeam?.rating);
+    const awayRating = Number(match.awayTeam?.rating);
+    if (Number.isFinite(homeRating) && Number.isFinite(awayRating)) {
+      drivers.push({
+        label: "俱乐部评分基线",
+        homeXgDelta: 0,
+        awayXgDelta: 0,
+        reason: `${match.homeName} 评分 ${homeRating}（${homeRatingProfile?.source || "俱乐部分层"}），${match.awayName} 评分 ${awayRating}（${awayRatingProfile?.source || "俱乐部分层"}）；该差异已进入初始 xG，不使用 FIFA 国家队排名。`
+      });
+    }
+  }
   if (homeRank && awayRank) {
     const rankAdvantage = clamp((awayRank - homeRank) / 120, -0.55, 0.55);
     const homeDelta = rankAdvantage * 0.22;
@@ -2362,7 +2477,8 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   probabilities.lambdaHome = lambdaHome;
   probabilities.lambdaAway = lambdaAway;
   const preMarket = normalizeProbabilityTriplet(probabilities);
-  const canUseMarketCalibration = useMarketCalibration && match.manualMarkets?.sourceType !== "auto-baseline";
+  const hasRealAutoBaselineMoneyline = Boolean(match.manualMarkets?.polymarketMoneyline?.hasRealPrices);
+  const canUseMarketCalibration = useMarketCalibration && (match.manualMarkets?.sourceType !== "auto-baseline" || hasRealAutoBaselineMoneyline);
   const market = canUseMarketCalibration ? marketMoneylineTriplet(match) : null;
   let calibration = {
     applied: false,
@@ -2370,7 +2486,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     source: "独立模型，未使用盘口校准"
   };
   if (market) {
-    const marketWeight = match.manualMarkets?.sourceType === "auto-baseline" ? 0.08 : 0.18;
+    const marketWeight = match.manualMarkets?.sourceType === "auto-baseline" ? 0.1 : 0.18;
     const blended = blendProbabilityTriplet(preMarket, market, marketWeight);
     probabilities = scaleScoreDistribution(probabilities, blended);
     probabilities.lambdaHome = lambdaHome;
@@ -2406,7 +2522,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     calibration,
     goalkeeperAgeAdjustment,
     physicalMatchupAdjustment,
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 10),
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 10),
     probabilities
   };
 }
@@ -9660,6 +9776,8 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
   const key = matchScheduleKey(teams.homeName, teams.awayName);
   if (modeledKeys.has(key)) return null;
   if (hasRecordedFinal(`poly-${baseSlug}`, finalResults)) return null;
+  const homeRatingProfile = clubTeamRatingProfile(teams.homeName, competition);
+  const awayRatingProfile = clubTeamRatingProfile(teams.awayName, competition);
 
   const scheduleEvent = {
     scheduleId: `poly-${baseSlug}`,
@@ -9673,11 +9791,17 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
     roundName: competition.label,
     home: {
       code: polyTeamCode(teams.homeName),
-      name: teams.homeName
+      name: teams.homeName,
+      teamType: "club",
+      ratingOverride: homeRatingProfile.rating,
+      ratingProfile: homeRatingProfile
     },
     away: {
       code: polyTeamCode(teams.awayName),
-      name: teams.awayName
+      name: teams.awayName,
+      teamType: "club",
+      ratingOverride: awayRatingProfile.rating,
+      ratingProfile: awayRatingProfile
     },
     venue: {
       name: "Polymarket soccer games",
@@ -9754,6 +9878,7 @@ function polymarketMoneylineManualMarkets(match, polymarket, event = {}) {
     sourceType: "auto-baseline",
     polymarketMoneyline: {
       sourceType: "polymarket",
+      hasRealPrices: true,
       marketIds: prices.marketIds || [],
       conditionIds: prices.conditionIds || [],
       eventSlug: event.slug || match.polymarketEventSlug || "",
@@ -10459,9 +10584,85 @@ function eventTeamCode(event, side) {
   return String(event?.[side]?.code || "").toUpperCase();
 }
 
+function normalizedClubNameKey(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function clubCompetitionBaseRating(competition = {}) {
+  return CLUB_COMPETITION_BASE_RATINGS[competition.key]
+    || CLUB_COMPETITION_BASE_RATINGS[competition.parentKey]
+    || CLUB_COMPETITION_BASE_RATINGS[competition.seriesSlug]
+    || AUTO_BASELINE_CLUB_DEFAULT_RATING;
+}
+
+function clubTeamRatingProfile(teamName, competition = {}) {
+  const key = normalizedClubNameKey(teamName);
+  const baseRating = clubCompetitionBaseRating(competition);
+  const overrideRating = CLUB_TEAM_RATING_OVERRIDES[key];
+  const rating = Number.isFinite(Number(overrideRating)) ? Number(overrideRating) : baseRating;
+  const source = Number.isFinite(Number(overrideRating))
+    ? "本地俱乐部分层快照"
+    : "赛事级别兜底评分";
+  const sourceEn = Number.isFinite(Number(overrideRating))
+    ? "Local club-tier snapshot"
+    : "Competition-level fallback rating";
+  return {
+    ok: true,
+    teamType: "club",
+    rating,
+    baseRating,
+    override: Number.isFinite(Number(overrideRating)),
+    confidence: Number.isFinite(Number(overrideRating)) ? "medium" : "low",
+    source,
+    sourceEn,
+    updatedAt: new Date().toISOString(),
+    note: Number.isFinite(Number(overrideRating))
+      ? `${teamName} 使用俱乐部层级覆盖评分 ${rating}；该值来自本地可审计快照，不等同于实时阵容。`
+      : `${teamName} 暂无俱乐部覆盖评分，使用 ${competition.label || "赛事"} 基础评分 ${rating}；低置信，只作防止所有未知队同权的保守基线。`,
+    noteEn: Number.isFinite(Number(overrideRating))
+      ? `${teamName} uses club-tier override rating ${rating}; this is a local auditable snapshot, not live lineup strength.`
+      : `${teamName} has no club override yet, so it uses ${competition.labelEn || "competition"} base rating ${rating}; low-confidence baseline only.`
+  };
+}
+
 function teamRatingForScheduleTeam(team) {
   const code = String(team?.code || "").toUpperCase();
+  const override = Number(team?.ratingOverride ?? team?.ratingProfile?.rating);
+  if (Number.isFinite(override)) return override;
   return AUTO_BASELINE_RATINGS[code] || AUTO_BASELINE_DEFAULT_RATING;
+}
+
+function notApplicableWorldRanking(teamName, source = "俱乐部赛事") {
+  return {
+    rank: null,
+    status: "not-applicable",
+    source,
+    sourceUrl: "",
+    updatedAt: "",
+    nextUpdateAt: "",
+    note: `${teamName || "该队"} 是俱乐部队，FIFA 国家队排名不适用；本场使用俱乐部分层评分。`
+  };
+}
+
+function notApplicableWorldCupRecord(code, teamName) {
+  return {
+    teamCode: String(code || "").toUpperCase(),
+    ok: false,
+    status: "not-applicable",
+    source: "俱乐部赛事",
+    sourceUrl: "",
+    updatedAt: "",
+    asOf: "",
+    asOfZh: "",
+    error: `${teamName || "该队"} 是俱乐部队，世界杯国家队正赛履历不适用。`
+  };
 }
 
 function rankingForTeam(code, fifaRankings) {
@@ -11446,22 +11647,30 @@ function rankBand(rank) {
 function scheduleTeamRecord(team, fifaRankings, worldCupRecords, squadProfiles) {
   const code = String(team?.code || "").toUpperCase();
   const name = TEAM_DISPLAY_NAMES_ZH[code] || team?.name || "TBD";
+  const isClubTeam = team?.teamType === "club" || team?.ratingProfile?.teamType === "club";
   const rating = teamRatingForScheduleTeam(team);
-  const worldRanking = rankingForTeam(code, fifaRankings);
-  const worldCupRecord = worldCupRecordForTeam(code, worldCupRecords);
+  const ratingProfile = team?.ratingProfile || null;
+  const worldRanking = isClubTeam ? notApplicableWorldRanking(name) : rankingForTeam(code, fifaRankings);
+  const worldCupRecord = isClubTeam ? notApplicableWorldCupRecord(code, name) : worldCupRecordForTeam(code, worldCupRecords);
   const squadProfile = squadProfileForTeam(code, squadProfiles);
+  const ratingSourceText = ratingProfile?.source
+    ? `${ratingProfile.source}：${ratingProfile.note || ""}`
+    : `自动基线评分：${rating}`;
   return {
     name,
     englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
     group: "待确认",
     rating,
+    ratingProfile,
     style: worldRanking.rank
       ? `赛程源自动纳入；${rankBand(worldRanking.rank)}。`
-      : "赛程源自动纳入；排名快照未覆盖时使用默认保守评分。",
+      : isClubTeam
+        ? `俱乐部赛事自动纳入；${ratingProfile?.source || "俱乐部分层"}给出评分 ${rating}。`
+        : "赛程源自动纳入；排名快照未覆盖时使用默认保守评分。",
     staticSignals: [
-      `自动基线评分：${rating}`,
+      ratingSourceText,
       worldRanking.rank ? `FIFA 世界排名第 ${worldRanking.rank}（${worldRanking.updatedAt || "快照"}）` : worldRanking.note,
-      `静态强度标签：${rankBand(worldRanking.rank)}`
+      isClubTeam ? `俱乐部评分置信度：${ratingProfile?.confidence || "low"}` : `静态强度标签：${rankBand(worldRanking.rank)}`
     ],
     watchItems: [
       "赛前持续复核官方/可靠阵容",
@@ -11477,9 +11686,11 @@ function scheduleTeamRecord(team, fifaRankings, worldCupRecords, squadProfiles) 
 
 function autoBaselineLambda(homeRating, awayRating) {
   const diff = clamp((homeRating - awayRating) / 20, -1.35, 1.35);
+  const averageQuality = clamp(((Number(homeRating) || AUTO_BASELINE_DEFAULT_RATING) + (Number(awayRating) || AUTO_BASELINE_DEFAULT_RATING)) / 2, 45, 86);
+  const qualityDelta = clamp((averageQuality - AUTO_BASELINE_DEFAULT_RATING) / 24, -0.35, 0.75);
   return {
-    lambdaHome: roundTo(clamp(1.2 + diff * 0.88, 0.35, 2.6), 2),
-    lambdaAway: roundTo(clamp(1.02 - diff * 0.52, 0.3, 2.35), 2)
+    lambdaHome: roundTo(clamp(1.2 + diff * 0.88 + qualityDelta * 0.08, 0.35, 2.6), 2),
+    lambdaAway: roundTo(clamp(1.02 - diff * 0.52 + qualityDelta * 0.05, 0.3, 2.35), 2)
   };
 }
 
