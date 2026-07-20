@@ -88,7 +88,8 @@ sudo systemctl restart worldcup-context-sync.service
 Nginx:
 
 1. Open the existing nginx site config.
-2. Paste the contents of `deploy/nginx-worldcup.conf` inside the active `server { ... }` block.
+2. Paste the contents of `deploy/nginx-worldcup.conf` inside every active HTTP/HTTPS `server { ... }` block that should expose `/worldcup/`.
+   On the production host this includes the port 80 default server and the port 443 API server; otherwise browser HTTPS upgrades can return a 404.
 3. Reload nginx:
 
 ```bash
@@ -101,5 +102,8 @@ Health checks:
 ```bash
 curl http://127.0.0.1:4174/worldcup/api/health
 curl http://38.180.28.12/worldcup/api/health
+curl -k https://38.180.28.12/worldcup/api/health
 curl 'http://38.180.28.12/worldcup/api/dashboard?force=1'
 ```
+
+Use `http://38.180.28.12/worldcup/` for the raw IP. HTTPS on a raw IP may show a certificate warning unless the certificate covers that IP; the domain-backed HTTPS route should be used when a valid certificate is required.
