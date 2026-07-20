@@ -3865,6 +3865,16 @@
       }
 
       function formatWorldRanking(team) {
+        if (team?.ratingProfile?.teamType === "club" || team?.worldRanking?.status === "not-applicable") {
+          const profile = team?.ratingProfile || {};
+          const rating = typeof (team?.rating ?? profile.rating) === "number" ? (team.rating ?? profile.rating) : null;
+          const source = currentLang === "en" ? profile.sourceEn || profile.source : profile.source || profile.sourceEn;
+          const confidence = profile.confidence ? ` · ${profile.confidence}` : "";
+          const rank = profile.rankLabel || (profile.rank ? `#${profile.rank}` : "");
+          return rating != null
+            ? `${currentLang === "en" ? "Club rating" : "俱乐部评分"} ${rating}${rank ? ` · ${rank}` : ""}${source ? ` · ${source}` : ""}${confidence}`
+            : (profile.note || team?.worldRanking?.note || (currentLang === "en" ? "Club strength not synced" : "俱乐部强度未同步"));
+        }
         const ranking = team?.worldRanking;
         if (!ranking?.rank) return ranking?.note || "未同步";
         const updated = ranking.updatedAt ? ` · ${ranking.updatedAt} 更新` : "";
@@ -3987,6 +3997,11 @@
       }
 
       function worldCupRecordSummary(record) {
+        if (record?.status === "not-applicable") {
+          return currentLang === "en"
+            ? "Not applicable for club teams; this card uses club-strength context instead."
+            : "俱乐部队不适用国家队世界杯正赛履历；本场改用俱乐部强度与赛事背景。";
+        }
         if (!record?.ok) {
           return record?.error || (currentLang === "en" ? "World Cup finals record not available in the local snapshot." : "本地快照未覆盖该队世界杯正赛战绩。");
         }
@@ -4027,6 +4042,40 @@
       }
 
       function renderWorldCupRecords(match) {
+        if (isClubMatch(match)) {
+          const competition = matchCompetition(match);
+          const renderClubTeam = (title, team) => {
+            const profile = team?.ratingProfile || {};
+            const source = currentLang === "en" ? profile.sourceEn || profile.source : profile.source || profile.sourceEn;
+            const note = currentLang === "en" ? profile.noteEn || profile.note : profile.note || profile.noteEn;
+            const rating = typeof (team?.rating ?? profile.rating) === "number" ? (team.rating ?? profile.rating) : "-";
+            return `
+              <div class="form-team-card">
+                <h5>${escapeHtml(title)}</h5>
+                <div class="form-summary">${escapeHtml(note || (currentLang === "en" ? "Club-strength snapshot is pending." : "俱乐部强度快照待补充。"))}</div>
+                <div class="worldcup-record-stats">
+                  <div class="worldcup-record-stat"><span>${escapeHtml(currentLang === "en" ? "Club rating" : "俱乐部评分")}</span><strong>${escapeHtml(rating)}</strong></div>
+                  <div class="worldcup-record-stat"><span>${escapeHtml(currentLang === "en" ? "Base tier" : "赛事基础")}</span><strong>${escapeHtml(profile.baseRating ?? "-")}</strong></div>
+                  <div class="worldcup-record-stat"><span>${escapeHtml(currentLang === "en" ? "Confidence" : "置信度")}</span><strong>${escapeHtml(profile.confidence || "low")}</strong></div>
+                </div>
+                <div class="form-meta">${source ? escapeHtml(source) : escapeHtml(currentLang === "en" ? "Competition fallback" : "赛事级别兜底")} · ${fmtTime(profile.updatedAt)}</div>
+                ${profile.sourceUrl ? `<div class="form-meta"><a href="${escapeHtml(profile.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(profile.sourceUrl)}</a></div>` : ""}
+              </div>
+            `;
+          };
+          return `
+            <section class="static-block wide">
+              <h4>${escapeHtml(currentLang === "en" ? "Club Competition Context" : "俱乐部赛事背景")}</h4>
+              <div class="form-summary">${escapeHtml(currentLang === "en"
+                ? `${competition.labelEn || competition.label || "Club fixture"}; FIFA ranking and World Cup finals history are not used for club teams.`
+                : `${competition.label || "俱乐部赛事"}；俱乐部队不使用 FIFA 国家队排名和世界杯正赛履历。`)}</div>
+              <div class="form-grid">
+                ${renderClubTeam(homeName(match), match.homeTeam)}
+                ${renderClubTeam(awayName(match), match.awayTeam)}
+              </div>
+            </section>
+          `;
+        }
         return `
           <section class="static-block wide">
             <h4>世界杯战绩</h4>
@@ -4358,6 +4407,11 @@
       };
 
       const matchCompetition = (match = {}) => match.competition || competitionFallback;
+      const isClubMatch = (match = {}) => matchCompetition(match).teamType === "club"
+        || match?.homeTeam?.ratingProfile?.teamType === "club"
+        || match?.awayTeam?.ratingProfile?.teamType === "club"
+        || match?.homeTeam?.worldRanking?.status === "not-applicable"
+        || match?.awayTeam?.worldRanking?.status === "not-applicable";
 
       const competitionText = (competition = {}) => {
         if (currentLang === "en") return competition.labelEn || competition.label || "Soccer";
@@ -7040,9 +7094,12 @@
         `;
         }).join("");
 
+        const strengthLabel = isClubMatch(match)
+          ? (currentLang === "en" ? "Club strength" : "俱乐部强度")
+          : (currentLang === "en" ? "World ranking" : "世界排名");
         const staticItems = [
-          [homeName(match), `世界排名：${formatWorldRanking(match.homeTeam)}`],
-          [awayName(match), `世界排名：${formatWorldRanking(match.awayTeam)}`],
+          [homeName(match), `${strengthLabel}：${formatWorldRanking(match.homeTeam)}`],
+          [awayName(match), `${strengthLabel}：${formatWorldRanking(match.awayTeam)}`],
           ...match.homeTeam.staticSignals.map((signal) => [`${homeName(match)}`, signal]),
           ...match.awayTeam.staticSignals.map((signal) => [`${awayName(match)}`, signal])
         ];

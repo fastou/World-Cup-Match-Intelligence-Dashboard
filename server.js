@@ -19,6 +19,7 @@ const DATA_PATH = path.join(ROOT, "data", "worldcup-dashboard.json");
 const FIFA_RANKINGS_PATH = path.join(ROOT, "data", "fifa-rankings.json");
 const WORLD_CUP_RECORDS_PATH = path.join(ROOT, "data", "world-cup-records.json");
 const SQUAD_PROFILES_PATH = path.join(ROOT, "data", "squad-profiles.json");
+const CLUB_STRENGTH_PATH = path.join(ROOT, "data", "club-strength.json");
 const RESEARCH_FRAMEWORK_PATH = path.join(ROOT, "data", "research-framework.json");
 const CONTEXT_PATH = path.join(ROOT, "data", "worldcup-context.json");
 const LIVE_CACHE_PATH = path.join(ROOT, "data", "worldcup-live-cache.json");
@@ -31,7 +32,7 @@ const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const LIGHT_CACHE_TTL_MS = 60 * 1000;
 const LIGHT_CACHE_STABILITY_MAX_AGE_MS = Number(process.env.LIGHT_CACHE_STABILITY_MAX_AGE_MS || 30 * 60 * 1000);
-const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 14000);
+const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 35000);
 const FETCH_TIMEOUT_MS = 6500;
 const LIGHT_FETCH_TIMEOUT_MS = Number(process.env.LIGHT_FETCH_TIMEOUT_MS || 3500);
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
@@ -51,9 +52,9 @@ const ESPN_WORLDCUP_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/soc
 const PRICE_HISTORY_HOURS = 24;
 const PRICE_HISTORY_FIDELITY_MINUTES = 15;
 const POLYMARKET_MARKET_LIMIT = Number(process.env.POLYMARKET_MARKET_LIMIT || 1600);
-const POLYMARKET_LIGHT_MARKET_LIMIT = Number(process.env.POLYMARKET_LIGHT_MARKET_LIMIT || 480);
+const POLYMARKET_LIGHT_MARKET_LIMIT = Number(process.env.POLYMARKET_LIGHT_MARKET_LIMIT || 800);
 const POLYMARKET_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_HISTORY_TOKEN_LIMIT || 720);
-const POLYMARKET_LIGHT_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_LIGHT_HISTORY_TOKEN_LIMIT || 80);
+const POLYMARKET_LIGHT_HISTORY_TOKEN_LIMIT = Number(process.env.POLYMARKET_LIGHT_HISTORY_TOKEN_LIMIT || 120);
 const POLYMARKET_HISTORY_BATCH_SIZE = 20;
 const POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT = Number(process.env.POLYMARKET_SPORTS_MARKET_LIMIT_PER_EVENT || 180);
 const POLYMARKET_DERIVATIVE_EVENT_LIMIT = Number(process.env.POLYMARKET_DERIVATIVE_EVENT_LIMIT || 100);
@@ -238,12 +239,13 @@ const CLUB_TEAM_RATING_OVERRIDES = {
   "new england revolution": 63,
   "cs cienciano": 63,
   cienciano: 63,
-  "kuopion ps": 62,
-  kups: 62,
+  "kuopion ps": 66,
+  "kuopion palloseura": 66,
+  kups: 66,
   "shamrock rovers fc": 62,
   "shamrock rovers": 62,
   "riga fc": 62,
-  "sabah fk": 61,
+  "sabah fk": 62,
   "toronto fc": 61,
   "bohemian fc": 60,
   "ararat armenia fa": 60,
@@ -253,15 +255,181 @@ const CLUB_TEAM_RATING_OVERRIDES = {
   "kf vikingur": 58,
   "fc ballkani": 58,
   ballkani: 58,
-  "fc drita": 58,
-  drita: 58,
+  "fc drita": 66,
+  "drita gjilan": 66,
+  drita: 66,
   "fk vardar skopje": 57,
   "fk vardar": 57,
   "fci levadia": 56,
   levadia: 56,
   "larne fc": 56,
-  "floriana fc": 55
+  "aarhus gf": 69,
+  "cruz azul": 72,
+  "cf cruz azul": 72,
+  "club puebla": 63,
+  puebla: 63,
+  "deportivo toluca fc": 70,
+  toluca: 70,
+  "pumas de la unam": 67,
+  pumas: 67,
+  "sk iberia 1999": 61,
+  "qarabag agdam fk": 73,
+  qarabag: 73,
+  "pfk cska sofia": 65,
+  "cska sofia": 65,
+  "hibernian fc": 66,
+  hibernian: 66,
+  "fc malisheva": 55,
+  malisheva: 55,
+  "zira fk": 62,
+  zira: 62,
+  "paide linnameeskond": 55,
+  paide: 55,
+  "helsingin jk": 66,
+  hjk: 66,
+  "coleraine fc": 54,
+  coleraine: 54,
+  "fk rigas futbola skola": 64,
+  "rigas futbola skola": 64,
+  rfs: 64,
+  "if vestri": 52,
+  vestri: 52,
+  "tromso il": 65,
+  tromso: 65,
+  "fc hradec kralove": 64,
+  "hradec kralove": 64,
+  "fk ml viciebsk": 55,
+  viciebsk: 55,
+  "fk sutjeska niksic": 58,
+  sutjeska: 58,
+  fcsb: 70,
+  "fk auda": 56,
+  auda: 56,
+  "fk borac banja luka": 62,
+  "borac banja luka": 62,
+  "fc petrocub hincesti": 58,
+  petrocub: 58,
+  "fc lugano": 70,
+  lugano: 70,
+  "kf dukagjini kline": 55,
+  dukagjini: 55,
+  "shelbourne fc": 58,
+  shelbourne: 58,
+  "nomme kalju fc": 54,
+  "nomme kalju": 54,
+  "fk partizan beograd": 76,
+  partizan: 76,
+  "fc una strassen": 52,
+  "una strassen": 52,
+  "hnk hajduk split": 72,
+  "hajduk split": 72,
+  "pafos fc": 65,
+  pafos: 65,
+  "club bolivar": 68,
+  bolivar: 68,
+  "gremio fbpa": 74,
+  gremio: 74,
+  "rsc anderlecht": 73,
+  anderlecht: 73,
+  "floriana fc": 57,
+  floriana: 57
 };
+
+const CLUB_COUNTRY_STRENGTH_MODIFIERS = {
+  england: 11,
+  spain: 10,
+  italy: 9,
+  germany: 9,
+  france: 7,
+  portugal: 6,
+  netherlands: 5,
+  turkey: 5,
+  brazil: 6,
+  argentina: 5,
+  mexico: 4,
+  scotland: 4,
+  croatia: 4,
+  belgium: 4,
+  switzerland: 4,
+  denmark: 3,
+  austria: 3,
+  serbia: 3,
+  usa: 2,
+  poland: 2,
+  czechia: 2,
+  israel: 2,
+  greece: 2,
+  sweden: 1,
+  norway: 1,
+  romania: 1,
+  slovakia: 1,
+  cyprus: 1,
+  bulgaria: 1,
+  georgia: 0,
+  belarus: -2,
+  "bosnia and herzegovina": 0,
+  bolivia: 0,
+  finland: 0,
+  azerbaijan: 0,
+  montenegro: -1,
+  moldova: -2,
+  peru: 0,
+  canada: 0,
+  estonia: -2,
+  luxembourg: -4,
+  kosovo: -1,
+  ireland: -1,
+  kazakhstan: -1,
+  venezuela: -1,
+  armenia: -2,
+  latvia: -3,
+  iceland: -4,
+  "northern ireland": -4,
+  malta: -5
+};
+
+const CLUB_COUNTRY_NAME_HINTS = [
+  { country: "Turkey", key: "turkey", patterns: ["fenerbahce", "galatasaray", "besiktas", "trabzonspor"] },
+  { country: "Croatia", key: "croatia", patterns: ["dinamo zagreb", "hajduk split", "rijeka"] },
+  { country: "Serbia", key: "serbia", patterns: ["crvena zvezda", "red star belgrade", "partizan"] },
+  { country: "Switzerland", key: "switzerland", patterns: ["fc thun", "young boys", "basel", "servette", "lugano"] },
+  { country: "Denmark", key: "denmark", patterns: ["aarhus", "agf", "copenhagen", "midtjylland", "brondby"] },
+  { country: "Poland", key: "poland", patterns: ["gornik zabrze", "lech poznan", "legia warsaw", "rakow"] },
+  { country: "Czechia", key: "czechia", patterns: ["hradec kralove", "slavia prague", "sparta prague", "viktoria plzen"] },
+  { country: "Georgia", key: "georgia", patterns: ["sk iberia", "iberia 1999", "dinamo tbilisi"] },
+  { country: "Israel", key: "israel", patterns: ["hapoel beer sheva", "maccabi tel aviv", "maccabi haifa"] },
+  { country: "Belgium", key: "belgium", patterns: ["anderlecht", "club brugge", "genk", "union sg"] },
+  { country: "Bulgaria", key: "bulgaria", patterns: ["cska sofia", "ludogorets", "levski sofia"] },
+  { country: "Romania", key: "romania", patterns: ["fcsb", "cfr cluj", "universitatea craiova"] },
+  { country: "Cyprus", key: "cyprus", patterns: ["omonoia", "apoel", "aek larnaca", "aris limassol"] },
+  { country: "Belarus", key: "belarus", patterns: ["viciebsk", "vitebsk", "dinamo minsk", "bate"] },
+  { country: "Bosnia and Herzegovina", key: "bosnia and herzegovina", patterns: ["borac banja luka", "zrinjski", "sarajevo"] },
+  { country: "Montenegro", key: "montenegro", patterns: ["sutjeska", "buducnost podgorica"] },
+  { country: "Moldova", key: "moldova", patterns: ["petrocub", "sheriff tiraspol"] },
+  { country: "Kazakhstan", key: "kazakhstan", patterns: ["qairat", "kairat", "astana"] },
+  { country: "Estonia", key: "estonia", patterns: ["paide", "flora tallinn", "levadia"] },
+  { country: "Finland", key: "finland", patterns: ["kuopion", "kups", "hjk"] },
+  { country: "Azerbaijan", key: "azerbaijan", patterns: ["sabah", "qarabag", "zira", "zirə", "neftci"] },
+  { country: "Kosovo", key: "kosovo", patterns: ["drita", "ballkani", "malisheva"] },
+  { country: "Malta", key: "malta", patterns: ["floriana", "hamrun", "hibernians"] },
+  { country: "Ireland", key: "ireland", patterns: ["shamrock rovers", "bohemian fc", "st patricks"] },
+  { country: "Northern Ireland", key: "northern ireland", patterns: ["larne", "linfield", "coleraine"] },
+  { country: "Armenia", key: "armenia", patterns: ["ararat armenia", "pyunik", "noah"] },
+  { country: "Iceland", key: "iceland", patterns: ["vikingur", "breidablik", "valur", "vestri"] },
+  { country: "Latvia", key: "latvia", patterns: ["riga fc", "rigas futbola skola", "rfs"] },
+  { country: "Sweden", key: "sweden", patterns: ["goteborg", "malmo", "djurgarden", "hammarby", "aik"] },
+  { country: "Norway", key: "norway", patterns: ["tromso", "bodo glimt", "molde", "rosenborg"] },
+  { country: "Luxembourg", key: "luxembourg", patterns: ["una strassen", "differdange", "f91 dudelange"] },
+  { country: "Scotland", key: "scotland", patterns: ["heart of midlothian", "hearts", "hibernian", "celtic", "rangers", "aberdeen"] },
+  { country: "USA", key: "usa", patterns: ["inter miami", "chicago fire", "fc cincinnati", "philadelphia union", "orlando city", "nashville", "new york red bulls", "san diego fc", "portland timbers", "atlanta united", "san jose earthquakes", "fc dallas", "colorado rapids", "new england revolution"] },
+  { country: "Canada", key: "canada", patterns: ["vancouver whitecaps", "toronto fc", "cf montreal"] },
+  { country: "Mexico", key: "mexico", patterns: ["club america", "tigres", "monterrey", "chivas", "cruz azul", "puebla", "toluca", "pumas"] },
+  { country: "Brazil", key: "brazil", patterns: ["santos fc", "red bull bragantino", "flamengo", "palmeiras", "corinthians"] },
+  { country: "Argentina", key: "argentina", patterns: ["lanus", "boca juniors", "river plate", "racing club"] },
+  { country: "Bolivia", key: "bolivia", patterns: ["club bolivar", "bolivar", "the strongest"] },
+  { country: "Peru", key: "peru", patterns: ["sporting cristal", "cs cristal", "cienciano"] },
+  { country: "Venezuela", key: "venezuela", patterns: ["universidad central de venezuela"] }
+];
 
 const VENUE_COORDINATES = {
   "BMO Field": { latitude: 43.6332, longitude: -79.4186, label: "BMO Field, Toronto" },
@@ -2486,7 +2654,9 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     source: "独立模型，未使用盘口校准"
   };
   if (market) {
-    const marketWeight = match.manualMarkets?.sourceType === "auto-baseline" ? 0.1 : 0.18;
+    const marketWeight = match.manualMarkets?.sourceType === "auto-baseline"
+      ? isClubMatch(match) ? 0.16 : 0.1
+      : 0.18;
     const blended = blendProbabilityTriplet(preMarket, market, marketWeight);
     probabilities = scaleScoreDistribution(probabilities, blended);
     probabilities.lambdaHome = lambdaHome;
@@ -4916,6 +5086,14 @@ function probabilityRows(match) {
 }
 
 function teamRankLabel(team, fallbackCode = "") {
+  if (team?.ratingProfile?.teamType === "club") {
+    const profile = team.ratingProfile;
+    const rating = Number(team.rating ?? profile.rating);
+    const ratingText = Number.isFinite(rating) ? `俱乐部评分 ${rating}` : "俱乐部评分待补";
+    const source = profile.source ? `（${profile.source}）` : "";
+    const confidence = profile.confidence ? `，${profile.confidence} 置信` : "";
+    return `${team?.name || fallbackCode || "-"} ${ratingText}${source}${confidence}`;
+  }
   const ranking = team?.worldRanking || {};
   if (!ranking.rank) return `${team?.name || fallbackCode || "-"} 排名待补充`;
   return `${team?.name || fallbackCode || "-"} FIFA 第 ${ranking.rank}`;
@@ -4931,6 +5109,9 @@ function aiPredictionFormEvidence(match, side) {
 
 function aiPredictionWorldCupEvidence(team, name) {
   const record = team?.worldCupRecord;
+  if (record?.status === "not-applicable" || team?.ratingProfile?.teamType === "club") {
+    return `${name} 是俱乐部队，世界杯国家队正赛履历不适用；本场不把国家队历史纳入模型。`;
+  }
   if (!record || record.ok === false) return `${name} 世界杯正赛历史待补充。`;
   const pieces = [];
   if (record.appearances != null) pieces.push(`参赛 ${record.appearances} 次`);
@@ -4939,6 +5120,48 @@ function aiPredictionWorldCupEvidence(team, name) {
   }
   if (record.bestFinish) pieces.push(`最佳 ${record.bestFinish}`);
   return pieces.length ? `${name} 世界杯历史：${pieces.join("，")}。` : `${name} 世界杯正赛历史已同步。`;
+}
+
+function aiPredictionClubCompetitionEvidence(match) {
+  const competition = match.competition || {};
+  const homeProfile = match.homeTeam?.ratingProfile || {};
+  const awayProfile = match.awayTeam?.ratingProfile || {};
+  const homeRating = Number(match.homeTeam?.rating ?? homeProfile.rating);
+  const awayRating = Number(match.awayTeam?.rating ?? awayProfile.rating);
+  const ratingText = Number.isFinite(homeRating) && Number.isFinite(awayRating)
+    ? `${match.homeName} ${homeRating}，${match.awayName} ${awayRating}`
+    : "俱乐部评分仍需补充";
+  const sources = [...new Set([homeProfile.source, awayProfile.source].filter(Boolean))].join(" / ");
+  const confidence = [...new Set([homeProfile.confidence, awayProfile.confidence].filter(Boolean))].join(" / ");
+  return `${competition.label || "俱乐部赛事"}${competition.stageLabel ? ` · ${competition.stageLabel}` : ""}；${ratingText}。来源：${sources || "赛事级别兜底"}；置信度：${confidence || "low"}。`;
+}
+
+function aiPredictionMarketDisagreement(match, top, rows) {
+  const calibration = match.modelV2?.calibration || match.dynamicModel?.goldmanStyle?.calibration;
+  const market = calibration?.market || marketMoneylineTriplet(match);
+  if (!market) return null;
+  const labels = {
+    home: `${match.homeName}胜`,
+    draw: "平局",
+    away: `${match.awayName}胜`
+  };
+  const marketTop = ["home", "draw", "away"].sort((a, b) => (market[b] || 0) - (market[a] || 0))[0];
+  const modelTriplet = normalizeProbabilityTriplet({
+    home: rows.find((row) => row.key === "home")?.probability ?? match.probabilities?.home,
+    draw: rows.find((row) => row.key === "draw")?.probability ?? match.probabilities?.draw,
+    away: rows.find((row) => row.key === "away")?.probability ?? match.probabilities?.away
+  });
+  const modelTop = ["home", "draw", "away"].sort((a, b) => (modelTriplet[b] || 0) - (modelTriplet[a] || 0))[0];
+  const gap = Math.abs((modelTriplet[marketTop] || 0) - (market[marketTop] || 0));
+  if (gap < 0.055 && marketTop === modelTop) return null;
+  const conflict = marketTop !== modelTop;
+  return {
+    label: "盘口分歧",
+    status: conflict ? "partial" : "synced",
+    detail: conflict
+      ? `市场最偏 ${labels[marketTop]} ${formatPercent(market[marketTop])}，模型最高为 ${labels[modelTop]} ${formatPercent(modelTriplet[modelTop])}；这类低数据俱乐部场按低置信复核，不做反向强结论。`
+      : `市场和模型同向偏 ${labels[marketTop]}，但市场价格 ${formatPercent(market[marketTop])} 高于模型 ${formatPercent(modelTriplet[marketTop])}；价格偏贵时只观察，不硬追热门。`
+  };
 }
 
 function aiPredictionMarketRead(top, rows) {
@@ -5048,9 +5271,12 @@ function aiPredictionEvidence(match, top, rows) {
   const context = match.context || {};
   const homeRank = match.homeTeam?.worldRanking?.rank;
   const awayRank = match.awayTeam?.worldRanking?.rank;
+  const clubMatch = isClubMatch(match);
   evidence.push({
-    label: "长期实力",
-    status: homeRank && awayRank ? "synced" : "partial",
+    label: clubMatch ? "俱乐部强度" : "长期实力",
+    status: clubMatch
+      ? (match.homeTeam?.ratingProfile?.confidence !== "low" && match.awayTeam?.ratingProfile?.confidence !== "low" ? "synced" : "partial")
+      : homeRank && awayRank ? "synced" : "partial",
     detail: `${teamRankLabel(match.homeTeam, match.home)}；${teamRankLabel(match.awayTeam, match.away)}。`
   });
   evidence.push({
@@ -5058,11 +5284,17 @@ function aiPredictionEvidence(match, top, rows) {
     status: match.recentFormRecords?.home?.summary?.matches && match.recentFormRecords?.away?.summary?.matches ? "synced" : "partial",
     detail: `${aiPredictionFormEvidence(match, "home")} ${aiPredictionFormEvidence(match, "away")}`
   });
-  evidence.push({
-    label: "世界杯履历",
-    status: match.homeTeam?.worldCupRecord && match.awayTeam?.worldCupRecord ? "synced" : "partial",
-    detail: `${aiPredictionWorldCupEvidence(match.homeTeam, match.homeName)} ${aiPredictionWorldCupEvidence(match.awayTeam, match.awayName)}`
-  });
+  evidence.push(clubMatch
+    ? {
+      label: "赛事/资格赛背景",
+      status: match.homeTeam?.ratingProfile && match.awayTeam?.ratingProfile ? "partial" : "missing",
+      detail: aiPredictionClubCompetitionEvidence(match)
+    }
+    : {
+      label: "世界杯履历",
+      status: match.homeTeam?.worldCupRecord && match.awayTeam?.worldCupRecord ? "synced" : "partial",
+      detail: `${aiPredictionWorldCupEvidence(match.homeTeam, match.homeName)} ${aiPredictionWorldCupEvidence(match.awayTeam, match.awayName)}`
+    });
   const knockout = match.probabilities?.advance?.knockoutExperience;
   if (knockout?.home && knockout?.away) {
     const direction = knockout.delta > 0.003
@@ -5160,6 +5392,11 @@ function aiPredictionEvidence(match, top, rows) {
     });
     drivers.push(...match.modelV2.drivers.slice(0, 4).map((driver) => `${driver.label}：${driver.reason}`));
     drivers.push(aiPredictionCalibrationSummary(match));
+  }
+  const marketDisagreement = aiPredictionMarketDisagreement(match, top, rows);
+  if (marketDisagreement) {
+    evidence.push(marketDisagreement);
+    drivers.push(`盘口分歧：${marketDisagreement.detail}`);
   }
   if (context.aiAnalysis?.modelImpacts?.length || match.dynamicModel?.modelImpacts?.length) {
     const impacts = [...(context.aiAnalysis?.modelImpacts || []), ...(match.dynamicModel?.modelImpacts || [])]
@@ -5313,8 +5550,9 @@ function tradableRecommendationScore(rec, match = null) {
   return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec) - disciplinePenalty;
 }
 
-function isActionableRecommendation(rec) {
+function isActionableRecommendation(rec, match = null) {
   if (typeof rec.marketPrice !== "number" || typeof rec.modelProbability !== "number") return false;
+  if (match?.manualMarkets?.sourceType === "auto-baseline" && rec.chart?.source !== "Polymarket") return false;
   if (rec.decision?.action === "AVOID_OR_SELL") return false;
   if (rec.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|低 edge 不再主推|BTTS 与小球结构冲突/.test(String(reason)))) return false;
   const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
@@ -5323,7 +5561,7 @@ function isActionableRecommendation(rec) {
 }
 
 function isPrimaryTradeCandidate(match, rec) {
-  if (!isActionableRecommendation(rec)) return false;
+  if (!isActionableRecommendation(rec, match)) return false;
   const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
   if (edgeValue < 0.06) return false;
   if (rec.marketType !== "moneyline") return true;
@@ -5345,7 +5583,7 @@ function sortedPrimaryRecommendations(match) {
 
 function sortedActionableRecommendations(match) {
   return [...(match.recommendations || [])]
-    .filter(isActionableRecommendation)
+    .filter((rec) => isActionableRecommendation(rec, match))
     .sort((a, b) => tradableRecommendationScore(b, match) - tradableRecommendationScore(a, match));
 }
 
@@ -5574,6 +5812,7 @@ function opportunityObservationRows(matches, scanDate, nowMs = Date.now()) {
       if (strictIds.has(id)) continue;
       const hasPrice = typeof rec.marketPrice === "number";
       const hasLiveChart = rec.chart?.source === "Polymarket" && (rec.chart.history || []).length >= 2;
+      if (match.manualMarkets?.sourceType === "auto-baseline" && rec.chart?.source !== "Polymarket") continue;
       const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
       const maxBuyPrice = typeof rec.maxBuyPrice === "number" ? rec.maxBuyPrice : null;
       const priceGap = hasPrice && maxBuyPrice != null ? maxBuyPrice - rec.marketPrice : null;
@@ -7948,6 +8187,23 @@ async function refreshMatchMarketsForLive(match, live, force = false) {
 }
 
 async function buildLiveMatchInsight(matchId, { force = false, persist = true } = {}) {
+  if (isSyntheticPolymarketScheduleId(matchId)) {
+    return {
+      ok: false,
+      skipped: true,
+      matchId,
+      scheduleId: matchId,
+      source: "Polymarket soccer games",
+      error: "俱乐部赛事实时现场统计源暂未接入；已停止调用世界杯 ESPN 实时接口。当前只刷新 Polymarket 盘口，现场攻防状态需要接入俱乐部赛事 live feed 后再计算。",
+      marketRefresh: {
+        ok: false,
+        skipped: true,
+        source: "dashboard market refresh",
+        reason: "俱乐部 live 请求不阻塞等待盘口刷新；请用页面主刷新或机会雷达复核当前价。"
+      },
+      capturedAt: new Date().toISOString()
+    };
+  }
   let dashboard = await getPersistedLightCache();
   if (!dashboard?.matches?.length) {
     dashboard = await buildDashboard({
@@ -7975,6 +8231,23 @@ async function buildLiveMatchInsight(matchId, { force = false, persist = true } 
       ok: false,
       error: "这场比赛缺少 ESPN schedule id，无法查询实时 summary。",
       matchId: match.id
+    };
+  }
+  if (isSyntheticPolymarketScheduleId(scheduleId) || isClubMatch(match)) {
+    return {
+      ok: false,
+      skipped: true,
+      matchId: match.id,
+      scheduleId,
+      source: "Polymarket soccer games",
+      error: "俱乐部赛事实时现场统计源暂未接入；已停止调用世界杯 ESPN 实时接口。当前只刷新 Polymarket 盘口，现场攻防状态需要接入俱乐部赛事 live feed 后再计算。",
+      marketRefresh: {
+        ok: false,
+        skipped: true,
+        source: "dashboard market refresh",
+        reason: "俱乐部 live 请求不阻塞等待盘口刷新；请用页面主刷新或机会雷达复核当前价。"
+      },
+      capturedAt: new Date().toISOString()
     };
   }
   match.scheduleId = scheduleId;
@@ -9767,7 +10040,7 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs = Date.now()) {
+function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, nowMs = Date.now()) {
   if (!shouldIncludePolymarketSoccerGame(event, nowMs)) return null;
   const teams = parseTeamsFromSoccerEventTitle(event.title);
   if (!teams) return null;
@@ -9776,8 +10049,8 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
   const key = matchScheduleKey(teams.homeName, teams.awayName);
   if (modeledKeys.has(key)) return null;
   if (hasRecordedFinal(`poly-${baseSlug}`, finalResults)) return null;
-  const homeRatingProfile = clubTeamRatingProfile(teams.homeName, competition);
-  const awayRatingProfile = clubTeamRatingProfile(teams.awayName, competition);
+  const homeRatingProfile = clubTeamRatingProfile(teams.homeName, competition, clubStrength);
+  const awayRatingProfile = clubTeamRatingProfile(teams.awayName, competition, clubStrength);
 
   const scheduleEvent = {
     scheduleId: `poly-${baseSlug}`,
@@ -9937,7 +10210,7 @@ function findPolymarketMoneylinePrices(match, polymarket, event = {}) {
   };
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
@@ -9954,7 +10227,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
     ...autoBaseline.map((match) => matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName))
   ]);
   const polymarketAutoBaseline = selectPolymarketVisibleBaseEvents(polymarket?.soccerEvents?.events || [], nowMs)
-    .map((event) => polymarketSoccerAutoBaselineFromEvent(event, modeledAndScheduleKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, nowMs))
+    .map((event) => polymarketSoccerAutoBaselineFromEvent(event, modeledAndScheduleKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, nowMs))
     .filter(Boolean);
   for (const match of polymarketAutoBaseline) {
     modeledAndScheduleKeys.add(matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName));
@@ -10440,22 +10713,18 @@ function findChartToken(match, recommendation, tokens) {
 
   if (recommendation.marketType === "total") {
     const needle = recommendation.key === "under25" ? "under" : "over";
-    return sameMatchTokens.find((token) => token.labelText.includes(needle))
-      || sameMatchTokens.find((token) => `${token.marketText} ${token.labelText}`.includes(needle)) || null;
+    return sameMatchTokens.find((token) => isFullMatchTotal25Token(token) && totalOutcomeMatches(token, needle)) || null;
   }
 
   if (recommendation.marketType === "btts") {
     const outcomeNeedle = recommendation.key === "bttsYes" ? "yes" : "no";
     return sameMatchTokens.find((token) => {
       const text = `${token.marketQuestionText} ${token.marketSlug} ${token.labelText}`;
-      const isBttsMarket = text.includes("both teams")
-        || text.includes("both-teams")
-        || text.includes("btts")
-        || (text.includes("to score") && text.includes("score"));
+      const isBttsMarket = isBttsToken(token);
       return isBttsMarket && token.labelText.includes(outcomeNeedle);
     }) || sameMatchTokens.find((token) => {
       const text = `${token.marketText} ${token.labelText}`;
-      return text.includes("both teams to score") && token.labelText.includes(outcomeNeedle);
+      return isBttsToken(token) && token.labelText.includes(outcomeNeedle);
     }) || null;
   }
 
@@ -10506,6 +10775,49 @@ function lineMatchesText(handicap, recommendationKey, text) {
     line < 0 ? `-${unsigned}` : `+${unsigned}`
   ].map((value) => String(value).toLowerCase().replace(/\s+/g, ""));
   return variants.some((variant) => variant && normalizedText.includes(variant));
+}
+
+function hasTotal25Line(text) {
+  const compact = String(text || "").toLowerCase().replace(/\s+/g, "");
+  return compact.includes("2.5") || compact.includes("2pt5") || compact.includes("2-5") || compact.includes("25goals");
+}
+
+function isFullMatchTotal25Token(token) {
+  const type = String(token?.sportsMarketType || "").toLowerCase();
+  const text = `${token?.marketText || ""} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""} ${token?.labelText || ""}`.toLowerCase();
+  if (!hasTotal25Line(text)) return false;
+  if (isAdvanceToken(token)) return false;
+  if (/correct[-_\s]?score|exact[-_\s]?score|比分|球胆/.test(text)) return false;
+  if (/team[-_\s]?total|player|goalscorer|shots?|assists?|saves?|corners?|first[-_\s]?half|second[-_\s]?half|halftime|half[-_\s]?time|spread|handicap|both[-_\s]?teams|btts|first[-_\s]?to[-_\s]?score/.test(text)) return false;
+  return type.includes("total")
+    || text.includes("total goals")
+    || text.includes("total-goals")
+    || text.includes("o/u")
+    || /\b(over|under)\b/.test(text)
+    || /\b[ou]\s*2(?:\.|pt)?5\b/.test(text);
+}
+
+function isBttsToken(token) {
+  const type = String(token?.sportsMarketType || "").toLowerCase();
+  const text = `${token?.marketText || ""} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""}`.toLowerCase();
+  if (/first[-_\s]?(team[-_\s]?)?to[-_\s]?score|to\s+score\s+first|first\s+goal|team[-_\s]?total|player|goalscorer|shots?|assists?|saves?|corners?|correct[-_\s]?score|exact[-_\s]?score|spread|handicap|total[-_\s]?goals|o\/u/.test(text)) return false;
+  return type.includes("both_teams_to_score")
+    || text.includes("both teams to score")
+    || text.includes("both-teams-to-score")
+    || text.includes("btts");
+}
+
+function totalOutcomeMatches(token, side) {
+  const label = String(token?.labelText || "").toLowerCase();
+  const text = `${label} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""}`.toLowerCase();
+  if (side === "under") {
+    return /\bunder\b/.test(label)
+      || /\bu\s*2(?:\.|pt)?5\b/.test(label)
+      || (/under/.test(text) && !/\bover\b/.test(label));
+  }
+  return /\bover\b/.test(label)
+    || /\bo\s*2(?:\.|pt)?5\b/.test(label)
+    || (/over/.test(text) && !/\bunder\b/.test(label));
 }
 
 function isSpreadOrTotalToken(token) {
@@ -10595,6 +10907,23 @@ function normalizedClubNameKey(value) {
     .toLowerCase();
 }
 
+function clubStrengthRecordForTeam(teamName, clubStrength = {}) {
+  const key = normalizedClubNameKey(teamName);
+  const records = clubStrength?.teams || clubStrength?.clubs || {};
+  if (!key || !records || typeof records !== "object") return null;
+  const direct = records[key];
+  if (direct) return direct;
+  return Object.values(records).find((record) => {
+    const aliases = [
+      record?.name,
+      record?.nameEn,
+      record?.displayName,
+      ...(Array.isArray(record?.aliases) ? record.aliases : [])
+    ].map(normalizedClubNameKey).filter(Boolean);
+    return aliases.includes(key);
+  }) || null;
+}
+
 function clubCompetitionBaseRating(competition = {}) {
   return CLUB_COMPETITION_BASE_RATINGS[competition.key]
     || CLUB_COMPETITION_BASE_RATINGS[competition.parentKey]
@@ -10602,34 +10931,111 @@ function clubCompetitionBaseRating(competition = {}) {
     || AUTO_BASELINE_CLUB_DEFAULT_RATING;
 }
 
-function clubTeamRatingProfile(teamName, competition = {}) {
+function clubCountryStrengthHint(teamName) {
+  const key = normalizedClubNameKey(teamName);
+  if (!key) return null;
+  for (const hint of CLUB_COUNTRY_NAME_HINTS) {
+    if ((hint.patterns || []).some((pattern) => key.includes(normalizedClubNameKey(pattern)))) {
+      const modifier = Number(CLUB_COUNTRY_STRENGTH_MODIFIERS[hint.key]) || 0;
+      return {
+        country: hint.country,
+        countryKey: hint.key,
+        modifier
+      };
+    }
+  }
+  return null;
+}
+
+function clubFallbackRatingFromCompetition(teamName, competition = {}, baseRating) {
+  const countryHint = clubCountryStrengthHint(teamName);
+  const stageModifier = competition.stageType === "qualifying" ? -1 : 0;
+  const tierModifier = Number.isFinite(Number(competition.tier)) ? clamp((2 - Number(competition.tier)) * 1.5, -4, 3) : 0;
+  const modifier = (countryHint?.modifier || 0) + stageModifier + tierModifier;
+  const rating = Math.round(clamp(Number(baseRating || AUTO_BASELINE_CLUB_DEFAULT_RATING) + modifier, 50, 82));
+  return {
+    rating,
+    countryHint,
+    modifier: roundTo(modifier, 1),
+    source: countryHint ? "赛事/联赛强度兜底" : "赛事级别兜底评分",
+    sourceEn: countryHint ? "Competition and league-strength fallback" : "Competition-level fallback rating",
+    confidence: countryHint ? "low-medium" : "low"
+  };
+}
+
+function clubTeamRatingProfile(teamName, competition = {}, clubStrength = {}) {
   const key = normalizedClubNameKey(teamName);
   const baseRating = clubCompetitionBaseRating(competition);
+  const strengthRecord = clubStrengthRecordForTeam(teamName, clubStrength);
+  const dataRating = Number(strengthRecord?.rating);
   const overrideRating = CLUB_TEAM_RATING_OVERRIDES[key];
-  const rating = Number.isFinite(Number(overrideRating)) ? Number(overrideRating) : baseRating;
-  const source = Number.isFinite(Number(overrideRating))
-    ? "本地俱乐部分层快照"
-    : "赛事级别兜底评分";
-  const sourceEn = Number.isFinite(Number(overrideRating))
-    ? "Local club-tier snapshot"
-    : "Competition-level fallback rating";
+  const fallback = clubFallbackRatingFromCompetition(teamName, competition, baseRating);
+  const rating = Number.isFinite(dataRating)
+    ? dataRating
+    : Number.isFinite(Number(overrideRating)) ? Number(overrideRating) : fallback.rating;
+  const hasDataRating = Number.isFinite(dataRating);
+  const hasOverrideRating = Number.isFinite(Number(overrideRating));
+  const source = hasDataRating
+    ? (strengthRecord.source || clubStrength.source || "俱乐部强度数据快照")
+    : hasOverrideRating
+      ? "本地俱乐部分层快照"
+      : fallback.source;
+  const sourceEn = hasDataRating
+    ? (strengthRecord.sourceEn || clubStrength.sourceEn || "Club strength data snapshot")
+    : hasOverrideRating
+      ? "Local club-tier snapshot"
+      : fallback.sourceEn;
+  const confidence = strengthRecord?.confidence
+    || (hasDataRating ? "medium" : hasOverrideRating ? "medium" : fallback.confidence);
+  const sourceUrl = strengthRecord?.sourceUrl || clubStrength.sourceUrl || "";
+  const sourceUrls = Array.isArray(strengthRecord?.sources) ? strengthRecord.sources : [];
+  const note = strengthRecord?.note || (hasDataRating
+    ? `${teamName} 使用俱乐部强度数据评分 ${rating}；口径：${clubStrength.methodologyZh || clubStrength.methodology || "公开俱乐部强度/赛事级别快照"}。`
+    : hasOverrideRating
+      ? `${teamName} 使用俱乐部层级覆盖评分 ${rating}；该值来自本地可审计快照，不等同于实时阵容。`
+      : `${teamName} 暂无俱乐部覆盖评分，使用 ${competition.label || "赛事"} 基础 ${baseRating}，叠加${fallback.countryHint ? `${fallback.countryHint.country} 联赛/国家强度` : "赛事层级"}修正 ${fallback.modifier >= 0 ? "+" : ""}${fallback.modifier}，得到评分 ${rating}；低置信，但避免所有未知俱乐部同权。`);
+  const noteEn = strengthRecord?.noteEn || (hasDataRating
+    ? `${teamName} uses club-strength rating ${rating}; methodology: ${clubStrength.methodology || "public club strength / competition-tier snapshot"}.`
+    : hasOverrideRating
+      ? `${teamName} uses club-tier override rating ${rating}; this is a local auditable snapshot, not live lineup strength.`
+      : `${teamName} has no club override yet, so it uses ${competition.labelEn || "competition"} base ${baseRating} plus ${fallback.countryHint ? `${fallback.countryHint.country} league/country` : "competition-tier"} adjustment ${fallback.modifier >= 0 ? "+" : ""}${fallback.modifier}, producing rating ${rating}; low-confidence, but not equal-weighted across unknown clubs.`);
   return {
     ok: true,
     teamType: "club",
     rating,
     baseRating,
-    override: Number.isFinite(Number(overrideRating)),
-    confidence: Number.isFinite(Number(overrideRating)) ? "medium" : "low",
+    override: hasDataRating || hasOverrideRating,
+    confidence,
     source,
     sourceEn,
-    updatedAt: new Date().toISOString(),
-    note: Number.isFinite(Number(overrideRating))
-      ? `${teamName} 使用俱乐部层级覆盖评分 ${rating}；该值来自本地可审计快照，不等同于实时阵容。`
-      : `${teamName} 暂无俱乐部覆盖评分，使用 ${competition.label || "赛事"} 基础评分 ${rating}；低置信，只作防止所有未知队同权的保守基线。`,
-    noteEn: Number.isFinite(Number(overrideRating))
-      ? `${teamName} uses club-tier override rating ${rating}; this is a local auditable snapshot, not live lineup strength.`
-      : `${teamName} has no club override yet, so it uses ${competition.labelEn || "competition"} base rating ${rating}; low-confidence baseline only.`
+    sourceUrl,
+    sourceUrls,
+    updatedAt: strengthRecord?.updatedAt || clubStrength.updatedAt || new Date().toISOString(),
+    rank: strengthRecord?.rank ?? null,
+    rankLabel: strengthRecord?.rankLabel || "",
+    country: strengthRecord?.country || fallback.countryHint?.country || "",
+    countryHint: fallback.countryHint || null,
+    countryModifier: fallback.modifier,
+    method: strengthRecord?.method || clubStrength.methodology || "",
+    note,
+    noteEn
   };
+}
+
+function isClubMatch(match = {}) {
+  return match?.competition?.teamType === "club"
+    || match?.homeTeam?.ratingProfile?.teamType === "club"
+    || match?.awayTeam?.ratingProfile?.teamType === "club"
+    || match?.homeTeam?.worldRanking?.status === "not-applicable"
+    || match?.awayTeam?.worldRanking?.status === "not-applicable";
+}
+
+function isSyntheticPolymarketScheduleId(scheduleId) {
+  return /^poly-/i.test(String(scheduleId || ""));
+}
+
+function hasClubStrengthData(clubStrength = {}) {
+  return Object.keys(clubStrength?.teams || clubStrength?.clubs || {}).length > 0;
 }
 
 function teamRatingForScheduleTeam(team) {
@@ -11761,6 +12167,16 @@ function autoBaselineManualMarkets(match, probabilities) {
 function contextRecentForm(event, side, ranking) {
   const name = eventTeamName(event, side);
   const rank = ranking?.rank;
+  const team = event?.[side] || {};
+  if (team.teamType === "club" || team.ratingProfile?.teamType === "club") {
+    const rating = Number(team.ratingOverride ?? team.ratingProfile?.rating);
+    return [
+      Number.isFinite(rating)
+        ? `${name} 俱乐部评分 ${rating}，作为长期实力基线输入；FIFA 国家队排名不适用。`
+        : `${name} 是俱乐部队，等待俱乐部强度快照补充；FIFA 国家队排名不适用。`,
+      "公开近况同步未完成时，不把未知近五场战绩强行加权。"
+    ];
+  }
   return [
     rank ? `${name} FIFA 排名第 ${rank}，作为长期实力基线输入。` : `${name} 排名快照未覆盖，使用保守自动评分。`,
     "公开近况同步未完成时，不把未知近五场战绩强行加权。"
@@ -11769,15 +12185,19 @@ function contextRecentForm(event, side, ranking) {
 
 function emptyRecentFormRecord(event, side, ranking) {
   const code = eventTeamCode(event, side);
+  const team = event?.[side] || {};
+  const isClubTeam = team.teamType === "club" || team.ratingProfile?.teamType === "club";
   return {
     ok: false,
     status: "queued",
     teamCode: code,
     teamName: teamDisplayName(code, eventTeamName(event, side)),
     updatedAt: new Date().toISOString(),
-    source: "ESPN all soccer team schedule",
+    source: isClubTeam ? "俱乐部近期战绩源待接入" : "ESPN all soccer team schedule",
     sourceUrl: "",
-    error: ranking?.rank ? "等待公开赛果同步" : "等待公开赛果同步；排名快照也未覆盖",
+    error: isClubTeam
+      ? "等待俱乐部公开赛果源同步；FIFA 国家队排名不适用"
+      : ranking?.rank ? "等待公开赛果同步" : "等待公开赛果同步；排名快照也未覆盖",
     summary: {
       matches: 0,
       wins: 0,
@@ -12769,7 +13189,8 @@ async function fetchPolymarket(schedule = null, options = {}) {
     };
   }
 
-  const markets = uniqueMarkets(results.flatMap((result) => result.markets || []));
+  const markets = uniqueMarkets(results.flatMap((result) => result.markets || []))
+    .sort((a, b) => marketCatalogSortScore(a) - marketCatalogSortScore(b));
   const marketLimit = light
     ? Math.min(POLYMARKET_MARKET_LIMIT, POLYMARKET_LIGHT_MARKET_LIMIT)
     : POLYMARKET_MARKET_LIMIT;
@@ -15823,6 +16244,16 @@ async function buildDashboard({
     ok: false,
     error: "data/squad-profiles.json 缺失或未初始化；请运行 npm run sync:squad-profiles"
   });
+  const clubStrength = await readOptionalJson(CLUB_STRENGTH_PATH, {
+    source: "俱乐部强度数据快照",
+    sourceEn: "Club strength data snapshot",
+    updatedAt: "",
+    methodologyZh: "未初始化；俱乐部赛事只能使用赛事级别兜底评分。",
+    methodology: "Not initialized; club fixtures can only use competition-tier fallback ratings.",
+    teams: {},
+    ok: false,
+    error: "data/club-strength.json 缺失或未初始化"
+  });
   const researchFramework = await readOptionalJson(RESEARCH_FRAMEWORK_PATH, {
     ok: false,
     dimensions: [],
@@ -15858,7 +16289,7 @@ async function buildDashboard({
     }
   }
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, trendSourceSchedule.matches || schedule.matches || [], finalResults);
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength);
   attachMarketCharts(matches, polymarket);
   const soccerCompetitions = soccerCompetitionSummaryFromMatches(matches);
   const bettingExpert = await attachBettingExpertSignals(matches, { enabled: !light });
@@ -15912,6 +16343,13 @@ async function buildDashboard({
         lastUpdated: squadProfiles.updatedAt || "",
         error: squadProfiles.error,
         detail: `${Object.keys(squadProfiles.teams || {}).length} 队 · 身高/年龄/出场/俱乐部分层/近期战绩证据`
+      },
+      {
+        source: "俱乐部强度数据",
+        ok: clubStrength.ok !== false || hasClubStrengthData(clubStrength),
+        lastUpdated: clubStrength.updatedAt || "",
+        error: clubStrength.error,
+        detail: `${Object.keys(clubStrength.teams || clubStrength.clubs || {}).length} 个俱乐部别名/记录 · ${clubStrength.methodologyZh || clubStrength.methodology || "用于俱乐部赛事基线，不用于国家队"}`
       },
       {
         source: "动态情报快照",
@@ -15996,6 +16434,14 @@ async function buildDashboard({
       count: Object.keys(squadProfiles.teams || {}).length,
       methodology: squadProfiles.methodology,
       methodologyZh: squadProfiles.methodologyZh
+    },
+    clubStrength: {
+      source: clubStrength.source,
+      sourceUrl: clubStrength.sourceUrl,
+      updatedAt: clubStrength.updatedAt,
+      count: Object.keys(clubStrength.teams || clubStrength.clubs || {}).length,
+      methodology: clubStrength.methodology,
+      methodologyZh: clubStrength.methodologyZh
     },
     researchFramework,
     contextMeta: context.meta || {},

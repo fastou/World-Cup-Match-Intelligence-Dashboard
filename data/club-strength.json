@@ -1,0 +1,367 @@
+{
+  "ok": true,
+  "source": "Manual club-strength snapshot from public club Elo / UEFA coefficient context",
+  "sourceEn": "Manual club-strength snapshot from public club Elo / UEFA coefficient context",
+  "sourceUrl": "https://clubelo.com/Ranking",
+  "updatedAt": "2026-07-20",
+  "methodology": "Internal 0-100 club rating seeded from public club Elo, UEFA coefficient context, competition tier, and league strength. It is not a FIFA national-team ranking and is not live lineup strength.",
+  "methodologyZh": "内部 0-100 俱乐部评分，参考公开 ClubElo、UEFA 俱乐部系数语境、赛事级别和联赛强度；不是 FIFA 国家队排名，也不是实时阵容强度。",
+  "teams": {
+    "floriana fc": {
+      "name": "Floriana FC",
+      "aliases": ["Floriana"],
+      "country": "Malta",
+      "rating": 57,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "sources": [
+        { "name": "ClubElo Ranking", "url": "https://clubelo.com/Ranking" },
+        { "name": "UEFA match centre", "url": "https://www.uefa.com/uefaconferenceleague/match/2048815--floriana-vs-drita/statistics/" },
+        { "name": "Football-coefficient Floriana", "url": "https://www.football-coefficient.eu/team/385-floriana-fc/" }
+      ],
+      "note": "Floriana FC 使用俱乐部强度快照评分 57；马耳他联赛与欧战系数语境较弱，主场优势仍由模型单独保留。"
+    },
+    "fc drita": {
+      "name": "FC Drita",
+      "aliases": ["Drita", "Drita Gjilan"],
+      "country": "Kosovo",
+      "rating": 66,
+      "confidence": "medium",
+      "rankLabel": "UEFA club coefficient context stronger than Floriana",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "sources": [
+        { "name": "ClubElo Ranking", "url": "https://clubelo.com/Ranking" },
+        { "name": "UEFA rankings", "url": "https://www.uefa.com/nationalassociations/uefarankings/" },
+        { "name": "Eurocoeff Drita", "url": "https://eurocoeff.com/club/fc-drita/" }
+      ],
+      "note": "FC Drita 使用俱乐部强度快照评分 66；公开欧战系数和俱乐部 Elo 语境均明显强于 Floriana，但仍需首发/伤停确认。"
+    },
+    "kuopion ps": {
+      "name": "Kuopion PS",
+      "aliases": ["KuPS", "Kuopion Palloseura"],
+      "country": "Finland",
+      "rating": 66,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Kuopion PS 使用北欧联赛/欧战资格赛公开强度语境评分 66。"
+    },
+    "sabah fk": {
+      "name": "Sabah FK",
+      "aliases": ["Sabah FC"],
+      "country": "Azerbaijan",
+      "rating": 62,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Sabah FK 使用阿塞拜疆联赛/欧战资格赛公开强度语境评分 62。"
+    },
+    "shamrock rovers fc": {
+      "name": "Shamrock Rovers FC",
+      "aliases": ["Shamrock Rovers"],
+      "country": "Ireland",
+      "rating": 62,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Shamrock Rovers 使用爱尔兰联赛与欧战资格赛公开强度语境评分 62。"
+    },
+    "fc thun": {
+      "name": "FC Thun",
+      "country": "Switzerland",
+      "rating": 68,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "FC Thun 使用瑞士联赛与欧战资格赛公开强度语境评分 68。"
+    },
+    "gnk dinamo zagreb": {
+      "name": "GNK Dinamo Zagreb",
+      "aliases": ["Dinamo Zagreb"],
+      "country": "Croatia",
+      "rating": 76,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Dinamo Zagreb 使用克罗地亚强队与欧战经验语境评分 76。"
+    },
+    "fenerbahce sk": {
+      "name": "Fenerbahçe SK",
+      "aliases": ["Fenerbahce", "Fenerbahçe"],
+      "country": "Turkey",
+      "rating": 78,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Fenerbahçe 使用土超强队与欧战经验语境评分 78。"
+    },
+    "gornik zabrze": {
+      "name": "Górnik Zabrze",
+      "aliases": ["Gornik Zabrze"],
+      "country": "Poland",
+      "rating": 66,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Górnik Zabrze 使用波兰联赛与欧战资格赛公开强度语境评分 66。"
+    },
+    "larne fc": {
+      "name": "Larne FC",
+      "country": "Northern Ireland",
+      "rating": 56,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Larne FC 使用北爱尔兰联赛与欧战资格赛公开强度语境评分 56。"
+    },
+    "fk crvena zvezda": {
+      "name": "FK Crvena zvezda",
+      "aliases": ["Crvena zvezda", "Red Star Belgrade"],
+      "country": "Serbia",
+      "rating": 76,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Crvena zvezda 使用塞尔维亚强队与欧战经验语境评分 76。"
+    },
+    "mh hapoel beer sheva": {
+      "name": "MH Hapoel Be'er Sheva",
+      "aliases": ["Hapoel Beer Sheva"],
+      "country": "Israel",
+      "rating": 67,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Hapoel Be'er Sheva 使用以色列联赛与欧战资格赛公开强度语境评分 67。"
+    },
+    "as omonoia leukosias": {
+      "name": "AS Omónoia Leukosías",
+      "aliases": ["Omonoia", "Omónoia"],
+      "country": "Cyprus",
+      "rating": 65,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Omonoia 使用塞浦路斯联赛与欧战资格赛公开强度语境评分 65。"
+    },
+    "qairat fk": {
+      "name": "Qairat FK",
+      "aliases": ["Kairat", "Qairat"],
+      "country": "Kazakhstan",
+      "rating": 64,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Qairat 使用哈萨克斯坦联赛与欧战资格赛公开强度语境评分 64。"
+    },
+    "inter miami cf": {
+      "name": "Inter Miami CF",
+      "aliases": ["Inter Miami"],
+      "country": "USA",
+      "rating": 72,
+      "confidence": "medium",
+      "source": "ClubElo / MLS strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Inter Miami 使用 MLS 与俱乐部阵容层级语境评分 72。"
+    },
+    "chicago fire fc": {
+      "name": "Chicago Fire FC",
+      "aliases": ["Chicago Fire"],
+      "country": "USA",
+      "rating": 64,
+      "confidence": "medium",
+      "source": "ClubElo / MLS strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Chicago Fire 使用 MLS 公开强度语境评分 64。"
+    },
+    "philadelphia union": {
+      "name": "Philadelphia Union",
+      "country": "USA",
+      "rating": 70,
+      "confidence": "medium",
+      "source": "ClubElo / MLS strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Philadelphia Union 使用 MLS 公开强度语境评分 70。"
+    },
+    "fc cincinnati": {
+      "name": "FC Cincinnati",
+      "country": "USA",
+      "rating": 71,
+      "confidence": "medium",
+      "source": "ClubElo / MLS strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "FC Cincinnati 使用 MLS 公开强度语境评分 71。"
+    },
+    "vancouver whitecaps fc": {
+      "name": "Vancouver Whitecaps FC",
+      "aliases": ["Vancouver Whitecaps"],
+      "country": "Canada",
+      "rating": 67,
+      "confidence": "medium",
+      "source": "ClubElo / MLS strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Vancouver Whitecaps 使用 MLS 公开强度语境评分 67。"
+    },
+    "qarabag agdam fk": {
+      "name": "Qarabağ Ağdam FK",
+      "aliases": ["Qarabag", "Qarabağ"],
+      "country": "Azerbaijan",
+      "rating": 73,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Qarabağ 使用阿塞拜疆强队与欧战经验语境评分 73。"
+    },
+    "pfk cska sofia": {
+      "name": "PFK CSKA Sofia",
+      "aliases": ["CSKA Sofia"],
+      "country": "Bulgaria",
+      "rating": 65,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "CSKA Sofia 使用保加利亚联赛与欧战资格赛公开强度语境评分 65。"
+    },
+    "helsingin jk": {
+      "name": "Helsingin JK",
+      "aliases": ["HJK"],
+      "country": "Finland",
+      "rating": 66,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "HJK 使用芬兰强队与欧战资格赛公开强度语境评分 66。"
+    },
+    "coleraine fc": {
+      "name": "Coleraine FC",
+      "aliases": ["Coleraine"],
+      "country": "Northern Ireland",
+      "rating": 54,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Coleraine 使用北爱尔兰联赛强度兜底评分 54；低置信，等待更细数据。"
+    },
+    "aarhus gf": {
+      "name": "Aarhus GF",
+      "aliases": ["AGF"],
+      "country": "Denmark",
+      "rating": 69,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Aarhus GF 使用丹麦联赛与欧战资格赛公开强度语境评分 69。"
+    },
+    "sk iberia 1999": {
+      "name": "SK Iberia 1999",
+      "country": "Georgia",
+      "rating": 61,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "SK Iberia 1999 使用格鲁吉亚联赛强度兜底评分 61；低置信，等待更细数据。"
+    },
+    "cf cruz azul": {
+      "name": "CF Cruz Azul",
+      "aliases": ["Cruz Azul"],
+      "country": "Mexico",
+      "rating": 72,
+      "confidence": "medium",
+      "source": "ClubElo / Liga MX strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Cruz Azul 使用墨西哥联赛强队语境评分 72。"
+    },
+    "club puebla": {
+      "name": "Club Puebla",
+      "aliases": ["Puebla"],
+      "country": "Mexico",
+      "rating": 63,
+      "confidence": "medium",
+      "source": "ClubElo / Liga MX strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Puebla 使用墨西哥联赛公开强度语境评分 63。"
+    },
+    "deportivo toluca fc": {
+      "name": "Deportivo Toluca FC",
+      "aliases": ["Toluca"],
+      "country": "Mexico",
+      "rating": 70,
+      "confidence": "medium",
+      "source": "ClubElo / Liga MX strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Toluca 使用墨西哥联赛强队语境评分 70。"
+    },
+    "pumas de la unam": {
+      "name": "Pumas de la UNAM",
+      "aliases": ["Pumas"],
+      "country": "Mexico",
+      "rating": 67,
+      "confidence": "medium",
+      "source": "ClubElo / Liga MX strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Pumas 使用墨西哥联赛公开强度语境评分 67。"
+    },
+    "fc malisheva": {
+      "name": "FC Malisheva",
+      "aliases": ["Malisheva"],
+      "country": "Kosovo",
+      "rating": 55,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Malisheva 使用科索沃联赛强度兜底评分 55；低置信，等待更细数据。"
+    },
+    "hibernian fc": {
+      "name": "Hibernian FC",
+      "aliases": ["Hibernian"],
+      "country": "Scotland",
+      "rating": 66,
+      "confidence": "medium",
+      "source": "ClubElo / UEFA coefficient public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Hibernian 使用苏格兰联赛与欧战资格赛公开强度语境评分 66。"
+    },
+    "zira fk": {
+      "name": "Zirə FK",
+      "aliases": ["Zira FK", "Zira"],
+      "country": "Azerbaijan",
+      "rating": 62,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Zirə 使用阿塞拜疆联赛强度语境评分 62；低置信，等待更细数据。"
+    },
+    "paide linnameeskond": {
+      "name": "Paide Linnameeskond",
+      "aliases": ["Paide"],
+      "country": "Estonia",
+      "rating": 55,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Paide 使用爱沙尼亚联赛强度兜底评分 55；低置信，等待更细数据。"
+    },
+    "fk rigas futbola skola": {
+      "name": "FK Rīgas Futbola Skola",
+      "aliases": ["RFS", "Rigas Futbola Skola"],
+      "country": "Latvia",
+      "rating": 64,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "RFS 使用拉脱维亚联赛与欧战资格赛公开强度语境评分 64。"
+    },
+    "if vestri": {
+      "name": "ÍF Vestri",
+      "aliases": ["Vestri"],
+      "country": "Iceland",
+      "rating": 52,
+      "confidence": "low-medium",
+      "source": "League-strength public context",
+      "sourceUrl": "https://clubelo.com/Ranking",
+      "note": "Vestri 使用冰岛联赛强度兜底评分 52；低置信，等待更细数据。"
+    }
+  }
+}
