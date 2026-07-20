@@ -32,7 +32,7 @@ const ENV_PATH = process.env.WORLDCUP_ENV_PATH || "/etc/worldcup-dashboard.env";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const LIGHT_CACHE_TTL_MS = 60 * 1000;
 const LIGHT_CACHE_STABILITY_MAX_AGE_MS = Number(process.env.LIGHT_CACHE_STABILITY_MAX_AGE_MS || 30 * 60 * 1000);
-const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 35000);
+const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 65000);
 const FETCH_TIMEOUT_MS = 6500;
 const LIGHT_FETCH_TIMEOUT_MS = Number(process.env.LIGHT_FETCH_TIMEOUT_MS || 3500);
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
@@ -10700,14 +10700,14 @@ function findChartToken(match, recommendation, tokens) {
     if (recommendation.key === "draw") {
       return sameMatchTokens.find((token) => {
         const text = `${token.marketText} ${token.labelText}`;
-        return !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && (text.includes("draw") || text.includes("平")) && token.labelText.includes("yes");
-      }) || sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && (token.labelText.includes("draw") || token.labelText.includes("平"))) || null;
+        return isFullMatchMoneylineToken(token) && (text.includes("draw") || text.includes("平")) && token.labelText.includes("yes");
+      }) || sameMatchTokens.find((token) => isFullMatchMoneylineToken(token) && (token.labelText.includes("draw") || token.labelText.includes("平"))) || null;
     }
     const teamAliases = recommendation.key === "home" ? homeAliases : awayAliases;
-    return sameMatchTokens.find((token) => !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && aliasesMatchText(teamAliases, token.labelText))
+    return sameMatchTokens.find((token) => isFullMatchMoneylineToken(token) && aliasesMatchText(teamAliases, token.labelText))
       || sameMatchTokens.find((token) => {
         const text = `${token.marketQuestionText} ${token.labelText}`;
-        return !isSpreadOrTotalToken(token) && !isAdvanceToken(token) && teamAliases.some((team) => textContainsAlias(token.marketQuestionText, team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
+        return isFullMatchMoneylineToken(token) && teamAliases.some((team) => textContainsAlias(token.marketQuestionText, team)) && token.marketQuestionText.includes("win") && token.labelText.includes("yes");
       }) || null;
   }
 
@@ -10780,6 +10780,19 @@ function lineMatchesText(handicap, recommendationKey, text) {
 function hasTotal25Line(text) {
   const compact = String(text || "").toLowerCase().replace(/\s+/g, "");
   return compact.includes("2.5") || compact.includes("2pt5") || compact.includes("2-5") || compact.includes("25goals");
+}
+
+function isFullMatchMoneylineToken(token) {
+  const type = String(token?.sportsMarketType || "").toLowerCase();
+  const text = `${token?.marketText || ""} ${token?.marketQuestionText || ""} ${token?.marketSlug || ""} ${token?.labelText || ""}`.toLowerCase();
+  if (isAdvanceToken(token) || isSpreadOrTotalToken(token)) return false;
+  if (/correct[-_\s]?score|exact[-_\s]?score|比分|球胆/.test(text)) return false;
+  if (/first[-_\s]?half|second[-_\s]?half|1st\s*half|2nd\s*half|halftime|half[-_\s]?time|draw\s+at\s+half|winner\s+of\s+half/.test(text)) return false;
+  if (/team[-_\s]?total|player|goalscorer|shots?|assists?|saves?|corners?|both[-_\s]?teams|btts|first[-_\s]?(team[-_\s]?)?to[-_\s]?score|to\s+score\s+first/.test(text)) return false;
+  return type.includes("moneyline")
+    || /\bwill\b.+\bwin\b/.test(text)
+    || text.includes("end in a draw")
+    || /\bmoneyline\b/.test(text);
 }
 
 function isFullMatchTotal25Token(token) {
