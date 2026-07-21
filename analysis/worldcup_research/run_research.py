@@ -478,6 +478,231 @@ def load_inplay_recommendations(conn: sqlite3.Connection) -> list[dict[str, Any]
     return [dict(row) for row in conn.execute(query)]
 
 
+def load_rows_for_matches(conn: sqlite3.Connection, table: str, match_ids: list[str]) -> list[dict[str, Any]]:
+    if not match_ids:
+        return []
+    rows: list[dict[str, Any]] = []
+    for index in range(0, len(match_ids), 800):
+        chunk = match_ids[index:index + 800]
+        placeholders = ",".join("?" for _ in chunk)
+        query = f"""
+        SELECT t.*, ms.captured_at AS snapshot_captured_at
+        FROM {table} t
+        LEFT JOIN match_snapshots ms ON ms.snapshot_id = t.snapshot_id
+        WHERE t.match_id IN ({placeholders})
+        """
+        rows.extend(dict(row) for row in conn.execute(query, chunk))
+    return rows
+
+
+def choose_latest_pre_kickoff(rows: list[dict[str, Any]], kickoff: str | None) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    kickoff_time = parse_time(kickoff)
+    pre_rows = []
+    for row in rows:
+        captured = parse_time(row.get("snapshot_captured_at") or row.get("updated_at"))
+        if kickoff_time and captured and captured <= kickoff_time:
+            pre_rows.append(row)
+    candidates = pre_rows or rows
+    return sorted(
+        candidates,
+        key=lambda item: parse_time(item.get("snapshot_captured_at") or item.get("updated_at")) or dt.datetime.min.replace(tzinfo=dt.timezone.utc),
+    )[-1]
+
+
+def side_rows_by_match(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        side = str(row.get("side") or "")
+        if side:
+            grouped[(row["match_id"], side)].append(row)
+    return grouped
+
+
+def rows_by_match(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[row["match_id"]].append(row)
+    return grouped
+
+
+def rate_from_record(row: dict[str, Any] | None, key: str) -> float | None:
+    if not row:
+        return None
+    matches = int_or_none(row.get("matches")) or 0
+    if matches <= 0:
+        return None
+    value = int_or_none(row.get(key))
+    if value is None:
+        return None
+    return value / matches
+
+
+def per_match_value(row: dict[str, Any] | None, key: str) -> float | None:
+    if not row:
+        return None
+    matches = int_or_none(row.get("matches")) or 0
+    if matches <= 0:
+        return None
+    value = int_or_none(row.get(key))
+    if value is None:
+        return None
+    return value / matches
+
+
+def diff_value(home_row: dict[str, Any] | None, away_row: dict[str, Any] | None, key: str) -> float | None:
+    if not home_row or not away_row:
+        return None
+    home = home_row.get(key)
+    away = away_row.get(key)
+    if home is None or away is None:
+        return None
+    try:
+        return float(home) - float(away)
+    except Exception:
+        return None
+
+
+def background_feature_rows(
+    conn: sqlite3.Connection,
+    matches: list[dict[str, Any]],
+    selected_by_match: dict[str, dict[str, Any]],
+    results_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    match_ids = [match["match_id"] for match in matches]
+    recent_by_side = side_rows_by_match(load_rows_for_matches(conn, "recent_form_snapshots", match_ids))
+    squad_by_side = side_rows_by_match(load_rows_for_matches(conn, "squad_profile_snapshots", match_ids))
+    record_by_side = side_rows_by_match(load_rows_for_matches(conn, "world_cup_record_snapshots", match_ids))
+    h2h_by_match = rows_by_match(load_rows_for_matches(conn, "head_to_head_snapshots", match_ids))
+    context_by_match = rows_by_match(load_rows_for_matches(conn, "context_signal_snapshots", match_ids))
+    human_by_match = rows_by_match(load_rows_for_matches(conn, "human_matchup_snapshots", match_ids))
+
+    output = []
+    for match in matches:
+        result = results_by_id.get(match["match_id"])
+        snapshot = selected_by_match.get(match["match_id"], {})
+        if not result or not snapshot:
+            continue
+        kickoff = match.get("kickoff_shanghai")
+        home_form = choose_latest_pre_kickoff(recent_by_side.get((match["match_id"], "home"), []), kickoff)
+        away_form = choose_latest_pre_kickoff(recent_by_side.get((match["match_id"], "away"), []), kickoff)
+        home_squad = choose_latest_pre_kickoff(squad_by_side.get((match["match_id"], "home"), []), kickoff)
+        away_squad = choose_latest_pre_kickoff(squad_by_side.get((match["match_id"], "away"), []), kickoff)
+        home_record = choose_latest_pre_kickoff(record_by_side.get((match["match_id"], "home"), []), kickoff)
+        away_record = choose_latest_pre_kickoff(record_by_side.get((match["match_id"], "away"), []), kickoff)
+        h2h = choose_latest_pre_kickoff(h2h_by_match.get(match["match_id"], []), kickoff)
+        context = choose_latest_pre_kickoff(context_by_match.get(match["match_id"], []), kickoff)
+        human = choose_latest_pre_kickoff(human_by_match.get(match["match_id"], []), kickoff)
+
+        home_goals = int_or_none(result.get("regulation_home_goals")) or 0
+        away_goals = int_or_none(result.get("regulation_away_goals")) or 0
+        lambda_home = snapshot.get("lambda_home")
+        lambda_away = snapshot.get("lambda_away")
+        lambda_home = float(lambda_home) if lambda_home is not None else None
+        lambda_away = float(lambda_away) if lambda_away is not None else None
+        form_home_points = (
+            ((int_or_none(home_form.get("wins")) or 0) * 3 + (int_or_none(home_form.get("draws")) or 0))
+            / ((int_or_none(home_form.get("matches")) or 0) * 3)
+            if home_form and (int_or_none(home_form.get("matches")) or 0) > 0 else None
+        )
+        form_away_points = (
+            ((int_or_none(away_form.get("wins")) or 0) * 3 + (int_or_none(away_form.get("draws")) or 0))
+            / ((int_or_none(away_form.get("matches")) or 0) * 3)
+            if away_form and (int_or_none(away_form.get("matches")) or 0) > 0 else None
+        )
+        h2h_matches = int_or_none(h2h.get("matches")) if h2h else None
+        h2h_home_wins = int_or_none(h2h.get("home_wins")) if h2h else None
+        h2h_away_wins = int_or_none(h2h.get("away_wins")) if h2h else None
+        output.append({
+            "match_id": match["match_id"],
+            "match": f"{match.get('home_name')} vs {match.get('away_name')}",
+            "kickoff_shanghai": kickoff,
+            "stage": stage_for(kickoff),
+            "home_goals": home_goals,
+            "away_goals": away_goals,
+            "home_win": 1 if home_goals > away_goals else 0,
+            "away_win": 1 if away_goals > home_goals else 0,
+            "draw": 1 if home_goals == away_goals else 0,
+            "over25": 1 if home_goals + away_goals > 2.5 else 0,
+            "under25": 1 if home_goals + away_goals < 2.5 else 0,
+            "btts": 1 if home_goals > 0 and away_goals > 0 else 0,
+            "favorite_side": "home" if (lambda_home or 0) > (lambda_away or 0) else "away" if (lambda_away or 0) > (lambda_home or 0) else "none",
+            "favorite_win": 1 if ((lambda_home or 0) > (lambda_away or 0) and home_goals > away_goals) or ((lambda_away or 0) > (lambda_home or 0) and away_goals > home_goals) else 0,
+            "xg_diff_home": (lambda_home - lambda_away) if lambda_home is not None and lambda_away is not None else None,
+            "xg_abs_diff": abs(lambda_home - lambda_away) if lambda_home is not None and lambda_away is not None else None,
+            "xg_balance": -abs(lambda_home - lambda_away) if lambda_home is not None and lambda_away is not None else None,
+            "xg_total": (lambda_home + lambda_away) if lambda_home is not None and lambda_away is not None else None,
+            "group_home_xg_delta": snapshot.get("group_situation_home_xg_delta"),
+            "group_away_xg_delta": snapshot.get("group_situation_away_xg_delta"),
+            "group_delta_diff_home": (
+                float(snapshot.get("group_situation_home_xg_delta") or 0)
+                - float(snapshot.get("group_situation_away_xg_delta") or 0)
+            ),
+            "physical_home_xg_delta": snapshot.get("physical_home_xg_delta"),
+            "physical_away_xg_delta": snapshot.get("physical_away_xg_delta"),
+            "physical_delta_diff_home": (
+                float(snapshot.get("physical_home_xg_delta") or 0)
+                - float(snapshot.get("physical_away_xg_delta") or 0)
+            ),
+            "physical_draw_delta": snapshot.get("physical_draw_delta"),
+            "context_home_xg_delta": context.get("home_xg_delta") if context else None,
+            "context_away_xg_delta": context.get("away_xg_delta") if context else None,
+            "context_diff_home": (
+                float(context.get("home_xg_delta") or 0) - float(context.get("away_xg_delta") or 0)
+                if context else None
+            ),
+            "context_btts_delta": context.get("btts_delta") if context else None,
+            "context_over25_delta": context.get("over25_delta") if context else None,
+            "context_draw_delta": context.get("draw_delta") if context else None,
+            "form_points_diff_home": (
+                form_home_points - form_away_points
+                if form_home_points is not None and form_away_points is not None else None
+            ),
+            "form_gf_diff_home": (
+                per_match_value(home_form, "goals_for") - per_match_value(away_form, "goals_for")
+                if per_match_value(home_form, "goals_for") is not None and per_match_value(away_form, "goals_for") is not None else None
+            ),
+            "form_ga_diff_home": (
+                per_match_value(home_form, "goals_against") - per_match_value(away_form, "goals_against")
+                if per_match_value(home_form, "goals_against") is not None and per_match_value(away_form, "goals_against") is not None else None
+            ),
+            "form_total_goals": (
+                per_match_value(home_form, "goals_for") + per_match_value(home_form, "goals_against")
+                + per_match_value(away_form, "goals_for") + per_match_value(away_form, "goals_against")
+                if all(value is not None for value in [
+                    per_match_value(home_form, "goals_for"),
+                    per_match_value(home_form, "goals_against"),
+                    per_match_value(away_form, "goals_for"),
+                    per_match_value(away_form, "goals_against"),
+                ]) else None
+            ),
+            "height_diff_home": diff_value(home_squad, away_squad, "avg_height_cm"),
+            "age_diff_home": diff_value(home_squad, away_squad, "avg_age"),
+            "caps_diff_home": diff_value(home_squad, away_squad, "avg_caps"),
+            "top_tier_diff_home": diff_value(home_squad, away_squad, "top_tier_share"),
+            "gk_score_diff_home": diff_value(home_squad, away_squad, "gk_score"),
+            "df_score_diff_home": diff_value(home_squad, away_squad, "df_score"),
+            "mf_score_diff_home": diff_value(home_squad, away_squad, "mf_score"),
+            "fw_score_diff_home": diff_value(home_squad, away_squad, "fw_score"),
+            "wc_appearances_diff_home": diff_value(home_record, away_record, "appearances"),
+            "wc_titles_diff_home": diff_value(home_record, away_record, "titles"),
+            "wc_win_rate_diff_home": (
+                rate_from_record(home_record, "wins") - rate_from_record(away_record, "wins")
+                if rate_from_record(home_record, "wins") is not None and rate_from_record(away_record, "wins") is not None else None
+            ),
+            "h2h_matches": h2h_matches,
+            "h2h_home_win_share": (h2h_home_wins / h2h_matches) if h2h_matches and h2h_home_wins is not None else None,
+            "h2h_away_win_share": (h2h_away_wins / h2h_matches) if h2h_matches and h2h_away_wins is not None else None,
+            "h2h_goal_total_per_match": (
+                ((int_or_none(h2h.get("home_goals")) or 0) + (int_or_none(h2h.get("away_goals")) or 0)) / h2h_matches
+                if h2h and h2h_matches else None
+            ),
+            "has_human_matchup_summary": 1 if human and (human.get("summary") or human.get("ai_summary")) else 0,
+        })
+    return output
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if fieldnames is None:
@@ -1140,6 +1365,8 @@ Detailed reports:
 - `worldcup-data-audit.md`
 - `worldcup-descriptive-analysis.md`
 - `worldcup-factor-analysis.md`
+- `worldcup-background-factor-analysis-zh.md`
+- `worldcup-live-factor-analysis-zh.md`
 - `worldcup-sensitivity-analysis.md`
 """
     write_markdown(out_dir / "worldcup-research-report.md", combined)
@@ -1243,6 +1470,187 @@ Detailed reports:
     write_markdown(out_dir / "worldcup-research-report-zh.md", combined_zh)
 
 
+def top_factor_rows(rows: list[dict[str, Any]], target: str | None = None, limit: int = 8) -> list[dict[str, Any]]:
+    scoped = [row for row in rows if (target is None or row.get("target") == target) and row.get("lift") is not None]
+    return sorted(scoped, key=lambda row: abs(float(row.get("lift") or 0)), reverse=True)[:limit]
+
+
+def write_background_live_factor_reports(
+    out_dir: Path,
+    background_rows: list[dict[str, Any]],
+    background_signals: list[dict[str, Any]],
+    live_rows_: list[dict[str, Any]],
+    live_signals: list[dict[str, Any]],
+) -> None:
+    generated_at = dt.datetime.now(dt.timezone.utc).astimezone(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S %z")
+    background_missing_notes = []
+    for factor in [
+        "height_diff_home", "age_diff_home", "gk_score_diff_home", "form_points_diff_home",
+        "wc_appearances_diff_home", "h2h_goal_total_per_match", "context_draw_delta",
+    ]:
+        present = sum(1 for row in background_rows if row.get(factor) is not None)
+        background_missing_notes.append({
+            "factor": factor,
+            "available": present,
+            "coverage": present / len(background_rows) if background_rows else None,
+        })
+
+    background_md = f"""# 背景数据因子分析
+
+生成时间：{generated_at}
+
+## 这版和上一版的区别
+
+上一版主要是盘口行诊断：看模型概率、盘口价格、edge 和最终结算。
+这一版分析的是**赛前背景数据本身**：球队强弱、近况、身体/年龄/门将代理、世界杯履历、20年交手、动态情报修正，这些因素和最终盘口结果之间有没有关系。
+
+样本：**{len(background_rows)}** 场有预测和结果的世界杯比赛。
+方法：对每个连续因子按中位数切成“低组/高组”，比较目标盘口结果的命中率差异。样本小，所以这是解释性因子筛选，不是最终模型。
+
+## 胜平负/强弱方向
+
+{markdown_table(top_factor_rows(background_signals, "home_win", 10), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 平局/接近程度
+
+{markdown_table(top_factor_rows(background_signals, "draw", 8), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 大小球
+
+{markdown_table(top_factor_rows(background_signals, "over25", 10), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 双方进球
+
+{markdown_table(top_factor_rows(background_signals, "btts", 10), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 数据覆盖
+
+{markdown_table(background_missing_notes, [
+    ('factor', '因子'),
+    ('available', '可用场次'),
+    ('coverage', '覆盖率'),
+])}
+
+## 初步判断
+
+1. 能进入预测模型的因子必须满足两个条件：覆盖率够高，并且方向在多个盘口目标上不互相矛盾。
+2. 身高、年龄、门将/防线代理这些因子如果覆盖率不足，只能作为淘汰赛人工复核项，不能一上来重权重。
+3. `xG总量、近期进失球开放度、动态BTTS/Over修正` 应该优先用于大小球/BTTS，而不是硬塞进胜平负。
+4. `xG接近程度、身体对抗平局修正、淘汰赛阶段` 更适合影响平局/加时路径。
+"""
+    write_markdown(out_dir / "worldcup-background-factor-analysis-zh.md", background_md)
+
+    live_quality = Counter(str(row.get("data_quality") or "unknown") for row in live_rows_)
+    live_quality_rows = [{"quality": key, "rows": value} for key, value in sorted(live_quality.items())]
+    live_md = f"""# 现场数据因子分析
+
+生成时间：{generated_at}
+
+## 分析目标
+
+这份报告分析的是**比赛进行中看到的数据**如何影响最终盘口结果：
+当前比分、分钟、射门、射正、角球、控球、压力差，分别对应后续进球、大小球、BTTS、领先是否守住。
+
+样本：**{len(live_rows_)}** 条能和最终结果对齐的现场快照。
+注意：现场数据比赛级别样本仍然偏少，所以它适合做规则门槛和复盘，不适合直接训练复杂模型。
+
+## 现场后续进球
+
+{markdown_table(top_factor_rows(live_signals, "any_later_goal", 10), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 领先是否守住
+
+{markdown_table(top_factor_rows(live_signals, "leader_held", 8), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 平局是否保持
+
+{markdown_table(top_factor_rows(live_signals, "draw_stayed", 8), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 现场压力方向
+
+{markdown_table(top_factor_rows(live_signals, "later_goal_home_edge", 10), [
+    ('label', '因子解释'),
+    ('n', '样本'),
+    ('median', '中位数'),
+    ('low_rate', '低组命中'),
+    ('high_rate', '高组命中'),
+    ('lift', '高低差'),
+    ('correlation', '相关'),
+])}
+
+## 现场数据质量
+
+{markdown_table(live_quality_rows, [
+    ('quality', '数据质量'),
+    ('rows', '快照数'),
+])}
+
+## 初步判断
+
+1. 现场推荐不能只看“强队还没进”。必须同时看分钟、射正、射门、角球和压力差。
+2. 如果 60 分钟后仍是平局，平局/低比分路径需要保留，但只有在射正和危险压力持续偏向一方时，才允许小仓保留一球路径。
+3. 领先方是否守住不能只看领先比分，要看领先方是否还在制造压力；如果领先方被压着打，止盈/保护优先级应该提高。
+4. 现场正确比分组合应该从“当前比分邻近路径 + 压力方向 + 剩余时间”生成，而不是固定模板。
+"""
+    write_markdown(out_dir / "worldcup-live-factor-analysis-zh.md", live_md)
+
+
 def factor_signal_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     settled = [row for row in rows if row.get("settled") is not None]
     specs = [
@@ -1280,6 +1688,212 @@ def factor_signal_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "correlation": pearson(values, [int(row["settled"]) for row in scoped]),
         })
     return output
+
+
+def univariate_factor_rows(
+    rows: list[dict[str, Any]],
+    specs: list[tuple[str, str, str]],
+    min_n: int = 8,
+) -> list[dict[str, Any]]:
+    output = []
+    for factor, target, label in specs:
+        scoped = [
+            row for row in rows
+            if row.get(factor) is not None
+            and row.get(target) is not None
+        ]
+        values = []
+        for row in scoped:
+            try:
+                value = float(row[factor])
+                target_value = int(row[target])
+                if math.isfinite(value):
+                    values.append((value, target_value))
+            except Exception:
+                continue
+        if len(values) < min_n:
+            continue
+        median = statistics.median(value for value, _ in values)
+        low = [(value, target_value) for value, target_value in values if value <= median]
+        high = [(value, target_value) for value, target_value in values if value > median]
+        if not low or not high:
+            continue
+        low_rate = statistics.mean(target for _, target in low)
+        high_rate = statistics.mean(target for _, target in high)
+        corr = pearson([value for value, _ in values], [target for _, target in values])
+        output.append({
+            "factor": factor,
+            "label": label,
+            "target": target,
+            "n": len(values),
+            "median": median,
+            "low_rate": low_rate,
+            "high_rate": high_rate,
+            "lift": high_rate - low_rate,
+            "correlation": corr,
+            "direction": "positive" if high_rate > low_rate else "negative" if high_rate < low_rate else "flat",
+        })
+    return output
+
+
+def background_factor_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    specs = [
+        ("xg_diff_home", "home_win", "xG差越偏主队，主队90分钟胜是否提高"),
+        ("xg_abs_diff", "favorite_win", "赛前强弱差越大，模型热门是否赢"),
+        ("xg_balance", "draw", "双方越接近，平局是否提高"),
+        ("xg_total", "over25", "赛前总xG越高，大2.5是否提高"),
+        ("xg_total", "btts", "赛前总xG越高，双方进球是否提高"),
+        ("form_points_diff_home", "home_win", "近况积分率差越偏主队，主队胜是否提高"),
+        ("form_gf_diff_home", "home_win", "近期进球能力差越偏主队，主队胜是否提高"),
+        ("form_ga_diff_home", "away_win", "主队近期失球更多，客队胜是否提高"),
+        ("form_total_goals", "over25", "两队近期进失球越开放，大2.5是否提高"),
+        ("form_total_goals", "btts", "两队近期进失球越开放，双方进球是否提高"),
+        ("height_diff_home", "home_win", "身高差越偏主队，主队胜是否提高"),
+        ("height_diff_home", "btts", "身高差越大方向偏主队，双方进球是否变化"),
+        ("age_diff_home", "home_win", "年龄差越偏主队，主队胜是否提高"),
+        ("gk_score_diff_home", "home_win", "门将代理差越偏主队，主队胜是否提高"),
+        ("df_score_diff_home", "under25", "防线代理差越偏主队，小2.5是否提高"),
+        ("mf_score_diff_home", "home_win", "中场代理差越偏主队，主队胜是否提高"),
+        ("fw_score_diff_home", "home_win", "锋线代理差越偏主队，主队胜是否提高"),
+        ("wc_appearances_diff_home", "home_win", "世界杯经验差越偏主队，主队胜是否提高"),
+        ("wc_titles_diff_home", "home_win", "冠军履历差越偏主队，主队胜是否提高"),
+        ("wc_win_rate_diff_home", "home_win", "世界杯历史胜率差越偏主队，主队胜是否提高"),
+        ("h2h_goal_total_per_match", "over25", "20年交手进球越多，大2.5是否提高"),
+        ("group_delta_diff_home", "home_win", "小组/路径动机修正越偏主队，主队胜是否提高"),
+        ("physical_delta_diff_home", "home_win", "身体对抗修正越偏主队，主队胜是否提高"),
+        ("physical_draw_delta", "draw", "身体对抗触发平局修正，平局是否提高"),
+        ("context_diff_home", "home_win", "综合动态信号越偏主队，主队胜是否提高"),
+        ("context_btts_delta", "btts", "动态BTTS修正越高，双方进球是否提高"),
+        ("context_over25_delta", "over25", "动态大球修正越高，大2.5是否提高"),
+        ("context_draw_delta", "draw", "动态平局修正越高，平局是否提高"),
+    ]
+    return univariate_factor_rows(rows, specs, min_n=8)
+
+
+def minute_number(value: Any) -> int | None:
+    text = str(value or "")
+    match = re.search(r"(\d+)", text)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def live_feature_rows(
+    live_rows: list[dict[str, Any]],
+    matches_by_id: dict[str, dict[str, Any]],
+    results_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    output = []
+    for row in live_rows:
+        if row.get("data_quality") not in ("synced", "post"):
+            continue
+        match = matches_by_id.get(row["match_id"])
+        result = results_by_id.get(row["match_id"])
+        if not match or not result:
+            continue
+        minute = minute_number(row.get("minute"))
+        if minute is None:
+            continue
+        home_score = int_or_none(row.get("home_score")) or 0
+        away_score = int_or_none(row.get("away_score")) or 0
+        final_home = int_or_none(result.get("regulation_home_goals")) or 0
+        final_away = int_or_none(result.get("regulation_away_goals")) or 0
+        home_shots = int_or_none(row.get("home_shots"))
+        away_shots = int_or_none(row.get("away_shots"))
+        home_sot = int_or_none(row.get("home_sot"))
+        away_sot = int_or_none(row.get("away_sot"))
+        home_corners = int_or_none(row.get("home_corners"))
+        away_corners = int_or_none(row.get("away_corners"))
+        home_possession = row.get("home_possession")
+        away_possession = row.get("away_possession")
+        try:
+            home_possession = float(home_possession) if home_possession is not None else None
+            away_possession = float(away_possession) if away_possession is not None else None
+        except Exception:
+            home_possession = None
+            away_possession = None
+        score_diff = home_score - away_score
+        later_home_goals = max(0, final_home - home_score)
+        later_away_goals = max(0, final_away - away_score)
+        shot_diff = home_shots - away_shots if home_shots is not None and away_shots is not None else None
+        sot_diff = home_sot - away_sot if home_sot is not None and away_sot is not None else None
+        corner_diff = home_corners - away_corners if home_corners is not None and away_corners is not None else None
+        possession_diff = home_possession - away_possession if home_possession is not None and away_possession is not None else None
+        pressure_diff = None
+        if any(value is not None for value in (shot_diff, sot_diff, corner_diff, possession_diff)):
+            pressure_diff = (
+                (shot_diff or 0) * 0.35
+                + (sot_diff or 0) * 1.1
+                + (corner_diff or 0) * 0.35
+                + (possession_diff or 0) * 0.03
+            )
+        leader_side = "home" if score_diff > 0 else "away" if score_diff < 0 else "draw"
+        if leader_side == "home":
+            leader_pressure = pressure_diff
+            leader_held = 1 if final_home >= final_away else 0
+        elif leader_side == "away":
+            leader_pressure = -pressure_diff if pressure_diff is not None else None
+            leader_held = 1 if final_away >= final_home else 0
+        else:
+            leader_pressure = None
+            leader_held = None
+        output.append({
+            "match_id": row["match_id"],
+            "match": f"{match.get('home_name')} vs {match.get('away_name')}",
+            "captured_at": row.get("captured_at"),
+            "minute": minute,
+            "data_quality": row.get("data_quality"),
+            "home_score": home_score,
+            "away_score": away_score,
+            "current_total_goals": home_score + away_score,
+            "score_diff_home": score_diff,
+            "abs_score_diff": abs(score_diff),
+            "current_draw": 1 if score_diff == 0 else 0,
+            "current_btts": 1 if home_score > 0 and away_score > 0 else 0,
+            "home_shots": home_shots,
+            "away_shots": away_shots,
+            "shots_total": (home_shots + away_shots) if home_shots is not None and away_shots is not None else None,
+            "shot_diff_home": shot_diff,
+            "sot_total": (home_sot + away_sot) if home_sot is not None and away_sot is not None else None,
+            "sot_diff_home": sot_diff,
+            "corners_total": (home_corners + away_corners) if home_corners is not None and away_corners is not None else None,
+            "corner_diff_home": corner_diff,
+            "possession_diff_home": possession_diff,
+            "pressure_diff_home": pressure_diff,
+            "leader_pressure": leader_pressure,
+            "remaining_goals": later_home_goals + later_away_goals,
+            "any_later_goal": 1 if later_home_goals + later_away_goals > 0 else 0,
+            "later_goal_home_edge": 1 if later_home_goals > later_away_goals else 0,
+            "final_home_win": 1 if final_home > final_away else 0,
+            "final_away_win": 1 if final_away > final_home else 0,
+            "final_draw": 1 if final_home == final_away else 0,
+            "final_over25": 1 if final_home + final_away > 2.5 else 0,
+            "final_btts": 1 if final_home > 0 and final_away > 0 else 0,
+            "leader_held": leader_held,
+            "draw_stayed": 1 if score_diff == 0 and final_home == final_away else 0 if score_diff == 0 else None,
+        })
+    return output
+
+
+def live_factor_signals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    specs = [
+        ("minute", "any_later_goal", "分钟越晚，后续仍有进球是否下降"),
+        ("minute", "draw_stayed", "平局时分钟越晚，平局是否更能保持"),
+        ("current_total_goals", "final_over25", "当前进球越多，最终大2.5是否提高"),
+        ("current_total_goals", "any_later_goal", "当前进球越多，后续是否仍有进球"),
+        ("current_btts", "final_btts", "当前已经双进，最终BTTS是否锁定"),
+        ("shots_total", "any_later_goal", "现场射门总量越高，后续进球是否提高"),
+        ("sot_total", "any_later_goal", "现场射正总量越高，后续进球是否提高"),
+        ("corners_total", "any_later_goal", "角球总量越高，后续进球是否提高"),
+        ("abs_score_diff", "leader_held", "领先优势越大，领先方是否守住"),
+        ("leader_pressure", "leader_held", "领先方仍有压力优势，领先是否更稳"),
+        ("pressure_diff_home", "later_goal_home_edge", "主队现场压力越高，后续主队净进球是否更好"),
+        ("shot_diff_home", "later_goal_home_edge", "主队射门差越高，后续主队净进球是否更好"),
+        ("sot_diff_home", "later_goal_home_edge", "主队射正差越高，后续主队净进球是否更好"),
+        ("corner_diff_home", "later_goal_home_edge", "主队角球差越高，后续主队净进球是否更好"),
+        ("possession_diff_home", "later_goal_home_edge", "主队控球差越高，后续主队净进球是否更好"),
+    ]
+    return univariate_factor_rows(rows, specs, min_n=8)
 
 
 def result_rows_for_modelled(matches: list[dict[str, Any]], results_by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1337,6 +1951,10 @@ def run() -> None:
 
     live_rows = load_live_snapshots(conn)
     inplay_rows = load_inplay_recommendations(conn)
+    background_rows = background_feature_rows(conn, matches, selected_by_match, results_by_id)
+    background_signals = background_factor_signals(background_rows)
+    live_feature_dataset = live_feature_rows(live_rows, matches_by_id, results_by_id)
+    live_signals = live_factor_signals(live_feature_dataset)
     modelled_result_rows = result_rows_for_modelled(matches, results_by_id)
     espn_public_rows = [
         {
@@ -1373,6 +1991,10 @@ def run() -> None:
     write_csv(tables_dir / "live_summary.csv", live_summary)
     write_csv(tables_dir / "factor_signals.csv", factors)
     write_csv(tables_dir / "missing_research_rows.csv", missing_rows)
+    write_csv(tables_dir / "background_factor_dataset.csv", background_rows)
+    write_csv(tables_dir / "background_factor_signals.csv", background_signals)
+    write_csv(tables_dir / "live_factor_dataset.csv", live_feature_dataset)
+    write_csv(tables_dir / "live_factor_signals.csv", live_signals)
 
     audit = {
         "matches": len(matches),
@@ -1403,6 +2025,13 @@ def run() -> None:
         factors,
         missing_rows,
     )
+    write_background_live_factor_reports(
+        out_dir,
+        background_rows,
+        background_signals,
+        live_feature_dataset,
+        live_signals,
+    )
 
     print(json.dumps({
         "ok": True,
@@ -1411,6 +2040,8 @@ def run() -> None:
         "matches": audit["matches"],
         "joinedResults": audit["joined_results"],
         "settledMarketRows": audit["settled_market_rows"],
+        "backgroundFactorRows": len(background_rows),
+        "liveFactorRows": len(live_feature_dataset),
         "backfill": backfill,
     }, ensure_ascii=False, indent=2))
 

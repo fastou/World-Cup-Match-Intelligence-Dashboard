@@ -1,6 +1,6 @@
 # World Cup Prediction Research Report
 
-Generated: 2026-07-21 15:43:37 +0800
+Generated: 2026-07-21 16:00:54 +0800
 
 ## Executive Summary
 
@@ -56,4 +56,6 @@ Detailed reports:
 - `worldcup-data-audit.md`
 - `worldcup-descriptive-analysis.md`
 - `worldcup-factor-analysis.md`
+- `worldcup-background-factor-analysis-zh.md`
+- `worldcup-live-factor-analysis-zh.md`
 - `worldcup-sensitivity-analysis.md`
