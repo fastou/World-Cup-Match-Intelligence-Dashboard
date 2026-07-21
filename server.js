@@ -81,7 +81,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-08-r16-balanced-low-score-shape";
+const DASHBOARD_MODEL_VERSION = "2026-07-21-factor-live-calibrated";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -1861,6 +1861,7 @@ function useRound16PlusLogic(match) {
   const profile = knockoutStageProfile(match);
   if (["round16", "quarter", "semi", "final"].includes(profile.key)) return true;
   if (profile.key !== "knockout") return false;
+  if (isClubMatch(match)) return false;
   const kickoffKey = shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal);
   return Boolean(kickoffKey && ROUND_OF_16_PHASE_START_KEY && kickoffKey >= ROUND_OF_16_PHASE_START_KEY);
 }
@@ -1949,6 +1950,167 @@ function matchShapeProfile(match, options = {}) {
     scoreLeaderSide,
     notes: [...new Set(notes)].slice(0, 4),
     notesEn: [...new Set(notesEn)].slice(0, 4)
+  };
+}
+
+function scoreDistributionMass(probabilities, predicate) {
+  return (probabilities?.topScoresFull || []).reduce((sum, row) => {
+    const homeGoals = Number(row.homeGoals);
+    const awayGoals = Number(row.awayGoals);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return sum;
+    return predicate(homeGoals, awayGoals, row) ? sum + (Number(row.probability) || 0) : sum;
+  }, 0);
+}
+
+function researchFactorCalibration(match, probabilities, contextSignals = null, options = {}) {
+  if (!probabilities?.topScoresFull?.length) {
+    return { ok: false, probabilities, deltas: {}, notes: [], missing: ["比分分布不可用"] };
+  }
+
+  const knockout = isKnockoutMatch(match);
+  const round16Plus = useRound16PlusLogic(match);
+  const stageProfile = knockoutStageProfile(match);
+  const homeForm = recentFormStrength(recentFormSummary(match, "home"));
+  const awayForm = recentFormStrength(recentFormSummary(match, "away"));
+  const favorite = favoriteProfile(probabilities);
+  const lambdaHome = Number(probabilities.lambdaHome ?? options.lambdaHome ?? match?.modelV2?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
+  const lambdaAway = Number(probabilities.lambdaAway ?? options.lambdaAway ?? match?.modelV2?.adjusted?.lambdaAway ?? match?.model?.lambdaAway);
+  const xgGap = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? Math.abs(lambdaHome - lambdaAway) : 0;
+  const lowScoreMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals + awayGoals <= 2);
+  const drawLowMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
+  const nilNilMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals === 0 && awayGoals === 0);
+  const oneOneMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals === 1 && awayGoals === 1);
+  const threePlusMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals + awayGoals >= 3);
+  const deltas = { home: 0, draw: 0, away: 0, over25: 0, btts: 0 };
+  const notes = [];
+  const missing = [];
+  const applyFavoriteShrink = (amount, reason) => {
+    const side = favorite.key;
+    const value = clamp(amount, 0, 0.035);
+    if (!value || !["home", "away"].includes(side)) return;
+    deltas[side] -= value;
+    deltas.draw += value * 0.62;
+    deltas[side === "home" ? "away" : "home"] += value * 0.38;
+    notes.push(reason);
+  };
+
+  if (knockout) {
+    const tightFavorite = favorite.favorite <= (round16Plus ? 0.62 : 0.58) || xgGap <= (round16Plus ? 0.42 : 0.34);
+    if (tightFavorite) {
+      applyFavoriteShrink(
+        round16Plus ? 0.018 : 0.012,
+        `${stageProfile.labelZh}研究校准：强弱差不够大时，90分钟热门胜下修，平局/加时路径上修。`
+      );
+    }
+    if (lowScoreMass >= 0.5 || (drawLowMass + nilNilMass + oneOneMass) >= 0.22) {
+      deltas.draw += clamp((lowScoreMass - 0.48) * 0.035 + 0.006, 0.004, 0.018);
+      deltas.over25 -= clamp((lowScoreMass - 0.48) * 0.03 + 0.006, 0.004, 0.018);
+      notes.push(`${stageProfile.labelZh}低事件盘型：0-0/1-1/一球小胜簇偏高，深比分和穿深盘降权。`);
+    }
+  }
+
+  if (homeForm && awayForm) {
+    const sampleWeight = clamp(Math.min(homeForm.matches, awayForm.matches) / 6, 0.35, 1);
+    const bothOpen = homeForm.attackPerMatch >= 1.45 && awayForm.attackPerMatch >= 1.25
+      && homeForm.defensePerMatch >= 0.75 && awayForm.defensePerMatch >= 0.75;
+    const bothSterile = homeForm.attackPerMatch <= 1.1 && awayForm.attackPerMatch <= 1.1;
+    const defenceTight = homeForm.defensePerMatch <= 0.85 && awayForm.defensePerMatch <= 0.85;
+    if (bothOpen) {
+      const boost = clamp(0.012 * sampleWeight + Math.max(0, threePlusMass - 0.42) * 0.025, 0.006, 0.02);
+      deltas.over25 += boost;
+      deltas.btts += clamp(boost * 0.85, 0.004, 0.017);
+      notes.push("近期战绩校准：双方近期都有进球能力且防线并非完全收缩，BTTS/大球只做小幅上修。");
+    }
+    if (bothSterile || defenceTight) {
+      const cut = clamp(0.011 * sampleWeight + (defenceTight ? 0.006 : 0), 0.005, 0.019);
+      deltas.over25 -= cut;
+      deltas.btts -= clamp(cut * 0.72, 0.003, 0.014);
+      notes.push("近期战绩校准：近期低进球或防守样本偏紧时，不能只凭名气追大球/BTTS。");
+    }
+  } else {
+    missing.push("近期战绩样本不足");
+  }
+
+  const physical = options.physicalMatchupAdjustment || match?.modelV2?.physicalMatchupAdjustment;
+  if (physical?.ok && knockout) {
+    const favoriteSide = favorite.key;
+    const favoriteXgDelta = favoriteSide === "home" ? Number(physical.impacts?.homeXgDelta) : Number(physical.impacts?.awayXgDelta);
+    const drawDelta = Number(physical.probabilityDeltas?.draw) || 0;
+    if (Number.isFinite(favoriteXgDelta) && favoriteXgDelta < -0.025) {
+      applyFavoriteShrink(
+        clamp(Math.abs(favoriteXgDelta) * 0.28 + drawDelta * 0.5, 0.006, 0.022),
+        "身体/分线研究校准：热门方存在对抗或锋线错配时，90分钟胜和第二球路径继续降权。"
+      );
+    }
+  } else if (knockout) {
+    missing.push("身体/分线结构未覆盖");
+  }
+
+  const goalkeeperAge = options.goalkeeperAgeAdjustment || match?.modelV2?.goalkeeperAgeAdjustment;
+  if (goalkeeperAge?.ok) {
+    const gkOverDelta = Number(goalkeeperAge.probabilityDeltas?.over25) || 0;
+    const gkBttsDelta = Number(goalkeeperAge.probabilityDeltas?.btts) || 0;
+    if (gkOverDelta < 0 || gkBttsDelta < 0) {
+      deltas.over25 += clamp(gkOverDelta * 0.35, -0.012, 0);
+      deltas.btts += clamp(gkBttsDelta * 0.35, -0.01, 0);
+      notes.push("门将/年龄研究校准：门将代理和近期防守证据支持时，进球转化率再做极小降权。");
+    }
+  } else {
+    missing.push("门将/年龄结构未覆盖");
+  }
+
+  const media = contextSignals?.mediaConsensus;
+  if (media?.status === "synced" || media?.status === "partial") {
+    const mediaImpact = media.impacts || {};
+    const mediaDraw = clamp(Number(mediaImpact.drawDelta) || 0, -0.008, 0.01);
+    const mediaOver = clamp(Number(mediaImpact.over25Delta) || 0, -0.01, 0.01);
+    const mediaBtts = clamp(Number(mediaImpact.bttsDelta) || 0, -0.01, 0.01);
+    if (mediaDraw || mediaOver || mediaBtts) {
+      deltas.draw += mediaDraw * 0.45;
+      deltas.over25 += mediaOver * 0.45;
+      deltas.btts += mediaBtts * 0.45;
+      notes.push("媒体/专家共识研究校准：中立源只作为低权重方向确认，不替代阵容和现场数据。");
+    }
+  } else {
+    missing.push("中立媒体共识未同步");
+  }
+
+  for (const key of Object.keys(deltas)) {
+    deltas[key] = roundTo(clamp(deltas[key], -0.04, 0.04), 4);
+  }
+  const hasDelta = Object.values(deltas).some((value) => Math.abs(value) >= 0.001);
+  if (!hasDelta) {
+    return {
+      ok: false,
+      probabilities,
+      deltas,
+      notes: notes.slice(0, 4),
+      missing: [...new Set(missing)].slice(0, 5)
+    };
+  }
+
+  const adjusted = applyProbabilityDeltasThroughScoreGrid(probabilities, deltas);
+  return {
+    ok: true,
+    version: "2026.07.21",
+    probabilities: adjusted,
+    deltas,
+    notes: [...new Set(notes)].slice(0, 5),
+    missing: [...new Set(missing)].slice(0, 5),
+    before: {
+      home: roundTo(probabilities.home, 4),
+      draw: roundTo(probabilities.draw, 4),
+      away: roundTo(probabilities.away, 4),
+      over25: roundTo(probabilities.over25, 4),
+      btts: roundTo(probabilities.btts, 4)
+    },
+    after: {
+      home: roundTo(adjusted.home, 4),
+      draw: roundTo(adjusted.draw, 4),
+      away: roundTo(adjusted.away, 4),
+      over25: roundTo(adjusted.over25, 4),
+      btts: roundTo(adjusted.btts, 4)
+    }
   };
 }
 
@@ -2642,6 +2804,33 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       ].join(" ")
     });
   }
+  const researchCalibration = researchFactorCalibration(match, probabilities, contextSignals, {
+    lambdaHome,
+    lambdaAway,
+    goalkeeperAgeAdjustment,
+    physicalMatchupAdjustment,
+    motivation
+  });
+  if (researchCalibration.ok) {
+    probabilities = researchCalibration.probabilities;
+    match.researchFactorCalibration = {
+      version: researchCalibration.version,
+      deltas: researchCalibration.deltas,
+      before: researchCalibration.before,
+      after: researchCalibration.after,
+      notes: researchCalibration.notes,
+      missing: researchCalibration.missing
+    };
+    drivers.push({
+      label: "研究因子校准",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: [
+        `按背景/赛事因子通过同一比分分布修正：平局 ${researchCalibration.deltas.draw >= 0 ? "+" : ""}${formatPercent(researchCalibration.deltas.draw)}，大2.5 ${researchCalibration.deltas.over25 >= 0 ? "+" : ""}${formatPercent(researchCalibration.deltas.over25)}，BTTS ${researchCalibration.deltas.btts >= 0 ? "+" : ""}${formatPercent(researchCalibration.deltas.btts)}。`,
+        ...researchCalibration.notes.slice(0, 2)
+      ].join(" ")
+    });
+  }
   probabilities.lambdaHome = lambdaHome;
   probabilities.lambdaAway = lambdaAway;
   const preMarket = normalizeProbabilityTriplet(probabilities);
@@ -2680,7 +2869,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.07.14",
+    version: "2026.07.21",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -2692,7 +2881,20 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     calibration,
     goalkeeperAgeAdjustment,
     physicalMatchupAdjustment,
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正"].includes(driver.label)).slice(0, 10),
+    researchFactorCalibration: researchCalibration.ok ? {
+      version: researchCalibration.version,
+      deltas: researchCalibration.deltas,
+      before: researchCalibration.before,
+      after: researchCalibration.after,
+      notes: researchCalibration.notes,
+      missing: researchCalibration.missing
+    } : {
+      ok: false,
+      deltas: researchCalibration.deltas || {},
+      notes: researchCalibration.notes || [],
+      missing: researchCalibration.missing || []
+    },
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正", "研究因子校准"].includes(driver.label)).slice(0, 11),
     probabilities
   };
 }
@@ -2713,6 +2915,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     version: modelV2.version,
     calibration: modelV2.calibration,
     drivers: modelV2.drivers,
+    researchFactorCalibration: modelV2.researchFactorCalibration,
     physicalMatchupAdjustment: modelV2.physicalMatchupAdjustment,
     topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
   };
@@ -3331,6 +3534,7 @@ function marketReviewAdjustments(match, rec) {
   const reasons = [];
   let edgePenalty = 0;
   let scorePenalty = 0;
+  let forceNoBuy = false;
   const favoriteKey = match?.probabilities?.home >= match?.probabilities?.away ? "home" : "away";
   const favoriteSide = favoriteKey;
   const favoriteCleanSheet = exactCleanSheetRisk(match, favoriteSide);
@@ -3345,6 +3549,19 @@ function marketReviewAdjustments(match, rec) {
   const stageProfile = knockoutStageProfile(match);
   const favoriteGap = Math.abs((match?.probabilities?.home || 0) - (match?.probabilities?.away || 0));
   const knockoutBttsSupport = knockout && (match?.probabilities?.btts || 0) >= 0.43;
+  const lowScoreMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals + awayGoals <= 2);
+  const drawPathMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
+  const suspiciousExtremePrice = typeof rec.marketPrice === "number"
+    && (rec.marketPrice <= 0.12 || rec.marketPrice >= 0.88)
+    && !isInProgressStatus(match?.scheduleStatus)
+    && !match?.scheduleCompleted;
+
+  if (["total", "btts"].includes(rec.marketType) && suspiciousExtremePrice) {
+    forceNoBuy = true;
+    edgePenalty += 0.18;
+    scorePenalty += 0.16;
+    reasons.push("衍生盘口价格极端，历史回测提示可能存在 market/token 映射误差；先核验 Polymarket 页面，不给买入。");
+  }
 
   if (rec.marketType === "btts" && rec.key === "bttsYes") {
     const oneNilRisk = scoreProbability(match, "1-0") + scoreProbability(match, "0-1");
@@ -3389,6 +3606,11 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.018;
       scorePenalty += 0.03;
       reasons.push("双方都有控节奏/平局价值，BTTS Yes 需要更强射门证据。");
+    }
+    if (lowScoreMass >= 0.5 && btts < 0.54 && !openMotivation) {
+      edgePenalty += 0.025;
+      scorePenalty += 0.05;
+      reasons.push("研究校准：低比分簇占优时，BTTS Yes 不能只靠弱队可能偷一个来追。");
     }
   }
 
@@ -3445,6 +3667,11 @@ function marketReviewAdjustments(match, rec) {
     edgePenalty += (favoriteGap < 0.46 ? 0.022 : 0.014) + quarterBoost;
     scorePenalty += (favoriteGap < 0.46 ? 0.052 : 0.035) + (stageProfile.key === "quarter" ? 0.018 : 0);
     reasons.push(`${stageProfile.labelZh}复盘：90分钟强队胜要防平局/加时，不和晋级盘混用。`);
+    const edgeValue = typeof rec.edge === "number" ? rec.edge : -1;
+    if ((match?.probabilities?.draw || 0) >= 0.285 && edgeValue < 0.12) {
+      forceNoBuy = true;
+      reasons.push("研究校准：平局/加时路径偏高且 edge 不够厚，90分钟热门胜只观察。");
+    }
   }
 
   if (knockout && rec.marketType === "moneyline" && rec.key === "draw" && rec.modelProbability >= 0.24) {
@@ -3463,8 +3690,8 @@ function marketReviewAdjustments(match, rec) {
   }
 
   if (rec.marketType === "total" && rec.key === "under25") {
-    const lowScoreMass = ["0-0", "1-0", "0-1", "1-1", "2-0", "0-2"].reduce((sum, score) => sum + scoreProbability(match, score), 0);
-    if (lowScoreMass >= 0.58 && under25 >= 0.58) {
+    const underClusterMass = ["0-0", "1-0", "0-1", "1-1", "2-0", "0-2"].reduce((sum, score) => sum + scoreProbability(match, score), 0);
+    if (underClusterMass >= 0.58 && under25 >= 0.58) {
       scorePenalty -= 0.015;
       reasons.push("低比分集中度支持小球，但仍需防红牌/早球打穿。");
     }
@@ -3487,6 +3714,11 @@ function marketReviewAdjustments(match, rec) {
       scorePenalty += 0.04;
       reasons.push("双方都有控节奏价值，Over 2.5 需要更低价格或现场证据。");
     }
+    if (drawPathMass >= 0.18 && totalThreePlusMass < 0.43 && !openMotivation) {
+      edgePenalty += 0.024;
+      scorePenalty += 0.045;
+      reasons.push("研究校准：0-0/1-1 路径不低时，赛前大球需要现场节奏确认。");
+    }
   }
 
   if (rec.edge > 0 && rec.edge < 0.06) {
@@ -3497,6 +3729,7 @@ function marketReviewAdjustments(match, rec) {
   return {
     edgePenalty,
     scorePenalty,
+    forceNoBuy,
     reasons: [...new Set(reasons)].slice(0, 4),
     conflict: reasons.length > 0
   };
@@ -3508,6 +3741,7 @@ function applyReviewDiscipline(rec, match) {
   rec.reviewDiscipline = {
     edgePenalty: roundTo(adjustment.edgePenalty, 4),
     scorePenalty: roundTo(adjustment.scorePenalty, 4),
+    forceNoBuy: Boolean(adjustment.forceNoBuy),
     reasons: adjustment.reasons
   };
   if (typeof disciplinedEdge === "number" && Number.isFinite(disciplinedEdge)) {
@@ -3517,10 +3751,10 @@ function applyReviewDiscipline(rec, match) {
     return rec;
   }
   if (rec.decision.action === "BUY" || rec.decision.action === "BUY_SMALL" || rec.decision.action === "WATCH") {
-    if (disciplinedEdge < 0.06 || rec.decision.action === "WATCH") {
+    if (adjustment.forceNoBuy || disciplinedEdge < 0.06 || rec.decision.action === "WATCH") {
       rec.decision = {
-        action: disciplinedEdge >= 0.035 ? "WATCH" : "NO_TRADE",
-        label: disciplinedEdge >= 0.035 ? "复盘降级观察" : "复盘降级不买",
+        action: adjustment.forceNoBuy ? "NO_TRADE" : disciplinedEdge >= 0.035 ? "WATCH" : "NO_TRADE",
+        label: adjustment.forceNoBuy ? "待核验不买" : disciplinedEdge >= 0.035 ? "复盘降级观察" : "复盘降级不买",
         stake: "none",
         gated: true,
         reasons: [...(rec.decision.reasons || []), ...adjustment.reasons].slice(0, 6)
@@ -6835,6 +7069,127 @@ function liveProbabilityForRecommendation(rec, liveModel) {
   return rec.modelProbability;
 }
 
+function sideLivePressure(stats = {}, side = "home") {
+  const other = side === "home" ? "away" : "home";
+  const sideStats = stats[side] || {};
+  const otherStats = stats[other] || {};
+  const shots = Number(sideStats.shots);
+  const sot = Number(sideStats.shotsOnTarget);
+  const corners = Number(sideStats.corners);
+  const possession = Number(sideStats.possession);
+  const shotDiff = statDiff(sideStats.shots, otherStats.shots);
+  const sotDiff = statDiff(sideStats.shotsOnTarget, otherStats.shotsOnTarget);
+  const cornerDiff = statDiff(sideStats.corners, otherStats.corners);
+  const possessionDiff = statDiff(sideStats.possession, otherStats.possession);
+  const score = clamp(
+    (Number.isFinite(shots) ? shots * 0.014 : 0)
+    + (Number.isFinite(sot) ? sot * 0.058 : 0)
+    + (Number.isFinite(corners) ? corners * 0.018 : 0)
+    + Math.max(0, shotDiff) * 0.018
+    + Math.max(0, sotDiff) * 0.065
+    + Math.max(0, cornerDiff) * 0.025
+    + Math.max(0, Number.isFinite(possessionDiff) ? possessionDiff : 0) * 0.003,
+    0,
+    1
+  );
+  return {
+    score,
+    shots,
+    sot,
+    corners,
+    possession,
+    shotDiff,
+    sotDiff,
+    cornerDiff,
+    possessionDiff,
+    clear: score >= 0.42 || (sotDiff >= 2 && shotDiff >= 5) || (Number.isFinite(sot) && sot >= 4 && Number.isFinite(shots) && shots >= 10)
+  };
+}
+
+function liveRecommendationEvidenceGate(rec, match, live, liveModel, dataQuality, liveHandicap = null) {
+  if (dataQuality.status !== "synced") return { forceNoConsider: false, reasons: [] };
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return { forceNoConsider: true, reasons: ["比分未同步，不能给实时买点。"] };
+  const totalGoals = homeScore + awayScore;
+  const stats = live?.stats || {};
+  const remainingModel = liveRemainingGoalModel(match, live);
+  const totalHazard = (Number(remainingModel.homeLambda) || 0) + (Number(remainingModel.awayLambda) || 0);
+  const homePressure = sideLivePressure(stats, "home");
+  const awayPressure = sideLivePressure(stats, "away");
+  const selectedSide = rec.key === "home" || rec.key === "advance-home" || String(rec.key || "").endsWith("-home") ? "home"
+    : rec.key === "away" || rec.key === "advance-away" || String(rec.key || "").endsWith("-away") ? "away"
+      : "";
+  const selectedPressure = selectedSide === "home" ? homePressure : selectedSide === "away" ? awayPressure : null;
+  const reasons = [];
+  let forceNoConsider = false;
+
+  if (rec.marketType === "moneyline" && selectedSide && elapsed >= 68) {
+    const selectedDiff = selectedSide === "home" ? homeScore - awayScore : awayScore - homeScore;
+    if (selectedDiff <= 0 && (!selectedPressure?.clear || Number(rec.liveProbability ?? liveModel?.[selectedSide]) < 0.34)) {
+      forceNoConsider = true;
+      reasons.push(`${elapsed}' ${rec.name} 仍是后段绝杀/反超路径，现场危险压力不够清晰，不能只按名气或低价追。`);
+    }
+    if (selectedDiff >= 2 && elapsed >= 65) {
+      forceNoConsider = true;
+      reasons.push(`${elapsed}' 已领先 ${selectedDiff} 球，90分钟胜接近兑现但收益/风险不对称；新买点降级。`);
+    }
+  }
+
+  if (rec.marketType === "total") {
+    if (rec.key === "over25") {
+      if (totalGoals >= 3) {
+        forceNoConsider = true;
+        reasons.push("大2.5 已经穿线，这不是新的买点；应改看更高进球线或持仓止盈。");
+      } else if (elapsed >= 60 && totalGoals <= 1 && totalHazard < 0.55) {
+        forceNoConsider = true;
+        reasons.push(`${elapsed}' 总进球仍 ${totalGoals}，剩余进球强度约 ${totalHazard.toFixed(2)}，追大2.5需要更强射正/节奏证据。`);
+      } else if (elapsed >= 72 && totalGoals === 2 && totalHazard < 0.34) {
+        forceNoConsider = true;
+        reasons.push(`${elapsed}' 大2.5 只差一球但时间衰减很快，剩余进球强度不足时不追。`);
+      }
+    }
+    if (rec.key === "under25" && totalGoals === 2 && elapsed < 78 && totalHazard >= 0.42) {
+      forceNoConsider = true;
+      reasons.push(`小2.5 当前买的是“后面无进球”，但剩余进球强度约 ${totalHazard.toFixed(2)}，压力未降下来前不追。`);
+    }
+  }
+
+  if (rec.marketType === "btts") {
+    const nilSide = homeScore === 0 && awayScore > 0 ? "home" : awayScore === 0 && homeScore > 0 ? "away" : "";
+    if (rec.key === "bttsYes" && nilSide && elapsed >= 52) {
+      const nilPressure = nilSide === "home" ? homePressure : awayPressure;
+      if (!nilPressure.clear && (Number(nilPressure.sot) || 0) < 1) {
+        forceNoConsider = true;
+        reasons.push(`${elapsed}' 未进球方现场威胁不足，BTTS Yes 不能只靠“总会偷一个”的想象补仓。`);
+      }
+    }
+    if (rec.key === "bttsNo" && nilSide && elapsed < 75) {
+      const nilPressure = nilSide === "home" ? homePressure : awayPressure;
+      if (nilPressure.clear) {
+        forceNoConsider = true;
+        reasons.push(`${elapsed}' 未进球方仍有射门/角球压制，BTTS No 需要等压力下降。`);
+      }
+    }
+  }
+
+  if (rec.marketType === "handicap" && liveHandicap?.neededNetGoals >= 2 && elapsed >= 62) {
+    forceNoConsider = true;
+    reasons.push(`${elapsed}' ${rec.name} 还要剩余时间净胜 ${liveHandicap.neededNetGoals} 球，深盘不因低价变成买点。`);
+  }
+
+  return {
+    forceNoConsider,
+    reasons: [...new Set(reasons)].slice(0, 4),
+    totalHazard: roundTo(totalHazard, 3),
+    pressure: {
+      home: roundTo(homePressure.score, 3),
+      away: roundTo(awayPressure.score, 3)
+    }
+  };
+}
+
 function liveRemainingGoalModel(match, live) {
   const elapsed = elapsedMinuteFromLive(live, match);
   if (live?.completed) {
@@ -7228,6 +7583,13 @@ function pathTradingStance(row, context, liveEdge, dataQuality) {
     return { action: "LATE_KO_PRESSURE", label: "16强后压制绝杀，小仓观察", severity: "good" };
   }
   if (liveEdge >= 0.055 && context.goalsNeeded <= 2 && context.remainingMinutes >= 20) {
+    const pressureSupportsNextGoal = context.goalsNeeded === 1 && context.pressureSide && (
+      (context.homeNeeded > 0 && context.pressureSide === "home")
+      || (context.awayNeeded > 0 && context.pressureSide === "away")
+    );
+    if (!pressureSupportsNextGoal) {
+      return { action: "WATCH", label: "有edge但等现场证据", severity: "warn" };
+    }
     return { action: "OPEN_SMALL", label: "有 edge，小注观察", severity: "good" };
   }
   if (liveEdge >= 0.015) return { action: "WATCH", label: "观察，不主动补", severity: "warn" };
@@ -7301,10 +7663,13 @@ function scorePathPositionAdvice(row, context) {
     addPct = 8;
     label = "16强后末段压制，仅极小绝杀仓";
     reasons.push(`16强后按有效补时约 ${context.estimatedStoppageMinutes || 0} 分钟处理；压制方仍有最后一球路径，但只能极小仓。`);
-  } else if (context.goalsNeeded === 2 && edgeValue >= 0.07 && context.remainingMinutes >= 30) {
-    addPct = 12;
-    label = "两球路径，仅极小试探";
-    reasons.push("还差 2 球，需要连续事件，不能摊平，只能用很小仓位。");
+  } else if (context.goalsNeeded === 2 && edgeValue >= 0.07 && context.remainingMinutes >= 30 && context.pressureSide && (
+    (context.homeNeeded > 0 && context.pressureSide === "home")
+    || (context.awayNeeded > 0 && context.pressureSide === "away")
+  )) {
+    addPct = 8;
+    label = "两球路径，有现场压力也只极小试探";
+    reasons.push("还差 2 球，需要连续事件；只有第一球方向和现场压力一致时才允许极小试探。");
   } else {
     label = edgeValue > 0 ? "有价格差但不补仓" : "不追";
     reasons.push(edgeValue > 0 ? "edge 未覆盖路径风险和时间成本。" : "市场价格不低于模型公允，追买没有优势。");
@@ -7772,6 +8137,7 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
       const liveHandicap = liveHandicapProbabilityForRecommendation(rec, match, live);
       const liveProbability = liveHandicap ? liveHandicap.win : liveProbabilityForRecommendation(decoratedRec, liveModel);
       const lateWinRisk = lateRegulationWinRisk(rec, match, live, liveProbability);
+      const evidenceGate = liveRecommendationEvidenceGate({ ...rec, liveProbability }, match, live, liveModel, dataQuality, liveHandicap);
       const handicapImpossibility = liveHandicap?.lateDeepHandicap && liveHandicap.win < 0.08
         ? {
           longTail: true,
@@ -7794,10 +8160,15 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         action.canConsider = false;
         action.label = "后段90分钟胜降级";
       }
+      if (evidenceGate.forceNoConsider && action.canConsider) {
+        action.canConsider = false;
+        action.label = "等待现场证据";
+      }
       const risks = [
         frozen ? `VAR/点球事件未确认：${live.situationalFlags?.latestPenaltyText || "等待判罚"}。` : "",
         longTail?.reason || "",
         lateWinRisk?.reason || "",
+        ...(evidenceGate.reasons || []),
         ...(liveHandicap?.notes || []),
         dataQuality.status !== "synced" && dataQuality.status !== "post" ? "现场技术统计不足，不能强推荐。" : "",
         !hasLiveMarket ? "当前盘口不是 Polymarket 实时价，价格建议降级。" : "",
@@ -7819,11 +8190,12 @@ function buildLiveRecommendations(match, live, liveModel, dataQuality) {
         maxBuyPrice,
         action: live.completed ? "avoid" : action.action,
         label: live.completed && !longTail?.impossible ? "已完赛复盘" : action.label,
-        canConsider: !frozen && !lateWinRisk?.forceNoConsider && !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
+        canConsider: !frozen && !lateWinRisk?.forceNoConsider && !evidenceGate.forceNoConsider && !longTail?.impossible && !longTail?.longTail && !live.completed && Boolean(action.canConsider) && hasLiveMarket && dataQuality.status === "synced",
         hasLiveMarket,
         excluded: Boolean(longTail?.impossible || longTail?.longTail),
         excludedReason: longTail?.reason || "",
         longTail: Boolean(longTail?.longTail),
+        evidenceGate,
         source: rec.chart?.source || "",
         chart: rec.chart ? {
           source: rec.chart.source,
@@ -7936,6 +8308,12 @@ function buildLiveCorrectScoreRecommendations(match, live, liveModel, dataQualit
       };
       liveRow.tradeState = buildScorePathTradeState(liveRow, match, live, liveModel, dataQuality, baseRows);
       liveRow.pathPlan = buildCorrectScorePathPlan(liveRow, match, live, liveModel, dataQuality, action);
+      const stanceAction = liveRow.pathPlan?.stance?.action || "";
+      const stanceAllowsConsider = ["PATH_ADD", "ADD_ON_PRESSURE", "ADD_SMALL", "OPEN_SMALL", "LATE_KO_PRESSURE"].includes(stanceAction);
+      if (liveRow.canConsider && !stanceAllowsConsider) {
+        liveRow.canConsider = false;
+        liveRow.label = liveRow.pathPlan?.stance?.label || "观察，不主动补";
+      }
       liveRow.risks = [
         ...(liveRow.pathPlan?.warnings || []),
         ...risks
