@@ -10,6 +10,7 @@
     "sync:squad-profiles": "node scripts/sync-squad-profiles.js",
     "archive:dashboard": "node scripts/archive-dashboard.js",
     "record:result": "node scripts/record-match-result.js",
-    "validate:skills": "node scripts/validate-skills.js"
+    "validate:skills": "node scripts/validate-skills.js",
+    "research:worldcup": "python3 analysis/worldcup_research/run_research.py"
   }
 }
