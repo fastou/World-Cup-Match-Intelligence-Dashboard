@@ -3,7 +3,7 @@
   "source": "Manual club-strength snapshot from public club Elo / UEFA coefficient context",
   "sourceEn": "Manual club-strength snapshot from public club Elo / UEFA coefficient context",
   "sourceUrl": "https://clubelo.com/Ranking",
-  "updatedAt": "2026-07-20",
+  "updatedAt": "2026-07-22",
   "methodology": "Internal 0-100 club rating seeded from public club Elo, UEFA coefficient context, competition tier, and league strength. It is not a FIFA national-team ranking and is not live lineup strength.",
   "methodologyZh": "内部 0-100 俱乐部评分，参考公开 ClubElo、UEFA 俱乐部系数语境、赛事级别和联赛强度；不是 FIFA 国家队排名，也不是实时阵容强度。",
   "teams": {
@@ -158,13 +158,29 @@
     },
     "inter miami cf": {
       "name": "Inter Miami CF",
-      "aliases": ["Inter Miami"],
+      "aliases": ["Inter Miami", "Miami"],
       "country": "USA",
-      "rating": 72,
-      "confidence": "medium",
-      "source": "ClubElo / MLS strength public context",
+      "rating": 78,
+      "confidence": "medium-high",
+      "source": "ClubElo / MLS squad-strength public context",
       "sourceUrl": "https://clubelo.com/Ranking",
-      "note": "Inter Miami 使用 MLS 与俱乐部阵容层级语境评分 72。"
+      "clubRankSource": "ClubElo / MLS public strength context",
+      "starPlayers": [
+        { "name": "Leo Messi", "role": "attack", "tier": "elite", "source": "MLS roster" },
+        { "name": "Rodrigo De Paul", "role": "midfield", "tier": "high", "source": "MLS roster" },
+        { "name": "Luis Suárez", "role": "attack", "tier": "high", "source": "MLS roster" }
+      ],
+      "starPower": {
+        "attack": "elite-mls",
+        "midfield": "high-mls",
+        "note": "星级球员质量进入静态满员评分；比赛日 OUT/QUESTIONABLE 由 MLS availability 动态层单场下修。"
+      },
+      "sources": [
+        { "name": "ClubElo Ranking", "url": "https://clubelo.com/Ranking" },
+        { "name": "MLS Inter Miami roster", "url": "https://www.mlssoccer.com/clubs/inter-miami-cf/roster/" },
+        { "name": "MLS Player Availability Report", "url": "https://www.mlssoccer.com/league-reports/player-availability-report/" }
+      ],
+      "note": "Inter Miami 使用 MLS 强队与 Messi/De Paul/Suarez 级别满员阵容语境评分 78；这不是 FIFA 国家队排名，也不等同于比赛日阵容。若 MLS 官方可用性报告显示核心缺席，动态层会单场下修。"
     },
     "chicago fire fc": {
       "name": "Chicago Fire FC",

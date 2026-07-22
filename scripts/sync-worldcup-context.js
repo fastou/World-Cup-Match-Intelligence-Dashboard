@@ -29,6 +29,7 @@ const ESPN_WORLDCUP_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/
 const ESPN_ALL_SOCCER_TEAM_SCHEDULE = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams";
 const ESPN_SEARCH_API = "https://site.web.api.espn.com/apis/search/v2";
 const GUARDIAN_SEARCH_API = "https://content.guardianapis.com/search";
+const MLS_AVAILABILITY_REPORT_URL = "https://www.mlssoccer.com/league-reports/player-availability-report/";
 const MEDIA_SCORE_PARSER_VERSION = "2026-07-11-strict-score-cue-v2";
 
 const VENUE_COORDINATES = {
@@ -253,6 +254,8 @@ const ARTICLE_DOMAINS = [
   "washingtonpost.com",
   "houstonchronicle.com",
   "nbcsports.com",
+  "mlssoccer.com",
+  "intermiamicf.com",
   "aljazeera.com",
   "standard.co.uk",
   "independent.co.uk",
@@ -278,6 +281,7 @@ const MEDIA_NEUTRAL_DOMAINS = [
   "washingtonpost.com",
   "houstonchronicle.com",
   "nbcsports.com",
+  "mlssoccer.com",
   "aljazeera.com",
   "independent.co.uk",
   "standard.co.uk"
@@ -760,6 +764,20 @@ function textFromHtml(html) {
     .trim();
 }
 
+function textFromHtmlWithBreaks(html) {
+  return decodeHtmlEntities(String(html || ""))
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<(?:br|\/li|\/p|\/h[1-6]|\/div)\b[^>]*>/gi, "\n")
+    .replace(/<(?:li|p|h[1-6]|div)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
 function extractRelevantSentences(text, needles, maxItems = 5) {
   const clean = stripHtml(text);
   if (!clean) return [];
@@ -860,6 +878,13 @@ function clampValue(value, min, max) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return Math.max(min, Math.min(max, numeric));
+}
+
+function roundTo(value, digits = 3) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  const factor = 10 ** digits;
+  return Math.round(numeric * factor) / factor;
 }
 
 function hostnameFromUrl(url) {
@@ -1083,8 +1108,20 @@ async function fetchReadableArticle(url) {
 }
 
 async function fetchDirectSources(match) {
-  const sources = DIRECT_MATCH_SOURCES[match.id] || [];
-  const results = await Promise.all(sources.map(async (source) => {
+  const sources = [...(DIRECT_MATCH_SOURCES[match.id] || [])];
+  if (isMlsMatch(match)) {
+    sources.push({
+      name: "MLS 官方球员可用性报告",
+      url: MLS_AVAILABILITY_REPORT_URL
+    });
+  }
+  const seen = new Set();
+  const dedupedSources = sources.filter((source) => {
+    if (!source?.url || seen.has(source.url)) return false;
+    seen.add(source.url);
+    return true;
+  });
+  const results = await Promise.all(dedupedSources.map(async (source) => {
     const result = await withTimeout(timedFetchText(source.url, { timeoutMs: FETCH_TIMEOUT_MS + 4000 }), FETCH_TIMEOUT_MS + 5000, source.name);
     if (!result.ok) return { ...result, name: source.name, originalUrl: source.url, cleanText: "" };
     return {
@@ -1108,9 +1145,31 @@ function matchEnglishNames(match) {
   };
 }
 
+function isClubMatchContext(match = {}) {
+  return match?.competition?.teamType === "club"
+    || match?.homeTeam?.ratingProfile?.teamType === "club"
+    || match?.awayTeam?.ratingProfile?.teamType === "club";
+}
+
+function isMlsMatch(match = {}) {
+  const competition = match?.competition || {};
+  return String(competition.key || competition.label || competition.labelEn || "").toLowerCase().includes("mls");
+}
+
+function competitionSearchPhrase(match = {}) {
+  const competition = match?.competition || {};
+  const haystack = `${competition.key || ""} ${competition.label || ""} ${competition.labelEn || ""}`.toLowerCase();
+  if (isMlsMatch(match)) return "MLS regular season";
+  if (/champions league|欧冠|ucl/.test(haystack)) return "UEFA Champions League qualifying";
+  if (/europa league|欧联|uel/.test(haystack)) return "UEFA Europa League qualifying";
+  if (/conference league|欧协联|uecl/.test(haystack)) return "UEFA Conference League qualifying";
+  if (isClubMatchContext(match)) return competition.labelEn || competition.label || "soccer club match";
+  return "World Cup";
+}
+
 function publicMediaQuery(match) {
   const names = matchEnglishNames(match);
-  return `${names.home} ${names.away} World Cup`;
+  return `${names.home} ${names.away} ${competitionSearchPhrase(match)}`;
 }
 
 function mediaDiscoveryResult({ name, originalUrl, cleanText, sourceType }) {
@@ -1737,6 +1796,158 @@ function baselineInjurySummary(preview, aiAnalysis, injurySnippets, directInjury
     + (preview.articles || []).filter((item) => item.ok).length
     + (preview.direct?.results || []).filter((item) => item.ok).length;
   return `已查询 ${sourceCount} 个公开入口，未发现可确认重大伤停；赛前官方名单公布前仍按低置信处理。`;
+}
+
+function normalizeAvailabilityKey(value) {
+  return decodeHtmlEntities(String(value || ""))
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .replace(/\b(fc|cf|sc|club)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function availabilityAliasesForSide(match, side) {
+  const aliases = side === "home"
+    ? [match.homeName, match.homeEnglishName, TEAM_SEARCH_NAMES[match.home], match.home]
+    : [match.awayName, match.awayEnglishName, TEAM_SEARCH_NAMES[match.away], match.away];
+  return [...new Set(aliases.map(normalizeAvailabilityKey).filter((item) => item && item.length >= 2))];
+}
+
+function availabilityHeaderMatches(line, aliases) {
+  const key = normalizeAvailabilityKey(line);
+  if (!key) return false;
+  return aliases.some((alias) => key === alias || (alias.length >= 7 && key.includes(alias)));
+}
+
+function isLikelyMlsAvailabilityTeamHeader(line) {
+  const clean = decodeHtmlEntities(String(line || "")).replace(/\s+/g, " ").trim();
+  if (!clean || clean.includes(":") || clean.length > 60) return false;
+  return /^[A-Z][A-Za-zÀ-ž0-9 .&'’\-]+$/.test(clean)
+    && /(FC|CF|SC|United|Crew|Rapids|Revolution|Sounders|Timbers|Union|Galaxy|Fire|City|Dynamo|Sporting|Whitecaps|Toronto|Orlando|Red Bull|Earthquakes|Minnesota|Montréal|Montreal|Nashville|Philadelphia|Portland|Salt Lake|Seattle|Vancouver|Atlanta|Austin|Charlotte|Chicago|Cincinnati|Columbus|Dallas|Houston|Kansas|Miami)$/i.test(clean);
+}
+
+function extractMlsAvailabilityEntries(reportText, match, side) {
+  const aliases = availabilityAliasesForSide(match, side);
+  if (!aliases.length) return [];
+  const lines = textFromHtmlWithBreaks(reportText)
+    .split(/\r?\n/)
+    .map((line) => decodeHtmlEntities(line).replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const statusPattern = /^(OUT|QUESTIONABLE|DOUBTFUL|SUSPENDED|INTERNATIONAL DUTY|SEASON-ENDING INJURY LIST|PROBABLE):\s*(.+)$/i;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!availabilityHeaderMatches(lines[index], aliases)) continue;
+    const entries = [];
+    for (const line of lines.slice(index + 1, index + 40)) {
+      if (entries.length && !statusPattern.test(line) && isLikelyMlsAvailabilityTeamHeader(line)) break;
+      const matchLine = line.match(statusPattern);
+      if (!matchLine) continue;
+      entries.push({
+        status: matchLine[1].toUpperCase(),
+        player: matchLine[2].replace(/\s+/g, " ").trim(),
+        raw: line
+      });
+    }
+    if (entries.length) return entries;
+  }
+  return [];
+}
+
+function availabilityImpactForPlayer(teamName, entry) {
+  const teamKey = normalizeAvailabilityKey(teamName);
+  const playerKey = normalizeAvailabilityKey(entry.player);
+  const status = String(entry.status || "").toUpperCase();
+  const outWeight = status === "OUT" || status === "SUSPENDED" || status.includes("INTERNATIONAL") ? 1 : 0.45;
+  const rules = [
+    {
+      team: "inter miami",
+      players: ["leo messi", "lionel messi"],
+      attackDelta: -0.16,
+      reason: "Leo Messi 被 MLS 官方列为 OUT，Miami 终结能力和定位球威胁下修。"
+    },
+    {
+      team: "inter miami",
+      players: ["rodrigo de paul"],
+      attackDelta: -0.07,
+      reason: "Rodrigo De Paul 被 MLS 官方列为 OUT，Miami 中场推进和反抢质量下修。"
+    },
+    {
+      team: "inter miami",
+      players: ["luis suarez"],
+      attackDelta: -0.06,
+      reason: "Luis Suarez 若缺席，Miami 禁区终结点下修。"
+    }
+  ];
+  for (const rule of rules) {
+    if (!teamKey.includes(rule.team)) continue;
+    if (!rule.players.some((player) => playerKey.includes(player))) continue;
+    return {
+      attackDelta: roundTo(rule.attackDelta * outWeight, 3),
+      reason: rule.reason
+    };
+  }
+  return null;
+}
+
+function parseMlsAvailabilityContext(match, preview) {
+  if (!isMlsMatch(match)) return null;
+  const availabilitySources = (preview.direct?.results || []).filter((result) => result.ok && result.originalUrl === MLS_AVAILABILITY_REPORT_URL);
+  if (!availabilitySources.length) return null;
+  const reportText = availabilitySources.map((result) => result.text || result.cleanText || "").join("\n");
+  const homeEntries = extractMlsAvailabilityEntries(reportText, match, "home");
+  const awayEntries = extractMlsAvailabilityEntries(reportText, match, "away");
+  if (!homeEntries.length && !awayEntries.length) {
+    return {
+      ok: true,
+      sourceUrl: MLS_AVAILABILITY_REPORT_URL,
+      summary: "MLS 官方可用性报告已查询；未提取到两队 OUT/QUESTIONABLE 名单。",
+      impacts: [],
+      riskFlags: []
+    };
+  }
+  const impacts = [];
+  const impactReasons = [];
+  for (const [side, teamName, entries] of [
+    ["home", match.homeName, homeEntries],
+    ["away", match.awayName, awayEntries]
+  ]) {
+    let teamAttackDelta = 0;
+    const reasons = [];
+    for (const entry of entries) {
+      const playerImpact = availabilityImpactForPlayer(teamName, entry);
+      if (!playerImpact) continue;
+      teamAttackDelta += playerImpact.attackDelta;
+      reasons.push(playerImpact.reason);
+    }
+    teamAttackDelta = roundTo(clampValue(teamAttackDelta, -0.24, 0), 3);
+    if (!teamAttackDelta) continue;
+    impacts.push({
+      label: "MLS官方可用性",
+      homeXgDelta: side === "home" ? teamAttackDelta : 0,
+      awayXgDelta: side === "away" ? teamAttackDelta : 0,
+      reason: reasons.join(" "),
+      source: "MLS Player Availability Report"
+    });
+    impactReasons.push(...reasons);
+  }
+  const lineText = (label, entries) => entries.length
+    ? `${label}: ${entries.map((entry) => `${entry.status} ${entry.player}`).join("；")}`
+    : `${label}: 未列出 OUT/QUESTIONABLE`;
+  const summary = [
+    "MLS 官方球员可用性报告：",
+    lineText(match.homeName, homeEntries),
+    lineText(match.awayName, awayEntries)
+  ].join(" ");
+  return {
+    ok: true,
+    sourceUrl: MLS_AVAILABILITY_REPORT_URL,
+    summary,
+    impacts,
+    riskFlags: impactReasons.length ? ["官方可用性报告显示核心球员缺席"] : []
+  };
 }
 
 function baselineAiAnalysis(match, preview, weather, fifaRankings, aiAnalysis) {
@@ -2605,11 +2816,23 @@ async function fetchOpenAiMediaConsensus(match, preview, openAiConfig, previous 
 function searchQueries(match) {
   const homeEn = match.homeEnglishName || TEAM_SEARCH_NAMES[match.home] || match.homeName;
   const awayEn = match.awayEnglishName || TEAM_SEARCH_NAMES[match.away] || match.awayName;
+  const competition = competitionSearchPhrase(match);
+  if (isClubMatchContext(match)) {
+    return [
+      `${homeEn} vs ${awayEn} ${competition} preview team news`,
+      `${homeEn} vs ${awayEn} ${competition} prediction lineup injuries`,
+      `${homeEn} vs ${awayEn} match preview tactical analysis form expert`,
+      `${homeEn} ${awayEn} player availability injury report`,
+      `${homeEn} ${awayEn} head to head recent form`,
+      `${homeEn} ${awayEn} H2H results last meetings football`,
+      `${match.homeName} ${match.awayName} 足球 伤停 首发 阵容`
+    ];
+  }
   return [
-    `${homeEn} vs ${awayEn} World Cup preview team news lineups injuries`,
-    `${homeEn} vs ${awayEn} World Cup neutral preview tactical analysis form expert`,
-    `${homeEn} XI vs ${awayEn} predicted lineup confirmed team news injury latest World Cup`,
-    `${awayEn} XI vs ${homeEn} predicted lineup confirmed team news injury latest World Cup`,
+    `${homeEn} vs ${awayEn} ${competition} preview team news lineups injuries`,
+    `${homeEn} vs ${awayEn} ${competition} neutral preview tactical analysis form expert`,
+    `${homeEn} XI vs ${awayEn} predicted lineup confirmed team news injury latest ${competition}`,
+    `${awayEn} XI vs ${homeEn} predicted lineup confirmed team news injury latest ${competition}`,
     `${homeEn} ${awayEn} head to head recent form`,
     `${homeEn} ${awayEn} H2H results last meetings football`,
     `${match.homeName} ${match.awayName} 世界杯 伤停 首发 阵容`
@@ -3038,6 +3261,7 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
   const teamNewsSnippets = snippets.filter((snippet) => isUsableTeamNewsSnippet(snippet) && !isStrongInjurySnippet(snippet));
   const directInjurySection = extractSection(sourceText, ["no key injuries to report", "injury and suspension", "injury news", "team news"], 850);
   const directTeamNewsSection = extractSection(sourceText, ["team news", "possible starting lineup", "projected lineup", "predicted xi"], 850);
+  const officialAvailability = parseMlsAvailabilityContext(match, preview);
   const homeLineupNote = extractTeamLineupNote(sourceText, match.homeName, match.home);
   const awayLineupNote = extractTeamLineupNote(sourceText, match.awayName, match.away);
   const homeXi = playerListFromNote(homeLineupNote);
@@ -3049,8 +3273,11 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
     || projectedLineupText
     || (effectiveAiAnalysis.ok && effectiveAiAnalysis.lineupStatus === "projected" && effectiveAiAnalysis.lineupConfidence !== "low")
   );
-  const injurySummary = baselineInjurySummary(preview, effectiveAiAnalysis, injurySnippets, directInjurySection);
-  const teamNewsSummary = directTeamNewsSection || baselineTeamNewsSummary(match, preview, effectiveAiAnalysis, teamNewsSnippets);
+  const injurySummary = officialAvailability?.summary || baselineInjurySummary(preview, effectiveAiAnalysis, injurySnippets, directInjurySection);
+  const baseTeamNewsSummary = directTeamNewsSection || baselineTeamNewsSummary(match, preview, effectiveAiAnalysis, teamNewsSnippets);
+  const teamNewsSummary = officialAvailability?.summary
+    ? `${baseTeamNewsSummary} ${officialAvailability.summary}`
+    : baseTeamNewsSummary;
   const fallbackRecentForm = {
     home: effectiveAiAnalysis.recentForm?.home?.length
       ? effectiveAiAnalysis.recentForm.home
@@ -3100,6 +3327,7 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
 
   const modelImpacts = [
     ...(Array.isArray(weather.impacts) ? weather.impacts : []),
+    ...(Array.isArray(officialAvailability?.impacts) ? officialAvailability.impacts : []),
     ...filteredAiImpacts(match, effectiveAiAnalysis)
   ];
 
@@ -3111,7 +3339,11 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
     recentForm,
     recentFormRecords,
     tacticalMatchup,
-    riskFlags: effectiveAiAnalysis.ok ? effectiveAiAnalysis.riskFlags : [],
+    availability: officialAvailability || null,
+    riskFlags: [
+      ...(effectiveAiAnalysis.ok ? effectiveAiAnalysis.riskFlags : []),
+      ...(officialAvailability?.riskFlags || [])
+    ],
     aiAnalysis: effectiveAiAnalysis,
     mediaConsensus,
     headToHead: buildHeadToHeadContext(match, preview, fifaRankings, h2hOverrides, match.headToHead || previous.headToHead),
@@ -3130,12 +3362,12 @@ async function buildMatchContext(match, preview, weather, aiAnalysis, openAiConf
         error: confirmedLineup ? "" : projectedLineup ? "媒体预计阵容，不是官方首发" : hasLineupSearchLead ? "仅搜索结果线索，未抓到可核验首发页面" : preview.ok ? "未发现可核验首发页面" : preview.error || "未同步"
       },
       injuries: {
-        ok: Boolean(preview.ok || effectiveAiAnalysis.ok),
-        status: (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.injurySummary) ? "verified-or-summarized" : "queried-unconfirmed",
-        confidence: (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.injurySummary) ? "medium" : "low",
-        updatedAt: preview.ok || effectiveAiAnalysis.ok ? nowIso : null,
-        url: preview.url || "",
-        error: (preview.ok && (injurySnippets.length || hasUsableInjuryText(sourceText))) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.injurySummary) ? "" : "已查询，未发现可确认伤停信息"
+        ok: Boolean(officialAvailability?.ok || preview.ok || effectiveAiAnalysis.ok),
+        status: officialAvailability?.ok ? "verified-or-summarized" : (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.injurySummary) ? "verified-or-summarized" : "queried-unconfirmed",
+        confidence: officialAvailability?.ok ? "high" : (preview.ok && (injurySnippets.length > 0 || hasUsableInjuryText(sourceText))) || Boolean(effectiveAiAnalysis.injurySummary) ? "medium" : "low",
+        updatedAt: officialAvailability?.ok || preview.ok || effectiveAiAnalysis.ok ? nowIso : null,
+        url: officialAvailability?.sourceUrl || preview.url || "",
+        error: officialAvailability?.ok ? "" : (preview.ok && (injurySnippets.length || hasUsableInjuryText(sourceText))) || (effectiveAiAnalysis.ok && effectiveAiAnalysis.injurySummary) ? "" : "已查询，未发现可确认伤停信息"
       },
       teamNews: {
         ok: Boolean(preview.ok || effectiveAiAnalysis.ok),

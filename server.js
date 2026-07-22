@@ -35,6 +35,10 @@ const LIGHT_CACHE_STABILITY_MAX_AGE_MS = Number(process.env.LIGHT_CACHE_STABILIT
 const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 65000);
 const FETCH_TIMEOUT_MS = 6500;
 const LIGHT_FETCH_TIMEOUT_MS = Number(process.env.LIGHT_FETCH_TIMEOUT_MS || 3500);
+const MLS_AVAILABILITY_REPORT_URL = "https://www.mlssoccer.com/league-reports/player-availability-report/";
+const MLS_AVAILABILITY_CACHE_TTL_MS = Number(process.env.MLS_AVAILABILITY_CACHE_TTL_MS || 15 * 60 * 1000);
+const ESPN_MLS_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard";
+const MLS_SCOREBOARD_CACHE_TTL_MS = Number(process.env.MLS_SCOREBOARD_CACHE_TTL_MS || 10 * 60 * 1000);
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const AI_TRADE_PLAN_TIMEOUT_MS = Number(process.env.AI_TRADE_PLAN_TIMEOUT_MS || 4000);
 const AI_TRADE_PLAN_ENABLED = process.env.AI_TRADE_PLAN_ENABLED !== "0";
@@ -81,7 +85,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-21-factor-live-calibrated";
+const DASHBOARD_MODEL_VERSION = "2026-07-22-club-mls-context-v2";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -193,8 +197,8 @@ const CLUB_TEAM_RATING_OVERRIDES = {
   "sturm graz": 75,
   "santos fc": 72,
   santos: 72,
-  "inter miami cf": 72,
-  "inter miami": 72,
+  "inter miami cf": 78,
+  "inter miami": 78,
   "kks lech poznan": 72,
   "lech poznan": 72,
   "sk slovan bratislava": 72,
@@ -462,6 +466,10 @@ let bettingExpertCache = null;
 let bettingExpertCacheDirty = false;
 let envFileCache = null;
 let codexOpenAiConfigCache = null;
+let mlsAvailabilityReportCache = null;
+let mlsAvailabilityReportCacheAt = 0;
+let mlsScoreboardCache = null;
+let mlsScoreboardCacheAt = 0;
 
 const TEAM_SEARCH_NAMES = {
   MEX: "Mexico",
@@ -1659,18 +1667,22 @@ function recentFormStrength(summary) {
   if (!matches) return null;
   const wins = Number(summary.wins || 0);
   const draws = Number(summary.draws || 0);
-  const goalsFor = Number(summary.goalsFor || 0);
-  const goalsAgainst = Number(summary.goalsAgainst || 0);
+  const hasGoalTotals = summary.hasGoalTotals !== false
+    && Number.isFinite(Number(summary.goalsFor))
+    && Number.isFinite(Number(summary.goalsAgainst));
+  const goalsFor = hasGoalTotals ? Number(summary.goalsFor || 0) : 0;
+  const goalsAgainst = hasGoalTotals ? Number(summary.goalsAgainst || 0) : 0;
   const pointsRate = (wins * 3 + draws) / (matches * 3);
-  const goalDiffPerMatch = (goalsFor - goalsAgainst) / matches;
-  const attackPerMatch = goalsFor / matches;
-  const defensePerMatch = goalsAgainst / matches;
+  const goalDiffPerMatch = hasGoalTotals ? (goalsFor - goalsAgainst) / matches : 0;
+  const attackPerMatch = hasGoalTotals ? goalsFor / matches : 1.35;
+  const defensePerMatch = hasGoalTotals ? goalsAgainst / matches : 1.25;
   return {
     matches,
     pointsRate,
     goalDiffPerMatch,
     attackPerMatch,
-    defensePerMatch
+    defensePerMatch,
+    hasGoalTotals
   };
 }
 
@@ -1855,6 +1867,9 @@ function communityTipsterSignal(match) {
 }
 
 function isKnockoutMatch(match) {
+  const competition = match?.competition || {};
+  const isClubLeague = competition.teamType === "club" && competition.stageType === "league";
+  if (isClubLeague) return false;
   const text = [
     match?.round,
     match?.stage,
@@ -1867,6 +1882,7 @@ function isKnockoutMatch(match) {
   ].join(" ").toLowerCase();
   if (/knockout|round of 32|round of 16|quarter|semi|final|淘汰|晋级|加时|点球|pen|advance/.test(text)) return true;
   if (match?.manualMarkets?.advance?.available) return true;
+  if (isClubMatch(match)) return false;
   const kickoffKey = shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal);
   return Boolean(kickoffKey && KNOCKOUT_PHASE_START_KEY && kickoffKey >= KNOCKOUT_PHASE_START_KEY);
 }
@@ -2581,14 +2597,31 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   if (homeRatingProfile?.teamType === "club" || awayRatingProfile?.teamType === "club") {
     const homeRating = Number(match.homeTeam?.rating);
     const awayRating = Number(match.awayTeam?.rating);
+    const homeStars = Array.isArray(homeRatingProfile?.starPlayers) ? homeRatingProfile.starPlayers.map((player) => player.name || player).filter(Boolean).slice(0, 3) : [];
+    const awayStars = Array.isArray(awayRatingProfile?.starPlayers) ? awayRatingProfile.starPlayers.map((player) => player.name || player).filter(Boolean).slice(0, 3) : [];
     if (Number.isFinite(homeRating) && Number.isFinite(awayRating)) {
       drivers.push({
         label: "俱乐部评分基线",
         homeXgDelta: 0,
         awayXgDelta: 0,
-        reason: `${match.homeName} 评分 ${homeRating}（${homeRatingProfile?.source || "俱乐部分层"}），${match.awayName} 评分 ${awayRating}（${awayRatingProfile?.source || "俱乐部分层"}）；该差异已进入初始 xG，不使用 FIFA 国家队排名。`
+        reason: [
+          `${match.homeName} 评分 ${homeRating}（${homeRatingProfile?.source || "俱乐部分层"}），${match.awayName} 评分 ${awayRating}（${awayRatingProfile?.source || "俱乐部分层"}）；该差异已进入初始 xG，不使用 FIFA 国家队排名。`,
+          homeStars.length ? `${match.homeName} 静态核心球星：${homeStars.join("、")}。` : "",
+          awayStars.length ? `${match.awayName} 静态核心球星：${awayStars.join("、")}。` : ""
+        ].filter(Boolean).join(" ")
       });
     }
+  }
+  for (const impact of dynamic.modelImpacts || []) {
+    const homeDelta = Number(impact.homeXgDelta) || 0;
+    const awayDelta = Number(impact.awayXgDelta) || 0;
+    if (!homeDelta && !awayDelta) continue;
+    drivers.push({
+      label: impact.label || "动态情报",
+      homeXgDelta: roundTo(homeDelta, 3),
+      awayXgDelta: roundTo(awayDelta, 3),
+      reason: `${impact.reason || "动态输入已进入 xG。"}${impact.source ? ` 来源：${impact.source}。` : ""}`
+    });
   }
   if (homeRank && awayRank) {
     const rankAdvantage = clamp((awayRank - homeRank) / 120, -0.55, 0.55);
@@ -2606,19 +2639,22 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
 
   const homeForm = recentFormStrength(recentFormSummary(match, "home"));
   const awayForm = recentFormStrength(recentFormSummary(match, "away"));
-  if (homeForm && awayForm) {
+  const recentAlreadyAppliedByContext = Boolean(recentFormSummary(match, "home")?.modelAppliedByContext || recentFormSummary(match, "away")?.modelAppliedByContext);
+  if (homeForm && awayForm && !recentAlreadyAppliedByContext) {
     const sampleWeight = clamp(Math.min(homeForm.matches, awayForm.matches) / 5, 0.35, 1);
     const homeFormDelta = clamp(((homeForm.goalDiffPerMatch - awayForm.goalDiffPerMatch) * 0.055 + (homeForm.pointsRate - awayForm.pointsRate) * 0.12) * sampleWeight, -0.14, 0.14);
     const awayFormDelta = -homeFormDelta * 0.78;
-    const homeAttackDelta = clamp((homeForm.attackPerMatch - 1.35) * 0.035 * sampleWeight, -0.05, 0.06);
-    const awayAttackDelta = clamp((awayForm.attackPerMatch - 1.25) * 0.035 * sampleWeight, -0.05, 0.06);
+    const homeAttackDelta = homeForm.hasGoalTotals ? clamp((homeForm.attackPerMatch - 1.35) * 0.035 * sampleWeight, -0.05, 0.06) : 0;
+    const awayAttackDelta = awayForm.hasGoalTotals ? clamp((awayForm.attackPerMatch - 1.25) * 0.035 * sampleWeight, -0.05, 0.06) : 0;
     lambdaHome += homeFormDelta + homeAttackDelta;
     lambdaAway += awayFormDelta + awayAttackDelta;
     drivers.push({
       label: "近期状态",
       homeXgDelta: roundTo(homeFormDelta + homeAttackDelta, 3),
       awayXgDelta: roundTo(awayFormDelta + awayAttackDelta, 3),
-      reason: `${match.homeName} 近 ${homeForm.matches} 场进攻 ${homeForm.attackPerMatch.toFixed(2)}/场，${match.awayName} ${awayForm.attackPerMatch.toFixed(2)}/场；按近况做小幅修正。`
+      reason: homeForm.hasGoalTotals && awayForm.hasGoalTotals
+        ? `${match.homeName} 近 ${homeForm.matches} 场进攻 ${homeForm.attackPerMatch.toFixed(2)}/场，${match.awayName} ${awayForm.attackPerMatch.toFixed(2)}/场；按近况做小幅修正。`
+        : `${match.homeName} 与 ${match.awayName} 已同步赛季/近期胜平负走势；该源未提供可审计进失球汇总，因此只按积分率和连胜做低权重修正，不伪造进攻均值。`
     });
   }
 
@@ -3230,6 +3266,14 @@ function probabilityShift(value, delta) {
 }
 
 function applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings = {}) {
+  if (isClubMatch(match)) {
+    match.tournamentTrend = {
+      applied: false,
+      sampleSize: tournamentTrend?.sampleSize || 0,
+      notes: ["俱乐部赛事不使用世界杯赛会趋势；改用俱乐部强度、联赛战绩、阵容/可用性和盘口曲线。"]
+    };
+    return match;
+  }
   if (!tournamentTrend?.ok || !match?.probabilities) {
     match.tournamentTrend = {
       applied: false,
@@ -5438,7 +5482,9 @@ function aiPredictionMarketDisagreement(match, top, rows) {
     status: conflict ? "partial" : "synced",
     detail: conflict
       ? `市场最偏 ${labels[marketTop]} ${formatPercent(market[marketTop])}，模型最高为 ${labels[modelTop]} ${formatPercent(modelTriplet[modelTop])}；这类低数据俱乐部场按低置信复核，不做反向强结论。`
-      : `市场和模型同向偏 ${labels[marketTop]}，但市场价格 ${formatPercent(market[marketTop])} 高于模型 ${formatPercent(modelTriplet[marketTop])}；价格偏贵时只观察，不硬追热门。`
+      : market[marketTop] > modelTriplet[marketTop]
+        ? `市场和模型同向偏 ${labels[marketTop]}，但市场价格 ${formatPercent(market[marketTop])} 高于模型 ${formatPercent(modelTriplet[marketTop])}；价格偏贵时只观察，不硬追热门。`
+        : `市场和模型同向偏 ${labels[marketTop]}，且市场价格 ${formatPercent(market[marketTop])} 低于模型 ${formatPercent(modelTriplet[marketTop])}；仍需结合阵容和曲线确认，不因薄 edge 硬追。`
   };
 }
 
@@ -10532,7 +10578,78 @@ function scheduleAutoBaselineFromEvent(event, modeledKeys, finalResults, polymar
   return baseMatch;
 }
 
-function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, nowMs = Date.now()) {
+function applyAuxiliaryClubContext(match, auxiliaryContext = {}) {
+  if (!match || !isClubMatch(match)) return match;
+  const contextPatch = {};
+  const sources = {};
+  const modelImpacts = [...(Array.isArray(match.context?.modelImpacts) ? match.context.modelImpacts : [])];
+  const riskFlags = [...(Array.isArray(match.context?.riskFlags) ? match.context.riskFlags : [])];
+  const teamNewsParts = [];
+
+  const mlsSeasonContext = mlsScoreboardContextForMatch(match, auxiliaryContext.mlsScoreboard);
+  if (mlsSeasonContext?.ok) {
+    contextPatch.recentFormRecords = mlsSeasonContext.recentFormRecords;
+    contextPatch.recentForm = {
+      home: [mlsSeasonContext.summary],
+      away: [mlsSeasonContext.summary]
+    };
+    teamNewsParts.push(mlsSeasonContext.summary);
+    modelImpacts.push(...(mlsSeasonContext.modelImpacts || []));
+    sources.recentForm = {
+      ok: true,
+      status: "synced",
+      confidence: "medium",
+      updatedAt: mlsSeasonContext.updatedAt,
+      url: mlsSeasonContext.sourceUrl,
+      source: mlsSeasonContext.source,
+      error: ""
+    };
+  }
+
+  const availabilityContext = mlsAvailabilityContextForMatch(match, auxiliaryContext.mlsAvailabilityReport?.text);
+  if (availabilityContext?.ok) {
+    contextPatch.availability = availabilityContext;
+    contextPatch.injurySummary = availabilityContext.summary;
+    teamNewsParts.push(availabilityContext.summary);
+    modelImpacts.push(...(availabilityContext.impacts || []));
+    riskFlags.push(...(availabilityContext.riskFlags || []));
+    sources.injuries = {
+      ok: true,
+      status: "verified-or-summarized",
+      confidence: "high",
+      updatedAt: auxiliaryContext.mlsAvailabilityReport?.updatedAt || new Date().toISOString(),
+      url: availabilityContext.sourceUrl,
+      source: "MLS Player Availability Report",
+      error: ""
+    };
+  }
+
+  if (!Object.keys(contextPatch).length && !Object.keys(sources).length) return match;
+  contextPatch.teamNewsSummary = [
+    ...teamNewsParts,
+    String(match.context?.teamNewsSummary || "")
+  ].filter(Boolean).join(" ");
+  contextPatch.modelImpacts = modelImpacts;
+  contextPatch.riskFlags = [...new Set(riskFlags)];
+  contextPatch.sources = {
+    ...(match.context?.sources || {}),
+    ...sources
+  };
+  contextPatch.updatedAt = new Date().toISOString();
+  match.context = deepMerge(match.context || {}, contextPatch);
+  if (contextPatch.recentFormRecords) match.recentFormRecords = contextPatch.recentFormRecords;
+  match.dynamic = {
+    ...(match.dynamic || {}),
+    injurySummary: contextPatch.injurySummary || match.dynamic?.injurySummary,
+    status: contextPatch.teamNewsSummary
+      ? "俱乐部赛事动态层已纳入公开战绩/可用性；首发未确认前仍按低置信风控。"
+      : match.dynamic?.status,
+    lastChecked: contextPatch.updatedAt
+  };
+  return match;
+}
+
+function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, nowMs = Date.now(), auxiliaryContext = {}) {
   if (!shouldIncludePolymarketSoccerGame(event, nowMs)) return null;
   const teams = parseTeamsFromSoccerEventTitle(event.title);
   if (!teams) return null;
@@ -10614,6 +10731,7 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
       }
     }
   });
+  applyAuxiliaryClubContext(match, auxiliaryContext);
   match.model.manualAdjustments = [
     {
       label: "Polymarket 足球赛事发现",
@@ -10621,6 +10739,11 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
     },
     ...(match.model.manualAdjustments || [])
   ];
+  match.dynamicModel = applyDynamicAdjustments(match);
+  match.probabilities = scoreModel(match.dynamicModel.adjusted.lambdaHome, match.dynamicModel.adjusted.lambdaAway);
+  applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings);
+  match.contextSignals = buildContextSignals(match);
+  applyGoldmanStyleModel(match, fifaRankings, { useMarketCalibration: false });
   match.manualMarkets = polymarketMoneylineManualMarkets(match, polymarket, event);
   match.completeness = buildCompleteness(match, polymarket);
   match.tradingGate = buildTradingGate(match.completeness);
@@ -10703,7 +10826,7 @@ function findPolymarketMoneylinePrices(match, polymarket, event = {}) {
   };
 }
 
-function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength) {
+function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, auxiliaryContext = {}) {
   const nowMs = Date.now();
   const scheduleByKey = new Map((schedule.matches || []).map((event) => [scheduleEventKey(event), event]));
   const visibleModeled = matches.filter((match) => isVisibleModeledMatch(match, scheduleByKey, finalResults, nowMs));
@@ -10720,7 +10843,7 @@ function filterAndAugmentMatches(matches, schedule, finalResults, polymarket, co
     ...autoBaseline.map((match) => matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName))
   ]);
   const polymarketAutoBaseline = selectPolymarketVisibleBaseEvents(polymarket?.soccerEvents?.events || [], nowMs)
-    .map((event) => polymarketSoccerAutoBaselineFromEvent(event, modeledAndScheduleKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, nowMs))
+    .map((event) => polymarketSoccerAutoBaselineFromEvent(event, modeledAndScheduleKeys, finalResults, polymarket, context, fifaRankings, worldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, nowMs, auxiliaryContext))
     .filter(Boolean);
   for (const match of polymarketAutoBaseline) {
     modeledAndScheduleKeys.add(matchScheduleKey(match.homeEnglishName || match.homeName, match.awayEnglishName || match.awayName));
@@ -11519,6 +11642,9 @@ function clubTeamRatingProfile(teamName, competition = {}, clubStrength = {}) {
     updatedAt: strengthRecord?.updatedAt || clubStrength.updatedAt || new Date().toISOString(),
     rank: strengthRecord?.rank ?? null,
     rankLabel: strengthRecord?.rankLabel || "",
+    clubRankSource: strengthRecord?.clubRankSource || "",
+    starPlayers: Array.isArray(strengthRecord?.starPlayers) ? strengthRecord.starPlayers : [],
+    starPower: strengthRecord?.starPower || null,
     country: strengthRecord?.country || fallback.countryHint?.country || "",
     countryHint: fallback.countryHint || null,
     countryModifier: fallback.modifier,
@@ -12568,6 +12694,24 @@ function scheduleTeamRecord(team, fifaRankings, worldCupRecords, squadProfiles) 
   const ratingSourceText = ratingProfile?.source
     ? `${ratingProfile.source}：${ratingProfile.note || ""}`
     : `自动基线评分：${rating}`;
+  const starPlayers = Array.isArray(ratingProfile?.starPlayers) ? ratingProfile.starPlayers : [];
+  const staticSignals = [
+    ratingSourceText,
+    worldRanking.rank ? `FIFA 世界排名第 ${worldRanking.rank}（${worldRanking.updatedAt || "快照"}）` : worldRanking.note,
+    isClubTeam ? `俱乐部评分置信度：${ratingProfile?.confidence || "low"}` : `静态强度标签：${rankBand(worldRanking.rank)}`,
+    isClubTeam && starPlayers.length
+      ? `核心球星：${starPlayers.slice(0, 4).map((player) => player.name || player).filter(Boolean).join("、")}（已进入静态满员评分，实际出场由动态层确认）`
+      : null,
+    isClubTeam && ratingProfile?.clubRankSource
+      ? `俱乐部排名/强度源：${ratingProfile.clubRankSource}`
+      : null
+  ].filter(Boolean);
+  const watchItems = [
+    "赛前持续复核官方/可靠阵容",
+    "伤停和球队新闻以公开同步结果为准",
+    isClubTeam && starPlayers.length ? "核心球星若进入官方 OUT/QUESTIONABLE，单场强度会动态下修" : null,
+    "公开盘口和 Polymarket 市场未匹配时不提供价格建议"
+  ].filter(Boolean);
   return {
     name,
     englishName: TEAM_SEARCH_NAMES[code] || team?.name || "",
@@ -12579,16 +12723,8 @@ function scheduleTeamRecord(team, fifaRankings, worldCupRecords, squadProfiles) 
       : isClubTeam
         ? `俱乐部赛事自动纳入；${ratingProfile?.source || "俱乐部分层"}给出评分 ${rating}。`
         : "赛程源自动纳入；排名快照未覆盖时使用默认保守评分。",
-    staticSignals: [
-      ratingSourceText,
-      worldRanking.rank ? `FIFA 世界排名第 ${worldRanking.rank}（${worldRanking.updatedAt || "快照"}）` : worldRanking.note,
-      isClubTeam ? `俱乐部评分置信度：${ratingProfile?.confidence || "low"}` : `静态强度标签：${rankBand(worldRanking.rank)}`
-    ],
-    watchItems: [
-      "赛前持续复核官方/可靠阵容",
-      "伤停和球队新闻以公开同步结果为准",
-      "公开盘口和 Polymarket 市场未匹配时不提供价格建议"
-    ],
+    staticSignals,
+    watchItems,
     worldRanking,
     worldCupRecord,
     squadProfile,
@@ -12880,6 +13016,397 @@ async function timedFetchText(url, options = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function decodeHtmlEntities(text) {
+  return String(text || "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const value = Number(code);
+      return Number.isFinite(value) ? String.fromCharCode(value) : _;
+    });
+}
+
+function textFromHtmlWithBreaks(html) {
+  return decodeHtmlEntities(String(html || ""))
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<(?:br|\/li|\/p|\/h[1-6]|\/div|\/tr)\b[^>]*>/gi, "\n")
+    .replace(/<(?:li|p|h[1-6]|div|tr)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+function normalizeAvailabilityKey(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(the|fc|cf|sc)\b/gi, "")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function availabilityAliasesForMatchSide(match, side) {
+  const teamName = side === "home" ? match?.homeName : match?.awayName;
+  const englishName = side === "home" ? match?.homeEnglishName : match?.awayEnglishName;
+  const code = side === "home" ? match?.home : match?.away;
+  const ratingProfile = side === "home" ? match?.homeTeam?.ratingProfile : match?.awayTeam?.ratingProfile;
+  const aliases = [
+    teamName,
+    englishName,
+    code,
+    ...(Array.isArray(ratingProfile?.aliases) ? ratingProfile.aliases : [])
+  ];
+  return [...new Set(aliases.map(normalizeAvailabilityKey).filter(Boolean))];
+}
+
+function availabilityHeaderMatches(line, aliases) {
+  const key = normalizeAvailabilityKey(line);
+  if (!key) return false;
+  return aliases.some((alias) => key === alias || (alias.length >= 7 && key.includes(alias)));
+}
+
+function isLikelyMlsAvailabilityTeamHeader(line) {
+  const clean = decodeHtmlEntities(String(line || "")).replace(/\s+/g, " ").trim();
+  if (!clean || clean.includes(":") || clean.length > 60) return false;
+  return /^[A-Z][A-Za-zÀ-ž0-9 .&'’\-]+$/.test(clean)
+    && /(FC|CF|SC|United|Crew|Rapids|Revolution|Sounders|Timbers|Union|Galaxy|Fire|City|Dynamo|Sporting|Whitecaps|Toronto|Orlando|Red Bull|Earthquakes|Minnesota|Montréal|Montreal|Nashville|Philadelphia|Portland|Salt Lake|Seattle|Vancouver|Atlanta|Austin|Charlotte|Chicago|Cincinnati|Columbus|Dallas|Houston|Kansas|Miami)$/i.test(clean);
+}
+
+function extractMlsAvailabilityEntries(reportText, match, side) {
+  const aliases = availabilityAliasesForMatchSide(match, side);
+  if (!aliases.length) return [];
+  const lines = textFromHtmlWithBreaks(reportText)
+    .split(/\r?\n/)
+    .map((line) => decodeHtmlEntities(line).replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const statusPattern = /^(OUT|QUESTIONABLE|DOUBTFUL|SUSPENDED|INTERNATIONAL DUTY|SEASON-ENDING INJURY LIST|PROBABLE):\s*(.+)$/i;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!availabilityHeaderMatches(lines[index], aliases)) continue;
+    const entries = [];
+    for (const line of lines.slice(index + 1, index + 44)) {
+      if (entries.length && !statusPattern.test(line) && isLikelyMlsAvailabilityTeamHeader(line)) break;
+      const matchLine = line.match(statusPattern);
+      if (!matchLine) continue;
+      entries.push({
+        status: matchLine[1].toUpperCase(),
+        player: matchLine[2].replace(/\s+/g, " ").trim(),
+        raw: line
+      });
+    }
+    if (entries.length) return entries;
+  }
+  return [];
+}
+
+function availabilityImpactForPlayer(teamName, entry) {
+  const teamKey = normalizeAvailabilityKey(teamName);
+  const playerKey = normalizeAvailabilityKey(entry?.player);
+  const status = String(entry?.status || "").toUpperCase();
+  const outWeight = status === "OUT" || status === "SUSPENDED" || status.includes("INTERNATIONAL") ? 1 : 0.45;
+  const rules = [
+    {
+      team: "inter miami",
+      players: ["leo messi", "lionel messi"],
+      attackDelta: -0.16,
+      reason: "Leo Messi 被 MLS 官方列为 OUT，Miami 终结能力、持球吸引和定位球威胁下修。"
+    },
+    {
+      team: "inter miami",
+      players: ["rodrigo de paul"],
+      attackDelta: -0.07,
+      reason: "Rodrigo De Paul 被 MLS 官方列为 OUT，Miami 中场推进、反抢和前场连接下修。"
+    },
+    {
+      team: "inter miami",
+      players: ["luis suarez"],
+      attackDelta: -0.06,
+      reason: "Luis Suarez 若缺席，Miami 禁区终结点下修。"
+    },
+    {
+      team: "inter miami",
+      players: ["tadeo allende"],
+      attackDelta: -0.035,
+      reason: "Tadeo Allende 被 MLS 官方列为 OUT，Miami 边路/前场轮换深度下修。"
+    }
+  ];
+  for (const rule of rules) {
+    if (!teamKey.includes(rule.team)) continue;
+    if (!rule.players.some((player) => playerKey.includes(player))) continue;
+    return {
+      attackDelta: roundTo(rule.attackDelta * outWeight, 3),
+      reason: rule.reason
+    };
+  }
+  return null;
+}
+
+function isMlsCompetition(match = {}) {
+  return match?.competition?.key === "mls"
+    || /(^|\b)mls\b|major league soccer/i.test([
+      match?.competition?.label,
+      match?.competition?.labelEn,
+      match?.stage,
+      match?.round,
+      match?.group,
+      match?.polymarketEventSlug
+    ].filter(Boolean).join(" "));
+}
+
+async function fetchMlsAvailabilityReport({ enabled = true } = {}) {
+  if (!enabled) {
+    return { ok: false, skipped: true, source: "MLS Player Availability Report", url: MLS_AVAILABILITY_REPORT_URL, error: "当前窗口无 MLS 赛事" };
+  }
+  const now = Date.now();
+  if (mlsAvailabilityReportCache && now - mlsAvailabilityReportCacheAt < MLS_AVAILABILITY_CACHE_TTL_MS) {
+    return { ...mlsAvailabilityReportCache, cacheHit: true };
+  }
+  const result = await timedFetchText(MLS_AVAILABILITY_REPORT_URL, {
+    timeoutMs: Math.min(FETCH_TIMEOUT_MS + 3500, 10000)
+  });
+  const payload = {
+    ok: result.ok,
+    source: "MLS Player Availability Report",
+    url: MLS_AVAILABILITY_REPORT_URL,
+    updatedAt: new Date().toISOString(),
+    latencyMs: result.latencyMs,
+    text: result.ok ? result.text : "",
+    error: result.ok ? "" : result.error
+  };
+  mlsAvailabilityReportCache = payload;
+  mlsAvailabilityReportCacheAt = now;
+  return payload;
+}
+
+function mlsAvailabilityContextForMatch(match, reportText) {
+  if (!isMlsCompetition(match) || !reportText) return null;
+  const homeEntries = extractMlsAvailabilityEntries(reportText, match, "home");
+  const awayEntries = extractMlsAvailabilityEntries(reportText, match, "away");
+  if (!homeEntries.length && !awayEntries.length) {
+    return {
+      ok: true,
+      sourceUrl: MLS_AVAILABILITY_REPORT_URL,
+      summary: "MLS 官方球员可用性报告已查询；未提取到两队 OUT/QUESTIONABLE 名单。",
+      entries: { home: [], away: [] },
+      impacts: [],
+      riskFlags: []
+    };
+  }
+  const impacts = [];
+  const impactReasons = [];
+  for (const [side, teamName, entries] of [
+    ["home", match.homeName, homeEntries],
+    ["away", match.awayName, awayEntries]
+  ]) {
+    let teamAttackDelta = 0;
+    const reasons = [];
+    for (const entry of entries) {
+      const playerImpact = availabilityImpactForPlayer(teamName, entry);
+      if (!playerImpact) continue;
+      teamAttackDelta += playerImpact.attackDelta;
+      reasons.push(playerImpact.reason);
+    }
+    teamAttackDelta = roundTo(clamp(teamAttackDelta, -0.28, 0), 3);
+    if (!teamAttackDelta) continue;
+    impacts.push({
+      label: "MLS官方可用性",
+      homeXgDelta: side === "home" ? teamAttackDelta : 0,
+      awayXgDelta: side === "away" ? teamAttackDelta : 0,
+      reason: reasons.join(" "),
+      source: "MLS Player Availability Report"
+    });
+    impactReasons.push(...reasons);
+  }
+  const lineText = (label, entries) => entries.length
+    ? `${label}: ${entries.map((entry) => `${entry.status} ${entry.player}`).join("；")}`
+    : `${label}: 未列出 OUT/QUESTIONABLE`;
+  return {
+    ok: true,
+    sourceUrl: MLS_AVAILABILITY_REPORT_URL,
+    summary: [
+      "MLS 官方球员可用性报告：",
+      lineText(match.homeName, homeEntries),
+      lineText(match.awayName, awayEntries)
+    ].join(" "),
+    entries: {
+      home: homeEntries,
+      away: awayEntries
+    },
+    impacts,
+    riskFlags: impactReasons.length ? ["MLS 官方可用性报告显示核心/轮换球员缺席，单场强度已动态下修"] : []
+  };
+}
+
+function hasVisibleMlsSoccerEvents(polymarket = {}) {
+  const events = Array.isArray(polymarket?.soccerEvents?.events) ? polymarket.soccerEvents.events : [];
+  return selectPolymarketVisibleBaseEvents(events).some((event) => classifySoccerCompetition(event).key === "mls");
+}
+
+async function fetchMlsScoreboard({ enabled = true } = {}) {
+  if (!enabled) {
+    return { ok: false, skipped: true, source: "ESPN MLS scoreboard", url: ESPN_MLS_SCOREBOARD_URL, error: "当前窗口无 MLS 赛事" };
+  }
+  const now = Date.now();
+  if (mlsScoreboardCache && now - mlsScoreboardCacheAt < MLS_SCOREBOARD_CACHE_TTL_MS) {
+    return { ...mlsScoreboardCache, cacheHit: true };
+  }
+  const startKey = shanghaiDateKey(addDays(new Date(now), -1));
+  const endKey = shanghaiDateKey(addDays(new Date(now), MATCH_WINDOW_DAYS + 1));
+  const url = `${ESPN_MLS_SCOREBOARD_URL}?dates=${startKey}-${endKey}`;
+  const result = await timedFetchJsonWithRetry(url, {
+    timeoutMs: Math.min(FETCH_TIMEOUT_MS + 3500, 10000)
+  }, 2);
+  const payload = {
+    ok: result.ok,
+    source: "ESPN MLS scoreboard",
+    url,
+    updatedAt: new Date().toISOString(),
+    latencyMs: result.latencyMs,
+    events: result.ok && Array.isArray(result.data?.events) ? result.data.events : [],
+    error: result.ok ? "" : result.error
+  };
+  mlsScoreboardCache = payload;
+  mlsScoreboardCacheAt = now;
+  return payload;
+}
+
+function normalizeMlsTeamName(value) {
+  return normalizeAvailabilityKey(value)
+    .replace(/\bfootball club\b/g, "")
+    .replace(/\bsoccer club\b/g, "")
+    .replace(/\bclub\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function espnCompetitorNames(competitor = {}) {
+  const team = competitor.team || {};
+  return [
+    team.displayName,
+    team.name,
+    team.shortDisplayName,
+    team.location,
+    team.abbreviation,
+    competitor.displayName
+  ].filter(Boolean);
+}
+
+function matchMlsCompetitor(competitor, teamName) {
+  const target = normalizeMlsTeamName(teamName);
+  if (!target) return false;
+  return espnCompetitorNames(competitor).some((name) => {
+    const key = normalizeMlsTeamName(name);
+    return key === target || (key.length >= 5 && target.includes(key)) || (target.length >= 5 && key.includes(target));
+  });
+}
+
+function parseEspnRecordSummary(summary) {
+  const text = String(summary || "");
+  const match = text.match(/(\d+)\s*[-–]\s*(\d+)\s*[-–]\s*(\d+)/);
+  if (!match) return null;
+  const wins = Number(match[1]);
+  const losses = Number(match[2]);
+  const draws = Number(match[3]);
+  if (![wins, losses, draws].every(Number.isFinite)) return null;
+  return { wins, losses, draws, matches: wins + losses + draws };
+}
+
+function espnCompetitorRecord(competitor = {}) {
+  const records = Array.isArray(competitor.records) ? competitor.records : [];
+  const total = records.find((record) => /total|overall/i.test(String(record.name || record.type || ""))) || records[0] || {};
+  const parsed = parseEspnRecordSummary(total.summary || total.displayValue || total.value);
+  if (!parsed) return null;
+  const form = String(
+    competitor.form
+    || total.form
+    || records.find((record) => /form|streak/i.test(String(record.name || record.type || "")))?.summary
+    || ""
+  ).replace(/\s+/g, "").toUpperCase();
+  const points = parsed.wins * 3 + parsed.draws;
+  return {
+    summary: {
+      ...parsed,
+      points,
+      pointsPerMatch: parsed.matches ? roundTo(points / parsed.matches, 3) : null,
+      goalsFor: null,
+      goalsAgainst: null,
+      hasGoalTotals: false,
+      label: total.summary || `${parsed.wins}-${parsed.losses}-${parsed.draws}`,
+      form,
+      modelAppliedByContext: true
+    },
+    matches: [],
+    source: "ESPN MLS scoreboard",
+    sourceUrl: ESPN_MLS_SCOREBOARD_URL,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function formWinStreak(form) {
+  const text = String(form || "").toUpperCase();
+  const match = text.match(/^W+/);
+  return match ? match[0].length : 0;
+}
+
+function mlsScoreboardContextForMatch(match, scoreboard) {
+  if (!isMlsCompetition(match) || !scoreboard?.ok || !Array.isArray(scoreboard.events)) return null;
+  for (const event of scoreboard.events) {
+    const competitors = event.competitions?.[0]?.competitors || [];
+    if (competitors.length < 2) continue;
+    const home = competitors.find((competitor) => competitor.homeAway === "home") || competitors[0];
+    const away = competitors.find((competitor) => competitor.homeAway === "away") || competitors[1];
+    const homeMatchesHome = matchMlsCompetitor(home, match.homeName) && matchMlsCompetitor(away, match.awayName);
+    const homeMatchesAway = matchMlsCompetitor(home, match.awayName) && matchMlsCompetitor(away, match.homeName);
+    if (!homeMatchesHome && !homeMatchesAway) continue;
+    const homeCompetitor = homeMatchesHome ? home : away;
+    const awayCompetitor = homeMatchesHome ? away : home;
+    const homeRecord = espnCompetitorRecord(homeCompetitor);
+    const awayRecord = espnCompetitorRecord(awayCompetitor);
+    if (!homeRecord || !awayRecord) return null;
+    const homeSummary = homeRecord.summary;
+    const awaySummary = awayRecord.summary;
+    const homePpg = Number(homeSummary.pointsPerMatch);
+    const awayPpg = Number(awaySummary.pointsPerMatch);
+    const ppgDelta = Number.isFinite(homePpg) && Number.isFinite(awayPpg) ? clamp((homePpg - awayPpg) * 0.05, -0.12, 0.12) : 0;
+    const homeStreakDelta = clamp(formWinStreak(homeSummary.form) * 0.012, 0, 0.05);
+    const awayStreakDelta = clamp(formWinStreak(awaySummary.form) * 0.012, 0, 0.05);
+    const homeXgDelta = roundTo(clamp(ppgDelta + homeStreakDelta - awayStreakDelta * 0.7, -0.12, 0.14), 3);
+    const awayXgDelta = roundTo(clamp(-ppgDelta * 0.75 + awayStreakDelta - homeStreakDelta * 0.5, -0.12, 0.12), 3);
+    const homeLabel = homeSummary.label || `${homeSummary.wins}-${homeSummary.losses}-${homeSummary.draws}`;
+    const awayLabel = awaySummary.label || `${awaySummary.wins}-${awaySummary.losses}-${awaySummary.draws}`;
+    const formText = [homeSummary.form ? `${match.homeName} form ${homeSummary.form}` : "", awaySummary.form ? `${match.awayName} form ${awaySummary.form}` : ""].filter(Boolean).join("；");
+    return {
+      ok: true,
+      source: "ESPN MLS scoreboard",
+      sourceUrl: ESPN_MLS_SCOREBOARD_URL,
+      updatedAt: scoreboard.updatedAt || new Date().toISOString(),
+      recentFormRecords: {
+        home: homeRecord,
+        away: awayRecord
+      },
+      modelImpacts: [{
+        label: "MLS赛季战绩/近期状态",
+        homeXgDelta,
+        awayXgDelta,
+        reason: `ESPN MLS：${match.homeName} ${homeLabel}，${match.awayName} ${awayLabel}${formText ? `；${formText}` : ""}；只按赛季战绩/连胜做低权重 xG 修正。`,
+        source: "ESPN MLS scoreboard"
+      }],
+      summary: `ESPN MLS 战绩：${match.homeName} ${homeLabel}${homeSummary.form ? `（${homeSummary.form}）` : ""}；${match.awayName} ${awayLabel}${awaySummary.form ? `（${awaySummary.form}）` : ""}。`
+    };
+  }
+  return null;
 }
 
 function buildPolymarketSearches(schedule = null) {
@@ -16845,6 +17372,11 @@ async function buildDashboard({
   const trendSourceSchedule = trendSchedule.ok ? trendSchedule : schedule;
   const tournamentTrend = buildTournamentTrend(trendSourceSchedule, fifaRankings);
   const polymarket = await fetchPolymarket(schedule, { light });
+  const hasMlsEvents = hasVisibleMlsSoccerEvents(polymarket);
+  const [mlsAvailabilityReport, mlsScoreboard] = await Promise.all([
+    fetchMlsAvailabilityReport({ enabled: hasMlsEvents }),
+    fetchMlsScoreboard({ enabled: hasMlsEvents })
+  ]);
   const preliminaryWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, schedule.matches || [], finalResults);
   const allModeledMatches = local.matches.map((match) => normalizeMatch(match, local.teams, context, polymarket, preliminaryWorldCupRecords, squadProfiles, fifaRankings, tournamentTrend, groupStandings, h2hOverrides));
   if (!DISABLE_HISTORY_RECORDING && trendSourceSchedule.ok) {
@@ -16855,7 +17387,10 @@ async function buildDashboard({
     }
   }
   const effectiveWorldCupRecords = applyRecordedWorldCupResults(worldCupRecords, local.matches, trendSourceSchedule.matches || schedule.matches || [], finalResults);
-  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength);
+  const { matches, visibility } = filterAndAugmentMatches(allModeledMatches, schedule, finalResults, polymarket, context, fifaRankings, effectiveWorldCupRecords, squadProfiles, h2hOverrides, tournamentTrend, groupStandings, clubStrength, {
+    mlsAvailabilityReport,
+    mlsScoreboard
+  });
   attachMarketCharts(matches, polymarket);
   const soccerCompetitions = soccerCompetitionSummaryFromMatches(matches);
   const bettingExpert = await attachBettingExpertSignals(matches, { enabled: !light });
@@ -16916,6 +17451,17 @@ async function buildDashboard({
         lastUpdated: clubStrength.updatedAt || "",
         error: clubStrength.error,
         detail: `${Object.keys(clubStrength.teams || clubStrength.clubs || {}).length} 个俱乐部别名/记录 · ${clubStrength.methodologyZh || clubStrength.methodology || "用于俱乐部赛事基线，不用于国家队"}`
+      },
+      {
+        source: "MLS 俱乐部动态",
+        ok: !hasMlsEvents || Boolean(mlsAvailabilityReport.ok || mlsScoreboard.ok),
+        lastUpdated: [mlsAvailabilityReport.updatedAt, mlsScoreboard.updatedAt].filter(Boolean).sort().pop() || "",
+        error: hasMlsEvents
+          ? [mlsAvailabilityReport.ok ? "" : mlsAvailabilityReport.error, mlsScoreboard.ok ? "" : mlsScoreboard.error].filter(Boolean).join("；")
+          : undefined,
+        detail: hasMlsEvents
+          ? `MLS 官方可用性 ${mlsAvailabilityReport.ok ? "已同步" : "不可用"} · ESPN MLS 战绩/状态 ${mlsScoreboard.ok ? "已同步" : "不可用"}`
+          : "当前窗口无 MLS 赛事"
       },
       {
         source: "动态情报快照",
