@@ -34,7 +34,7 @@ const LIGHT_CACHE_TTL_MS = 60 * 1000;
 const LIGHT_CACHE_STABILITY_MAX_AGE_MS = Number(process.env.LIGHT_CACHE_STABILITY_MAX_AGE_MS || 30 * 60 * 1000);
 const DASHBOARD_REQUEST_TIMEOUT_MS = Number(process.env.DASHBOARD_REQUEST_TIMEOUT_MS || 65000);
 const FETCH_TIMEOUT_MS = 6500;
-const LIGHT_FETCH_TIMEOUT_MS = Number(process.env.LIGHT_FETCH_TIMEOUT_MS || 3500);
+const LIGHT_FETCH_TIMEOUT_MS = Number(process.env.LIGHT_FETCH_TIMEOUT_MS || 9000);
 const MLS_AVAILABILITY_REPORT_URL = "https://www.mlssoccer.com/league-reports/player-availability-report/";
 const MLS_AVAILABILITY_CACHE_TTL_MS = Number(process.env.MLS_AVAILABILITY_CACHE_TTL_MS || 15 * 60 * 1000);
 const ESPN_MLS_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard";
@@ -66,11 +66,15 @@ const POLYMARKET_PLAYER_PROP_MARKET_LIMIT_PER_EVENT = Number(process.env.POLYMAR
 const POLYMARKET_SOCCER_EVENT_LIMIT = Number(process.env.POLYMARKET_SOCCER_EVENT_LIMIT || 240);
 const POLYMARKET_SOCCER_GAME_EVENT_LIMIT = Number(process.env.POLYMARKET_SOCCER_GAME_EVENT_LIMIT || 240);
 const POLYMARKET_SOCCER_WINDOW_EVENT_LIMIT = Math.min(100, Math.max(1, Number(process.env.POLYMARKET_SOCCER_WINDOW_EVENT_LIMIT || 100)));
-const POLYMARKET_SOCCER_WINDOW_EVENT_PAGES = Number(process.env.POLYMARKET_SOCCER_WINDOW_EVENT_PAGES || 10);
+const POLYMARKET_SOCCER_WINDOW_EVENT_PAGES = Number(process.env.POLYMARKET_SOCCER_WINDOW_EVENT_PAGES || 6);
 const POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT = Number(process.env.POLYMARKET_SOCCER_BASELINE_MATCH_LIMIT || 42);
 const POLYMARKET_SOCCER_BASELINE_MATCHES_PER_DAY = Number(process.env.POLYMARKET_SOCCER_BASELINE_MATCHES_PER_DAY || 14);
 const POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME = Number(process.env.POLYMARKET_SOCCER_MIN_VISIBLE_VOLUME || 10000);
 const POLYMARKET_INCLUDE_OTHER_SOCCER = process.env.POLYMARKET_INCLUDE_OTHER_SOCCER === "1";
+const POLYMARKET_SOCCER_FOCUSED_TAGS = String(process.env.POLYMARKET_SOCCER_FOCUSED_TAGS || "ucl,uel,uecl,mls,liga-mx,libertadores,sudamericana,concacaf")
+  .split(",")
+  .map((tag) => tag.trim())
+  .filter(Boolean);
 const MATCH_WINDOW_DAYS = Number(process.env.MATCH_WINDOW_DAYS || 3);
 const MATCH_HIDE_AFTER_HOURS = Number(process.env.MATCH_HIDE_AFTER_HOURS || 8);
 const MATCH_LIVE_GRACE_HOURS = Number(process.env.MATCH_LIVE_GRACE_HOURS || 8);
@@ -14352,6 +14356,18 @@ function buildPolymarketSoccerEventUrls(nowMs = Date.now()) {
       tag_slug: tagSlug,
       order: "updatedAt",
       ascending: "false",
+      end_date_min: endDateMin,
+      end_date_max: endDateMax
+    }).toString()}`);
+  }
+  for (const tagSlug of POLYMARKET_SOCCER_FOCUSED_TAGS) {
+    urls.push(`${POLYMARKET_GAMMA_API_BASE}/events?${new URLSearchParams({
+      active: "true",
+      closed: "false",
+      limit: String(POLYMARKET_SOCCER_WINDOW_EVENT_LIMIT),
+      tag_slug: tagSlug,
+      order: "endDate",
+      ascending: "true",
       end_date_min: endDateMin,
       end_date_max: endDateMax
     }).toString()}`);
