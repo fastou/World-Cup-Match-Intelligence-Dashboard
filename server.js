@@ -1891,6 +1891,10 @@ function isKnockoutMatch(match) {
   return Boolean(kickoffKey && KNOCKOUT_PHASE_START_KEY && kickoffKey >= KNOCKOUT_PHASE_START_KEY);
 }
 
+function isNationalTeamKnockoutMatch(match) {
+  return !isClubMatch(match) && isKnockoutMatch(match);
+}
+
 function knockoutStageProfile(match) {
   const text = [
     match?.round,
@@ -1922,10 +1926,10 @@ function knockoutStageProfile(match) {
 }
 
 function useRound16PlusLogic(match) {
+  if (isClubMatch(match)) return false;
   const profile = knockoutStageProfile(match);
   if (["round16", "quarter", "semi", "final"].includes(profile.key)) return true;
   if (profile.key !== "knockout") return false;
-  if (isClubMatch(match)) return false;
   const kickoffKey = shanghaiDateKey(match?.kickoffShanghai || match?.kickoffLocal);
   return Boolean(kickoffKey && ROUND_OF_16_PHASE_START_KEY && kickoffKey >= ROUND_OF_16_PHASE_START_KEY);
 }
@@ -1943,7 +1947,7 @@ function matchShapeProfile(match, options = {}) {
   const under25 = Number(probabilities.under25) || 0;
   const over25 = Number(probabilities.over25) || 0;
   const topScores = Array.isArray(probabilities.topScoresFull) ? probabilities.topScoresFull : [];
-  const knockout = isKnockoutMatch(match);
+  const knockout = isNationalTeamKnockoutMatch(match);
   const round16Plus = useRound16PlusLogic(match);
   const favoriteGap = Math.abs(home - away);
   const oneNilMass = scoreProbability(match, "1-0") + scoreProbability(match, "0-1");
@@ -2031,7 +2035,7 @@ function researchFactorCalibration(match, probabilities, contextSignals = null, 
     return { ok: false, probabilities, deltas: {}, notes: [], missing: ["比分分布不可用"] };
   }
 
-  const knockout = isKnockoutMatch(match);
+  const knockout = isNationalTeamKnockoutMatch(match);
   const round16Plus = useRound16PlusLogic(match);
   const stageProfile = knockoutStageProfile(match);
   const homeForm = recentFormStrength(recentFormSummary(match, "home"));
@@ -2192,8 +2196,136 @@ function favoriteProfile(probabilities = {}) {
   };
 }
 
+function clubCompetitionTone(match = {}) {
+  const competition = match?.competition || {};
+  const text = [
+    competition.key,
+    competition.parentKey,
+    competition.seriesSlug,
+    competition.stageType,
+    competition.stageLabel,
+    competition.label,
+    competition.labelEn,
+    competition.eventSlug,
+    match?.polymarketEventSlug,
+    match?.group,
+    match?.stage,
+    match?.round
+  ].filter(Boolean).join(" ").toLowerCase();
+  const kickoffText = String(match?.kickoffShanghai || match?.kickoffLocal || match?.kickoffUtc || "");
+  const month = Number(kickoffText.slice(5, 7));
+  const isClub = isClubMatch(match);
+  const isLeague = competition.stageType === "league"
+    || /\b(mls|liga mx|liga-mx|premier league|la liga|serie a|bundesliga|ligue 1|allsvenskan)\b/.test(text);
+  const isEuropeanClub = /\b(ucl|uel|uecl)\b|champions league|europa league|conference league|欧冠|欧联|欧协/.test(text);
+  const isQualifier = /qualif|qualification|prelim|playoff|资格/.test(text)
+    || (isEuropeanClub && Number.isFinite(month) && month >= 7 && month <= 8);
+  const isAmericas = /\b(mls|liga mx|liga-mx|libertadores|sudamericana|concacaf)\b|美洲|墨西哥/.test(text);
+  const profiles = [match?.homeTeam?.ratingProfile, match?.awayTeam?.ratingProfile].filter(Boolean);
+  const lowRatingConfidence = profiles.length < 2 || profiles.some((profile) => {
+    const confidence = String(profile?.confidence || "").toLowerCase();
+    return profile?.teamType === "club" && (!profile.override || ["low", "very-low", "fallback", "unknown"].includes(confidence));
+  });
+  const homeForm = recentFormStrength(recentFormSummary(match, "home"));
+  const awayForm = recentFormStrength(recentFormSummary(match, "away"));
+  const recentThin = !homeForm || !awayForm || Math.min(homeForm.matches || 0, awayForm.matches || 0) < 3;
+  const dynamicThin = !match?.contextSignals?.ok && !match?.context?.mediaConsensus?.ok;
+  return {
+    isClub,
+    isLeague,
+    isEuropeanClub,
+    isQualifier,
+    isAmericas,
+    lowData: isClub && (lowRatingConfidence || recentThin || dynamicThin),
+    lowRatingConfidence,
+    recentThin,
+    dynamicThin,
+    label: competition.label || competition.labelEn || "俱乐部赛事"
+  };
+}
+
+function clubCompetitionReviewAdjustment(match, probabilities) {
+  if (!isClubMatch(match) || !probabilities?.topScoresFull?.length) {
+    return { ok: false, probabilities, deltas: {}, notes: [] };
+  }
+  const tone = clubCompetitionTone(match);
+  const favorite = favoriteProfile(probabilities);
+  const lowScoreMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals + awayGoals <= 2);
+  let drawBoost = 0;
+  let bttsBoost = 0;
+  let overBoost = 0;
+  let favoriteWinPenalty = 0;
+  const notes = [];
+
+  if (tone.isLeague || tone.isAmericas) {
+    overBoost += 0.018;
+    bttsBoost += 0.016;
+    notes.push("俱乐部联赛/美洲赛事近期复盘更开放，赛前小球和零封路径不能只靠静态评分上修。");
+  }
+  if (tone.isEuropeanClub) {
+    drawBoost += tone.isQualifier ? 0.008 : 0.005;
+    bttsBoost += tone.isQualifier ? 0.007 : 0.004;
+    if (favorite.favorite >= 0.44 && favorite.gap <= 0.34) favoriteWinPenalty += 0.01;
+    notes.push(tone.isQualifier
+      ? "欧战资格赛强弱信息噪声较大，90分钟热门胜和纯小球需要阵容/近期战绩确认。"
+      : "欧洲俱乐部赛按俱乐部强度处理，不套用国家队世界杯淘汰赛经验。");
+  }
+  if (tone.lowData) {
+    drawBoost += 0.007;
+    bttsBoost += 0.007;
+    overBoost += 0.005;
+    if (favorite.favorite >= 0.42) favoriteWinPenalty += favorite.gap <= 0.28 ? 0.012 : 0.007;
+    notes.push("俱乐部低数据兜底：评分/近况/动态情报不完整时，降低单边热门和强小球确定性。");
+  }
+  if (tone.lowData && (probabilities.under25 || 0) >= 0.6) {
+    overBoost += 0.012;
+    bttsBoost += 0.008;
+    notes.push("低数据下小球集中度过高，按复盘结果把早球/失误/转换进球风险重新加回比分分布。");
+  }
+  if (tone.lowData && lowScoreMass >= 0.56) {
+    overBoost += 0.006;
+    drawBoost += 0.004;
+  }
+
+  drawBoost = clamp(drawBoost, 0, 0.035);
+  bttsBoost = clamp(bttsBoost, 0, 0.035);
+  overBoost = clamp(overBoost, 0, 0.038);
+  favoriteWinPenalty = clamp(favoriteWinPenalty, 0, 0.028);
+  if (!drawBoost && !bttsBoost && !overBoost && !favoriteWinPenalty) {
+    return { ok: false, probabilities, deltas: {}, notes };
+  }
+
+  const favoriteKey = favorite.key;
+  const adjusted = reweightScoreDistribution(probabilities, (score) => {
+    const homeGoals = Number(score.homeGoals);
+    const awayGoals = Number(score.awayGoals);
+    const totalGoals = homeGoals + awayGoals;
+    let weight = 1;
+    if (homeGoals === awayGoals) weight += drawBoost;
+    if (homeGoals > 0 && awayGoals > 0) weight += bttsBoost;
+    if (totalGoals >= 3) weight += overBoost;
+    if (favoriteKey === "home" && homeGoals > awayGoals) weight -= favoriteWinPenalty;
+    if (favoriteKey === "away" && awayGoals > homeGoals) weight -= favoriteWinPenalty;
+    return weight;
+  });
+
+  return {
+    ok: true,
+    probabilities: adjusted,
+    tone,
+    deltas: {
+      home: roundTo((adjusted.home || 0) - (probabilities.home || 0), 4),
+      draw: roundTo((adjusted.draw || 0) - (probabilities.draw || 0), 4),
+      away: roundTo((adjusted.away || 0) - (probabilities.away || 0), 4),
+      btts: roundTo((adjusted.btts || 0) - (probabilities.btts || 0), 4),
+      over25: roundTo((adjusted.over25 || 0) - (probabilities.over25 || 0), 4)
+    },
+    notes: [...new Set(notes)].slice(0, 5)
+  };
+}
+
 function knockoutReviewAdjustment(match, probabilities, contextSignals = null) {
-  if (!isKnockoutMatch(match) || !probabilities?.topScoresFull?.length) {
+  if (!isNationalTeamKnockoutMatch(match) || !probabilities?.topScoresFull?.length) {
     return { ok: false, deltas: {}, notes: [] };
   }
   const stageProfile = knockoutStageProfile(match);
@@ -2870,6 +3002,25 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       ].filter(Boolean).join(" ")
     });
   }
+  const clubReview = clubCompetitionReviewAdjustment(match, probabilities);
+  if (clubReview.ok) {
+    probabilities = clubReview.probabilities;
+    match.clubCompetitionAdjustment = {
+      version: "2026.07.22",
+      tone: clubReview.tone,
+      deltas: clubReview.deltas,
+      notes: clubReview.notes
+    };
+    drivers.push({
+      label: "俱乐部赛事校准",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: [
+        `按俱乐部赛事类型和数据质量统一修正：平局 ${clubReview.deltas.draw >= 0 ? "+" : ""}${formatPercent(clubReview.deltas.draw)}，大2.5 ${clubReview.deltas.over25 >= 0 ? "+" : ""}${formatPercent(clubReview.deltas.over25)}，BTTS ${clubReview.deltas.btts >= 0 ? "+" : ""}${formatPercent(clubReview.deltas.btts)}。`,
+        ...clubReview.notes.slice(0, 2)
+      ].join(" ")
+    });
+  }
   const knockoutReview = knockoutReviewAdjustment(match, probabilities, contextSignals);
   if (knockoutReview.ok) {
     probabilities = knockoutReview.probabilities;
@@ -2953,7 +3104,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.07.21",
+    version: "2026.07.22-club-risk",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -2978,7 +3129,17 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       notes: researchCalibration.notes || [],
       missing: researchCalibration.missing || []
     },
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "淘汰赛复盘修正", "研究因子校准"].includes(driver.label)).slice(0, 11),
+    clubCompetitionAdjustment: clubReview.ok ? {
+      version: "2026.07.22",
+      tone: clubReview.tone,
+      deltas: clubReview.deltas,
+      notes: clubReview.notes
+    } : {
+      ok: false,
+      deltas: {},
+      notes: []
+    },
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准"].includes(driver.label)).slice(0, 12),
     probabilities
   };
 }
@@ -3000,6 +3161,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     calibration: modelV2.calibration,
     drivers: modelV2.drivers,
     researchFactorCalibration: modelV2.researchFactorCalibration,
+    clubCompetitionAdjustment: modelV2.clubCompetitionAdjustment,
     physicalMatchupAdjustment: modelV2.physicalMatchupAdjustment,
     topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
   };
@@ -3637,12 +3799,14 @@ function marketReviewAdjustments(match, rec) {
   const bothTeamsChasing = motivation.homeAttack && motivation.awayAttack;
   const oneTeamChasing = motivation.homeAttack || motivation.awayAttack;
   const openMotivation = bothTeamsChasing || (oneTeamChasing && (motivation.over25Delta || 0) > 0.015);
-  const knockout = isKnockoutMatch(match);
+  const knockout = isNationalTeamKnockoutMatch(match);
   const stageProfile = knockoutStageProfile(match);
   const favoriteGap = Math.abs((match?.probabilities?.home || 0) - (match?.probabilities?.away || 0));
   const knockoutBttsSupport = knockout && (match?.probabilities?.btts || 0) >= 0.43;
   const lowScoreMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals + awayGoals <= 2);
   const drawPathMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
+  const clubTone = clubCompetitionTone(match);
+  const clubLowData = clubTone.isClub && clubTone.lowData;
   const suspiciousExtremePrice = typeof rec.marketPrice === "number"
     && (rec.marketPrice <= 0.12 || rec.marketPrice >= 0.88)
     && !isInProgressStatus(match?.scheduleStatus)
@@ -3653,6 +3817,43 @@ function marketReviewAdjustments(match, rec) {
     edgePenalty += 0.18;
     scorePenalty += 0.16;
     reasons.push("衍生盘口价格极端，历史回测提示可能存在 market/token 映射误差；先核验 Polymarket 页面，不给买入。");
+  }
+
+  if (clubTone.isClub && ["total", "btts"].includes(rec.marketType) && typeof rec.marketPrice === "number") {
+    if (clubLowData && rec.key === "under25" && rec.marketPrice <= 0.46) {
+      const strongMarketConflict = rec.marketPrice <= 0.42;
+      edgePenalty += strongMarketConflict ? 0.12 : 0.09;
+      scorePenalty += strongMarketConflict ? 0.12 : 0.09;
+      forceNoBuy = true;
+      reasons.push("低数据俱乐部赛中，Polymarket 明显不支持小球；复盘后禁止把模型小球 edge 当主买。");
+    }
+    if (clubLowData && rec.key === "bttsNo" && rec.marketPrice <= 0.46) {
+      edgePenalty += rec.marketPrice <= 0.42 ? 0.11 : 0.085;
+      scorePenalty += rec.marketPrice <= 0.42 ? 0.11 : 0.085;
+      forceNoBuy = true;
+      reasons.push("低数据俱乐部赛中，市场更偏双方进球；BTTS No 需要首发/现场射门证据后再看。");
+    }
+    if ((clubTone.isLeague || clubTone.isAmericas) && rec.key === "under25" && rec.marketPrice <= 0.5) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.045;
+      reasons.push("俱乐部联赛/美洲赛事节奏更开放，小球赛前主推门槛提高。");
+    }
+    if ((clubTone.isLeague || clubTone.isAmericas) && (rec.key === "over25" || rec.key === "bttsYes") && rec.marketPrice >= 0.54) {
+      scorePenalty = Math.max(0, scorePenalty - 0.012);
+      reasons.push("俱乐部联赛/美洲赛事与市场同向偏开放，Over/BTTS Yes 可进入观察队列。");
+    }
+  }
+
+  if (clubLowData && rec.marketType === "moneyline" && typeof rec.edge === "number") {
+    const moneyline = match?.manualMarkets?.moneyline || {};
+    const marketFavorite = [["home", moneyline.home], ["away", moneyline.away]]
+      .filter(([, value]) => typeof value === "number")
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    if (marketFavorite && rec.key !== "draw" && rec.key !== marketFavorite && rec.edge < 0.12) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.055;
+      reasons.push("低数据俱乐部赛里，模型方向与胜平负市场相反且 edge 不够厚，只保留观察。");
+    }
   }
 
   if (rec.marketType === "btts" && rec.key === "bttsYes") {
@@ -3932,6 +4133,13 @@ function gatedAction(baseDecision, row, match) {
   };
 }
 
+function sortRecommendationRows(rows = [], match = null) {
+  for (const rec of rows) {
+    rec.displaySortScore = roundTo(tradableRecommendationScore(rec, match), 4);
+  }
+  return rows.sort((a, b) => (b.displaySortScore ?? -9) - (a.displaySortScore ?? -9));
+}
+
 function buildRecommendations(match, probabilities) {
   const markets = match.manualMarkets || {};
   const moneyline = markets.moneyline || {};
@@ -4071,7 +4279,7 @@ function buildRecommendations(match, probabilities) {
     });
   }
 
-  return rows
+  return sortRecommendationRows(rows
     .map((row) => {
       const edgeValue = edge(row.modelProbability, row.marketPrice);
       const baseDecision = actionFor(edgeValue, row.marketPrice);
@@ -4084,8 +4292,7 @@ function buildRecommendations(match, probabilities) {
         decision: gatedAction(baseDecision, row, match)
       };
     })
-    .map((row) => applyReviewDiscipline(row, match))
-    .sort((a, b) => ((b.disciplinedEdge ?? b.edge) ?? -9) - ((a.disciplinedEdge ?? a.edge) ?? -9));
+    .map((row) => applyReviewDiscipline(row, match)), match);
 }
 
 function parseCorrectScoreMarket(market) {
@@ -5945,14 +6152,31 @@ function tradableRecommendationScore(rec, match = null) {
       : -9;
   const holderBoost = Math.min(0.025, ((rec.eliteSummary?.count || 0) * 0.008) + ((rec.holderSummary?.eliteCount || 0) * 0.004));
   const disciplinePenalty = rec.reviewDiscipline?.scorePenalty || 0;
-  return edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec) - disciplinePenalty;
+  let score = edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec) - disciplinePenalty;
+  const clubTone = match ? clubCompetitionTone(match) : null;
+  if (clubTone?.isClub && clubTone.lowData && rec.key === "under25" && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.46) {
+    score -= 0.06;
+  }
+  if (clubTone?.isClub && clubTone.lowData && rec.key === "bttsNo" && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.46) {
+    score -= 0.055;
+  }
+  if (clubTone?.isClub && (clubTone.isLeague || clubTone.isAmericas) && (rec.key === "over25" || rec.key === "bttsYes") && typeof rec.marketPrice === "number" && rec.marketPrice >= 0.54) {
+    score += 0.012;
+  }
+  if (rec.reviewDiscipline?.forceNoBuy) {
+    score -= 0.25;
+  }
+  if (rec.decision?.action === "NO_TRADE") {
+    score -= 0.04;
+  }
+  return score;
 }
 
 function isActionableRecommendation(rec, match = null) {
   if (typeof rec.marketPrice !== "number" || typeof rec.modelProbability !== "number") return false;
   if (match?.manualMarkets?.sourceType === "auto-baseline" && rec.chart?.source !== "Polymarket") return false;
   if (rec.decision?.action === "AVOID_OR_SELL") return false;
-  if (rec.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|低 edge 不再主推|BTTS 与小球结构冲突/.test(String(reason)))) return false;
+  if (rec.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|低 edge 不再主推|BTTS 与小球结构冲突|低数据俱乐部赛|明显不支持小球|市场更偏双方进球/.test(String(reason)))) return false;
   const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
   if (edgeValue == null || edgeValue <= 0) return false;
   return true;
@@ -10747,7 +10971,8 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
   match.probabilities = scoreModel(match.dynamicModel.adjusted.lambdaHome, match.dynamicModel.adjusted.lambdaAway);
   applyTournamentTrendToMatch(match, tournamentTrend, fifaRankings);
   match.contextSignals = buildContextSignals(match);
-  applyGoldmanStyleModel(match, fifaRankings, { useMarketCalibration: false });
+  match.manualMarkets = polymarketMoneylineManualMarkets(match, polymarket, event);
+  applyGoldmanStyleModel(match, fifaRankings, { useMarketCalibration: true });
   match.manualMarkets = polymarketMoneylineManualMarkets(match, polymarket, event);
   match.completeness = buildCompleteness(match, polymarket);
   match.tradingGate = buildTradingGate(match.completeness);
@@ -11018,6 +11243,7 @@ function attachMarketCharts(matches, polymarket) {
       recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
       applyReviewDiscipline(recommendation, match);
     }
+    sortRecommendationRows(match.recommendations, match);
     match.correctScoreRecommendations = buildCorrectScoreRecommendations(match);
   }
 }
@@ -11065,6 +11291,7 @@ function recomputeMatchesAfterExternalSignals(matches, polymarket, fifaRankings 
       recommendation.decision = gatedAction(recommendation.baseDecision, recommendation, match);
       applyReviewDiscipline(recommendation, match);
     }
+    sortRecommendationRows(match.recommendations, match);
     match.correctScoreRecommendations = buildCorrectScoreRecommendations(match);
   }
   return matches;
@@ -12080,7 +12307,7 @@ function buildPhysicalMatchupAdjustment(match, options = {}) {
     };
   }
 
-  const knockoutWeight = useRound16PlusLogic(match) ? 1.38 : isKnockoutMatch(match) ? 1.2 : 1;
+  const knockoutWeight = useRound16PlusLogic(match) ? 1.38 : isNationalTeamKnockoutMatch(match) ? 1.2 : 1;
   const lambdaHome = Number(options.lambdaHome);
   const lambdaAway = Number(options.lambdaAway);
   const lambdaGap = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? lambdaHome - lambdaAway : 0;
@@ -17027,6 +17254,7 @@ function compactRecommendation(rec = {}) {
     edge: rec.edge,
     maxBuyPrice: rec.maxBuyPrice,
     disciplinedEdge: rec.disciplinedEdge,
+    displaySortScore: rec.displaySortScore,
     odds: rec.odds,
     handicap: rec.handicap,
     baseDecision: rec.baseDecision,
