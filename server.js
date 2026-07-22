@@ -5690,12 +5690,71 @@ function aiPredictionEvidence(match, top, rows) {
   };
 }
 
+function aiPredictionHeadlineSelection(match, rows, rankedRows) {
+  const rawTop = rankedRows[0];
+  const runnerUp = rankedRows[1] || rows.find((row) => row.key !== rawTop?.key) || rawTop;
+  if (!rawTop || rawTop.marketType === "advance") {
+    return {
+      row: rawTop,
+      runnerUp,
+      rawTop,
+      overridden: false,
+      note: ""
+    };
+  }
+
+  const moneylineRows = rows.filter((row) => row.marketType === "moneyline" && ["home", "draw", "away"].includes(row.key));
+  const drawRow = moneylineRows.find((row) => row.key === "draw");
+  if (!drawRow || rawTop.key === "draw") {
+    return {
+      row: rawTop,
+      runnerUp,
+      rawTop,
+      overridden: false,
+      note: ""
+    };
+  }
+
+  const topScores = match?.probabilities?.topScores || [];
+  const topScore = topScores[0] || null;
+  const topScoreSide = scoreOutcomeSide(topScore);
+  const drawClusterMass = ["0-0", "1-1", "2-2"].reduce((sum, score) => sum + scoreProbability(match, score), 0);
+  const topMargin = rawTop.probability - (runnerUp?.probability || 0);
+  const clubQualifier = isClubMatch(match);
+  const nearEvenWinDirection = topMargin <= (clubQualifier ? 0.075 : 0.055);
+  const drawStillLive = drawRow.probability >= 0.27 || drawClusterMass >= 0.22;
+  const scoreGridWarnsDraw = topScoreSide === "draw";
+
+  if (nearEvenWinDirection && drawStillLive && scoreGridWarnsDraw) {
+    return {
+      row: {
+        ...drawRow,
+        label: "均势/平局路径"
+      },
+      runnerUp: rawTop,
+      rawTop,
+      overridden: true,
+      note: `胜负方向很薄：原始最高为 ${rawTop.label} ${formatPercent(rawTop.probability)}，但只领先 ${runnerUp.label} ${formatPercent(topMargin)}；平局为 ${formatPercent(drawRow.probability)}，最高比分 ${topScore?.score || "低比分平局"}，因此标题降级为均势/平局路径。`
+    };
+  }
+
+  return {
+    row: rawTop,
+    runnerUp,
+    rawTop,
+    overridden: false,
+    note: ""
+  };
+}
+
 function buildAiPrediction(match) {
   const rows = probabilityRows(match);
   const advanceRows = rows.filter((row) => row.marketType === "advance");
   const rankedRows = [...(advanceRows.length >= 2 ? advanceRows : rows)].sort((a, b) => b.probability - a.probability);
-  const top = rankedRows[0];
-  const runnerUp = rankedRows[1] || rows.find((row) => row.key !== top?.key) || top;
+  const headline = aiPredictionHeadlineSelection(match, rows, rankedRows);
+  const rawTop = headline.rawTop || rankedRows[0];
+  const top = headline.row || rawTop;
+  const runnerUp = headline.runnerUp || rankedRows[1] || rows.find((row) => row.key !== top?.key) || top;
   const topRecommendation = (match.recommendations || []).find((rec) => rec.key === top.key);
   const positiveEdges = (match.recommendations || [])
     .filter((rec) => typeof rec.edge === "number" && rec.edge > 0)
@@ -5713,8 +5772,12 @@ function buildAiPrediction(match) {
   const riskFlags = Array.isArray(context.riskFlags) ? context.riskFlags : [];
   const reasons = [];
 
-  reasons.push(`Elo-xG Poisson 模型给出 ${top.label} ${(top.probability * 100).toFixed(1)}%，领先 ${runnerUp.label} ${((top.probability - runnerUp.probability) * 100).toFixed(1)} 个百分点。`);
-  if (top.marketType === "advance" && match.probabilities?.advance) {
+  if (headline.overridden && headline.note) {
+    reasons.push(headline.note);
+  } else {
+    reasons.push(`Elo-xG Poisson 模型给出 ${top.label} ${(top.probability * 100).toFixed(1)}%，领先 ${runnerUp.label} ${((top.probability - runnerUp.probability) * 100).toFixed(1)} 个百分点。`);
+  }
+  if (rawTop?.marketType === "advance" && match.probabilities?.advance) {
     reasons.push(`淘汰赛晋级模型：常规时间胜率加上平局后的加时/点球拆分；平局概率 ${(match.probabilities.advance.drawProbability * 100).toFixed(1)}%，${match.homeName} 平局后晋级拆分 ${(match.probabilities.advance.tiebreakHome * 100).toFixed(1)}%。`);
     const knockout = match.probabilities.advance.knockoutExperience;
     if (knockout?.home && knockout?.away) {
@@ -5742,7 +5805,7 @@ function buildAiPrediction(match) {
     const eliteText = eliteRows.slice(0, 2).map((row) => `${row.name} 有 ${row.count} 个高手持仓，当前约 ${Math.round(row.totalCurrentValue).toLocaleString()} 美元`).join("；");
     reasons.push(`高手持仓信号：${eliteText}。`);
   }
-  const structured = aiPredictionEvidence(match, top, rows);
+  const structured = aiPredictionEvidence(match, rawTop || top, rows);
 
   const lineupConfirmed = context.lineups?.status === "confirmed";
   const confidence = lineupConfirmed && match.completeness?.confidence === "high"
@@ -5759,7 +5822,14 @@ function buildAiPrediction(match) {
     label: top.label,
     key: top.key,
     probability: top.probability,
-    margin: top.probability - runnerUp.probability,
+    margin: headline.overridden ? (rawTop?.probability || top.probability) - top.probability : top.probability - runnerUp.probability,
+    rawTop: headline.overridden ? {
+      label: rawTop.label,
+      key: rawTop.key,
+      probability: rawTop.probability,
+      margin: rawTop.probability - (rankedRows[1]?.probability || 0)
+    } : undefined,
+    directionDowngraded: Boolean(headline.overridden),
     confidence,
     tradeLabel,
     priceAdviceAllowed: Boolean(match.tradingGate?.allowPriceAdvice),
