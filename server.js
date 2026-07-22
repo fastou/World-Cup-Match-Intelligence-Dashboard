@@ -1063,12 +1063,56 @@ function soccerEventVolume(event = {}) {
   return Number(event.volume || event.volumeNum || event.volume24hr || event.volume1wk || 0) || 0;
 }
 
+function polymarketSoccerEventLifecycle(event = {}, nowMs = Date.now()) {
+  const kickoffMs = dateMs(soccerEventKickoffIso(event));
+  const closedTimeMs = dateMs(event.closedTime || event.resolvedTime);
+  const closed = Boolean(event.closed);
+  const liveGraceMs = MATCH_LIVE_GRACE_HOURS * 3600000;
+  if (!kickoffMs) {
+    return {
+      status: closed ? "STATUS_FINAL" : "STATUS_SCHEDULED",
+      statusDetail: closed ? "Polymarket closed" : "Polymarket active",
+      completed: closed
+    };
+  }
+  if (closed && closedTimeMs && closedTimeMs <= nowMs) {
+    return {
+      status: "STATUS_FINAL",
+      statusDetail: "Polymarket closed / settled",
+      completed: true,
+      closedTimeMs
+    };
+  }
+  if (nowMs >= kickoffMs && nowMs <= kickoffMs + liveGraceMs) {
+    return {
+      status: "STATUS_IN_PROGRESS",
+      statusDetail: closed
+        ? "Polymarket 盘口关闭；俱乐部现场统计未接入"
+        : "Polymarket live window",
+      completed: false
+    };
+  }
+  if (nowMs > kickoffMs + liveGraceMs) {
+    return {
+      status: closed ? "STATUS_FINAL" : "STATUS_POST",
+      statusDetail: closed ? "Polymarket closed / settled" : "Polymarket post-match window expired",
+      completed: true
+    };
+  }
+  return {
+    status: "STATUS_SCHEDULED",
+    statusDetail: closed ? "Polymarket 盘口关闭，等待开赛/状态确认" : "Polymarket active",
+    completed: false
+  };
+}
+
 function shouldIncludePolymarketSoccerGame(event = {}, nowMs = Date.now()) {
   if (!isBaseSoccerGameEvent(event)) return false;
   const kickoff = soccerEventKickoffIso(event);
+  const lifecycle = polymarketSoccerEventLifecycle(event, nowMs);
   if (!shouldKeepScheduledMatch(kickoff, {
-    completed: Boolean(event.closed),
-    status: event.closed ? "STATUS_FINAL" : "STATUS_SCHEDULED"
+    completed: lifecycle.completed,
+    status: lifecycle.status
   }, nowMs)) return false;
   const competition = classifySoccerCompetition(event);
   if (competition.authoritative) return true;
@@ -10429,13 +10473,14 @@ function polymarketSoccerAutoBaselineFromEvent(event, modeledKeys, finalResults,
   if (hasRecordedFinal(`poly-${baseSlug}`, finalResults)) return null;
   const homeRatingProfile = clubTeamRatingProfile(teams.homeName, competition, clubStrength);
   const awayRatingProfile = clubTeamRatingProfile(teams.awayName, competition, clubStrength);
+  const lifecycle = polymarketSoccerEventLifecycle(event, nowMs);
 
   const scheduleEvent = {
     scheduleId: `poly-${baseSlug}`,
     kickoffUtc: soccerEventKickoffIso(event),
-    status: event.closed ? "STATUS_FINAL" : "STATUS_SCHEDULED",
-    statusDetail: event.closed ? "Closed" : "Polymarket active",
-    completed: Boolean(event.closed),
+    status: lifecycle.status,
+    statusDetail: lifecycle.statusDetail,
+    completed: lifecycle.completed,
     source: "Polymarket soccer games API",
     stage: competition.label,
     round: competition.label,
@@ -13703,6 +13748,16 @@ function buildPolymarketSoccerEventUrls(nowMs = Date.now()) {
         end_date_max: endDateMax
       }).toString()}`);
     }
+    urls.push(`${POLYMARKET_GAMMA_API_BASE}/events?${new URLSearchParams({
+      active: "true",
+      closed: "true",
+      limit: String(POLYMARKET_SOCCER_WINDOW_EVENT_LIMIT),
+      tag_slug: tagSlug,
+      order: "updatedAt",
+      ascending: "false",
+      end_date_min: endDateMin,
+      end_date_max: endDateMax
+    }).toString()}`);
   }
   return urls;
 }
@@ -16112,12 +16167,16 @@ function scheduleBackgroundLightRefresh() {
 }
 
 async function getPersistedLightCache() {
-  if (lightDashboardCache) return lightDashboardCache;
+  if (lightDashboardCache) {
+    lightDashboardCache = pruneCachedDashboardPayloadForNow(lightDashboardCache);
+    return lightDashboardCache;
+  }
   const cached = await readOptionalJson(LIVE_CACHE_PATH, null);
   if (!cached?.matches?.length) return null;
-  lightDashboardCache = compactDashboardPayloadForLight(cached);
+  const compacted = compactDashboardPayloadForLight(cached);
+  lightDashboardCache = pruneCachedDashboardPayloadForNow(compacted);
   lightDashboardCacheAt = Date.parse(lightDashboardCache.meta?.generatedAt || "") || Date.now();
-  if (cached?.meta?.compactPayload !== true) {
+  if (cached?.meta?.compactPayload !== true || lightDashboardCache?.meta?.cacheLifecyclePruned) {
     writeJsonAtomic(LIVE_CACHE_PATH, lightDashboardCache).catch((error) => {
       console.error(`Failed to compact persisted live dashboard cache: ${error.message}`);
     });
@@ -16141,13 +16200,59 @@ function payloadCacheAgeMs(payload) {
   return Number.isFinite(generatedAt) ? Math.max(0, Date.now() - generatedAt) : Infinity;
 }
 
-function decorateCachedDashboard(payload, { fallbackMode = false } = {}) {
-  const generatedAt = Date.parse(payload?.meta?.generatedAt || "") || 0;
-  const staleMs = generatedAt ? Date.now() - generatedAt : Infinity;
+function refreshCachedPolymarketMatchLifecycle(match = {}, nowMs = Date.now()) {
+  const synthetic = isSyntheticPolymarketScheduleId(match.scheduleId || match.id)
+    || match.autoBaselineSource === "polymarket-soccer-games"
+    || match.competition?.source === "Polymarket soccer games";
+  if (!synthetic) return match;
+  if (match.scheduleCompleted || isFinishedStatus(match.scheduleStatus)) return null;
+  const kickoffMs = dateMs(match.kickoffShanghai || match.kickoffLocal);
+  if (!kickoffMs) return match;
+  if (nowMs > kickoffMs + MATCH_LIVE_GRACE_HOURS * 3600000) return null;
+  if (nowMs >= kickoffMs) {
+    return {
+      ...match,
+      scheduleStatus: "STATUS_IN_PROGRESS",
+      scheduleStatusDetail: "Polymarket 盘口关闭；俱乐部现场统计未接入",
+      scheduleCompleted: false,
+      liveStatusSource: "cache-lifecycle"
+    };
+  }
+  return match;
+}
+
+function pruneCachedDashboardPayloadForNow(payload = null, nowMs = Date.now()) {
+  if (!payload?.matches?.length) return payload;
+  const matches = [];
+  let pruned = 0;
+  for (const match of payload.matches || []) {
+    const refreshed = refreshCachedPolymarketMatchLifecycle(match, nowMs);
+    if (!refreshed) {
+      pruned += 1;
+      continue;
+    }
+    matches.push(refreshed);
+  }
+  if (!pruned) return payload;
   return {
     ...payload,
     meta: {
-      ...(payload?.meta || {}),
+      ...(payload.meta || {}),
+      cacheLifecyclePruned: pruned,
+      cacheLifecyclePrunedAt: new Date(nowMs).toISOString()
+    },
+    matches
+  };
+}
+
+function decorateCachedDashboard(payload, { fallbackMode = false } = {}) {
+  const prunedPayload = pruneCachedDashboardPayloadForNow(payload);
+  const generatedAt = Date.parse(prunedPayload?.meta?.generatedAt || "") || 0;
+  const staleMs = generatedAt ? Date.now() - generatedAt : Infinity;
+  return {
+    ...prunedPayload,
+    meta: {
+      ...(prunedPayload?.meta || {}),
       servedFromCache: true,
       fallbackMode: Boolean(fallbackMode),
       backgroundRefresh: Boolean(backgroundRefreshPromise),
