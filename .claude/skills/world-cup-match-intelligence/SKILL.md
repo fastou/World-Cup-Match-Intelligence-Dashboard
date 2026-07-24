@@ -4,11 +4,9 @@ description: Use when building or maintaining football match intelligence workfl
 ---
 
 # Soccer Match Intelligence
-
 Use this skill when building, modifying, operating, or extending a football/soccer match intelligence workflow.
 
 ## Core Rules
-
 - Treat the dashboard as research and monitoring software. Do not automate orders, guarantee outcomes, or present outputs as financial advice.
 - Do not fabricate missing sports, odds, Polymarket, lineup, injury, weather, or account data. Mark unavailable inputs as missing, stale, or source-unreachable.
 - Keep model probabilities independent from market prices. Market prices may inform edge and market movement, but should not simply become the model prediction.
@@ -28,13 +26,13 @@ Use this skill when building, modifying, operating, or extending a football/socc
 - In knockout rounds, apply the post-review correction learned from Brazil-Japan, Germany-Paraguay, and Netherlands-Morocco on June 29-30, 2026: lift regulation draw/extra-time paths, keep BTTS tied to the score grid, and downgrade favorite 90-minute moneyline/deep handicap unless edge is strong. Quarter-finals and later use a stricter stage profile because team quality is closer; `Team to Advance` is often the cleaner favorite market when price is fair.
 - From the round of 16 onward, keep group-stage logic intact but enable a separate live structural layer: reduce reliance on world-ranking/favorite priors, and weight verified live personnel/position signals, lead quality, defensive load, injury substitutions, late cards, goalkeeper saves, clearances, and estimated stoppage time. A favorite trailing or level late can remain a small correct-score path only when synced stats show dangerous pressure, not mere reputation.
 - After the Switzerland-Colombia 0-0 review on July 8, 2026, add a match-shape step before correct-score recommendations. If a knockout match is near-even by model and market, has elevated draw/under-2.5/low-score mass, and no clear regulation favorite, classify it as `balanced knockout low-score`; pre-match correct-score combos should start from the low-event draw cluster `0-0 / 1-1` plus both one-goal covers `1-0 / 0-1`, keep reserve for the 18-25 minute tempo check, and avoid turning a slight to-advance edge into a 90-minute win core.
+- Before treating close win probabilities as a match-shape signal, distinguish true balance from unknown balance. Use a data-clarity profile from club/national strength coverage, recent form with goals, lineup/injury/media/H2H context, and real market coverage. If probabilities are close because data is thin or low-confidence, classify the match as `unknown balance`; do not automatically boost BTTS, under/0-0, or balanced-low-score combos, and downgrade positive edges until better pre-match or live evidence arrives.
 - Correct-score combos must be path-cluster aware, not just sorted by individual score probability. Use clusters such as low-event draw, one-goal covers, favorite-extension, and chaotic high-goal tails; show which shape drove the combo so later review can tell whether the platform made the right kind of plan.
 - If key dynamic inputs are missing, downgrade recommendations to observation, waiting, or low confidence.
 - Keep per-match AI action summaries structured, price-disciplined, and explicitly framed as decision support rather than automated betting or guaranteed profit.
 - Never commit secrets, local credentials, generated SQLite databases, runtime context snapshots, or personal marketing drafts.
 
 ## Project Map
-
 - `server.js`, `public/index.html`: HTTP/API/dashboard merge logic, Polymarket soccer competition discovery, probability calculations, and bilingual UI with competition category filters.
 - `data/worldcup-dashboard.json`, `data/research-framework.json`, `data/head-to-head-overrides.json`: seed/static match data, structured research dimensions, and verified H2H overrides.
 - `data/worldcup-context.json`: generated runtime context, ignored by Git.
@@ -42,7 +40,6 @@ Use this skill when building, modifying, operating, or extending a football/socc
 - `deploy/`: systemd and nginx examples.
 
 ## Workflow
-
 1. Inspect `git status --short --branch` before changes.
 2. Read relevant files before editing with `rg`; preserve bilingual UI and add Chinese/English copy for new visible strings.
 4. Keep public source records attached to dynamic facts: source name, URL if available, timestamp, status, confidence, and reason.
@@ -52,7 +49,6 @@ Use this skill when building, modifying, operating, or extending a football/socc
 8. For dashboard changes, deploy after validation and then commit/push. If GitHub push times out, report the local commit and ahead status.
 
 ## Match Window And Lifecycle
-
 - Default dashboard scope is the next three days of not-finished matches, not only today's matches.
 - Hide a match when a final result exists in `match_results`, or when the kickoff is more than the configured post-kickoff grace period ago and no live status keeps it active.
 - Fetch schedule windows with a lookback day when host-local dates can differ from the user's timezone. Do not drop an in-progress match only because the kickoff is several hours old if the schedule source has not marked it completed.
@@ -65,7 +61,6 @@ Use this skill when building, modifying, operating, or extending a football/socc
 - Current-tournament trend analysis should use the full tournament-to-date schedule range when available, not only the visible three-day window. Deduplicate `schedule-...` and bare ESPN ids before calculating rates.
 
 ## Static Match Context
-
 - Team static data should include world ranking when available, with source name, source URL, and update date.
 - World ranking should use an official/public ranking source or a timestamped local snapshot fallback such as `data/fifa-rankings.json`; it should not remain blank for common national teams.
 - When new schedule teams appear, refresh ranking coverage for every visible team code in the current match window, not only the single reported fixture.
@@ -84,7 +79,6 @@ Use this skill when building, modifying, operating, or extending a football/socc
 - When static context is added, surface it in the Static tab and preserve it in dashboard history if it affects future review.
 
 ## Data Quality Logic
-
 Use these prediction modes:
 - `baseline`: long-term strength, seed data, and existing model only.
 - `dynamic`: baseline plus current lineup, injury, team news, form, tactical, weather, venue, odds, and market curve inputs.
@@ -99,7 +93,6 @@ Downgrade output when inputs are incomplete:
 - Major changes such as goalkeeper changes, core-player absence, red cards, severe weather, or large market moves should trigger a recomputation and visible reason.
 
 Every data dimension should use an explicit source chain instead of simply waiting:
-
 - `primary`: official or closest public source for the fact, for example schedule/venue/status from ESPN/FIFA, weather from Open-Meteo, rankings from FIFA snapshots, market curves from Polymarket, and lineups/injuries from official or reputable match previews.
 - `backup`: reputable public search/articles for the same dimension, with source URLs and extraction status preserved.
 - `fallback`: a conservative, clearly labelled low-confidence baseline from already verified facts such as schedule, venue, ranking, team rating, weather availability, and model priors.
@@ -107,7 +100,6 @@ Every data dimension should use an explicit source chain instead of simply waiti
 Fallbacks may explain uncertainty and keep the page useful, but they must not fabricate unavailable facts. For example, do not create starting XIs, confirmed injuries, holder rows, odds, or head-to-head scores when no source supports them. Show `queried / pending`, `pending verification`, or `rule fallback` instead of blank values when the sync ran but did not produce a verified fact.
 
 Ranking, venue, weather, recent form, tactical matchup, AI synthesis, and 20-year head-to-head context should all have either a verified value or a visible low-confidence fallback. A plain `waiting` state should be reserved for source failures, not for dimensions that can be explained from existing baseline inputs.
-
 Tournament trend fields should explain their evidence: sample size, BTTS rate, over/under rate, draw rate, underdog scoring rate, favorite clean-sheet rate, confederation summaries, and per-match adjustment notes. Never hard-code narrative beliefs such as "African teams are strong" as permanent truths; convert them into current-tournament, sample-weighted signals such as CAF goals, underdog scoring, BTTS, and results versus ranking expectation.
 
 ## Public Source Sync

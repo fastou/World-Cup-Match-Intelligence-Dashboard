@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-24-shape-calibration-v1";
+const DASHBOARD_MODEL_VERSION = "2026-07-24-clarity-shape-v1";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -1948,6 +1948,10 @@ function matchShapeProfile(match, options = {}) {
   const under25 = Number(probabilities.under25) || 0;
   const over25 = Number(probabilities.over25) || 0;
   const topScores = Array.isArray(probabilities.topScoresFull) ? probabilities.topScoresFull : [];
+  const dataClarity = match?.modelV2?.dataClarityProfile
+    || match?.dynamicModel?.goldmanStyle?.dataClarityProfile
+    || match?.dataClarityProfile
+    || dataClarityProfile(match, probabilities);
   const knockout = isNationalTeamKnockoutMatch(match);
   const round16Plus = useRound16PlusLogic(match);
   const favoriteGap = Math.abs(home - away);
@@ -1965,9 +1969,13 @@ function matchShapeProfile(match, options = {}) {
   const scoreLeader = topScores[0]?.score || "";
   const scoreLeaderSide = scoreOutcomeSide(topScores[0]);
   const topScoreIsDraw = scoreLeaderSide === "draw";
-  const balancedKnockoutLowScore = knockout && balanced && marketBalanced && likelyLowEvent && likelyDrawPath;
+  const balancedKnockoutLowScore = knockout && balanced && marketBalanced && likelyLowEvent && likelyDrawPath && !dataClarity.unknownBalance;
   const notes = [];
   const notesEn = [];
+  if (dataClarity.unknownBalance) {
+    notes.push("数据清晰度不足：当前概率接近更像未知型均势，不直接套用 0-0/1-1 或 BTTS 模板；等阵容、近况、盘口曲线或现场18-25分钟节奏确认。");
+    notesEn.push("Data clarity is low: this close probability looks like unknown balance, so do not apply 0-0/1-1 or BTTS templates before lineups, form, market curves, or 18-25 minute live pace confirm it.");
+  }
   if (balancedKnockoutLowScore) {
     notes.push("均势淘汰赛低比分盘型：先从 0-0/1-1 平局簇和两边一球小胜保护构造球胆，不先押单边90分钟胜。");
     notesEn.push("Balanced knockout low-score shape: build correct-score exposure from 0-0/1-1 draw cluster plus one-goal covers, not from a single regulation-win side.");
@@ -1999,6 +2007,7 @@ function matchShapeProfile(match, options = {}) {
     knockout,
     round16Plus,
     balanced,
+    dataClarity,
     marketBalanced,
     likelyLowEvent,
     likelyDrawPath,
@@ -2193,6 +2202,157 @@ function probabilitySnapshot(probabilities = {}) {
   };
 }
 
+function dataClarityProfile(match, probabilities = {}) {
+  const tone = clubCompetitionTone(match);
+  const homeProfile = match?.homeTeam?.ratingProfile || {};
+  const awayProfile = match?.awayTeam?.ratingProfile || {};
+  const context = match?.context || {};
+  const sources = context.sources || {};
+  const homeForm = recentFormStrength(recentFormSummary(match, "home"));
+  const awayForm = recentFormStrength(recentFormSummary(match, "away"));
+  const media = context.mediaConsensus || match?.contextSignals?.mediaConsensus;
+  const h2h = match?.headToHead || context.headToHead;
+  const components = [];
+  const notes = [];
+  const missing = [];
+  const addComponent = (key, label, score, reason) => {
+    components.push({ key, label, score: roundTo(clamp(score, 0, 1), 3), reason });
+  };
+
+  if (tone.isClub) {
+    const confidences = [homeProfile.confidence, awayProfile.confidence].map((value) => String(value || "low").toLowerCase());
+    const hasBothRatings = Number.isFinite(Number(match?.homeTeam?.rating ?? homeProfile.rating))
+      && Number.isFinite(Number(match?.awayTeam?.rating ?? awayProfile.rating));
+    const lowConfidence = confidences.some((value) => ["low", "very-low", "fallback", "unknown", ""].includes(value));
+    addComponent(
+      "strength",
+      "俱乐部强度",
+      hasBothRatings ? (lowConfidence ? 0.38 : confidences.includes("medium") ? 0.72 : 0.9) : 0.12,
+      hasBothRatings
+        ? lowConfidence
+          ? "两队有评分但至少一方是低置信/赛事兜底，不能把概率接近直接解释成真实均势。"
+          : "两队俱乐部评分覆盖较完整，强弱接近更可能有真实含义。"
+        : "俱乐部评分缺失，强弱接近主要可能是默认基线。"
+    );
+    if (!hasBothRatings || lowConfidence) missing.push("俱乐部评分置信不足");
+  } else {
+    const homeRank = match?.homeTeam?.worldRanking?.rank || match?.homeTeam?.rank;
+    const awayRank = match?.awayTeam?.worldRanking?.rank || match?.awayTeam?.rank;
+    addComponent(
+      "strength",
+      "长期实力",
+      homeRank && awayRank ? 0.82 : 0.35,
+      homeRank && awayRank
+        ? "两队长期实力排名已覆盖，概率接近更可能代表真实强弱接近。"
+        : "长期实力排名缺口较多，概率接近需要降级。"
+    );
+    if (!homeRank || !awayRank) missing.push("长期实力排名未完整覆盖");
+  }
+
+  const formMatches = Math.min(homeForm?.matches || 0, awayForm?.matches || 0);
+  const formHasGoals = Boolean(homeForm?.hasGoalTotals && awayForm?.hasGoalTotals);
+  addComponent(
+    "recentForm",
+    "近期战绩",
+    formMatches >= 5 && formHasGoals ? 0.88 : formMatches >= 3 ? 0.62 : formMatches > 0 ? 0.34 : 0.08,
+    formMatches >= 5 && formHasGoals
+      ? "两队近期战绩和进失球样本较完整，可用于区分低事件均势和开放均势。"
+      : formMatches >= 3
+        ? "有部分近期战绩，但进失球或样本量不足，形态判断只做低权重。"
+        : "近期战绩样本不足，不能判断概率接近来自真实状态还是数据缺口。"
+  );
+  if (formMatches < 3 || !formHasGoals) missing.push("近期战绩/进失球样本不足");
+
+  const lineupStatus = String(context.lineups?.status || sources.lineups?.status || "").toLowerCase();
+  const injuryStatus = String(sources.injuries?.status || "").toLowerCase();
+  const dynamicScore =
+    (lineupStatus === "confirmed" ? 0.44 : lineupStatus === "projected" ? 0.26 : /queried/.test(lineupStatus) ? 0.14 : 0)
+    + (/synced|confirmed|normal/.test(injuryStatus) ? 0.22 : /queried|partial|stale/.test(injuryStatus) ? 0.1 : 0)
+    + (media?.summary || media?.sourceCount ? 0.18 : 0)
+    + (h2h?.summary?.matches || /^verified/i.test(String(h2h?.sourceStatus || "")) ? 0.1 : 0);
+  addComponent(
+    "dynamicContext",
+    "动态/背景情报",
+    clamp(dynamicScore, 0, 1),
+    dynamicScore >= 0.6
+      ? "阵容/伤停/媒体或交手信息覆盖较好，概率接近可以进一步解释。"
+      : dynamicScore >= 0.28
+        ? "动态情报有查询结果但确认度一般，概率接近只能作为观察。"
+        : "阵容、伤停、媒体和交手信息不足，概率接近更可能是信息不足。"
+  );
+  if (dynamicScore < 0.45) missing.push("阵容/伤停/媒体/H2H 信息不足");
+
+  const hasRealMoneyline = Boolean(match?.manualMarkets?.polymarketMoneyline?.hasRealPrices)
+    || (match?.manualMarkets?.sourceType && match.manualMarkets.sourceType !== "auto-baseline");
+  const marketCatalogCount = Number(match?.marketCatalog?.marketCount || 0);
+  addComponent(
+    "market",
+    "盘口/市场覆盖",
+    hasRealMoneyline ? (marketCatalogCount >= 8 ? 0.86 : 0.68) : 0.18,
+    hasRealMoneyline
+      ? "胜平负或衍生盘口已匹配，市场可作为低权重校验。"
+      : "真实盘口/曲线不足，模型接近不能直接变成方向判断。"
+  );
+  if (!hasRealMoneyline) missing.push("真实胜平负/盘口覆盖不足");
+
+  const weightedScore = (
+    (components.find((item) => item.key === "strength")?.score || 0) * 0.34
+    + (components.find((item) => item.key === "recentForm")?.score || 0) * 0.28
+    + (components.find((item) => item.key === "dynamicContext")?.score || 0) * 0.24
+    + (components.find((item) => item.key === "market")?.score || 0) * 0.14
+  );
+  const score = roundTo(clamp(weightedScore, 0, 1), 3);
+  const lambdaHome = Number(probabilities.lambdaHome ?? match?.modelV2?.adjusted?.lambdaHome ?? match?.dynamicModel?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
+  const lambdaAway = Number(probabilities.lambdaAway ?? match?.modelV2?.adjusted?.lambdaAway ?? match?.dynamicModel?.adjusted?.lambdaAway ?? match?.model?.lambdaAway);
+  const xgGap = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? Math.abs(lambdaHome - lambdaAway) : null;
+  const lambdaSum = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? lambdaHome + lambdaAway : null;
+  const favorite = favoriteProfile(probabilities);
+  const probabilityClose = favorite.gap <= 0.16 || (favorite.favorite >= 0.45 && favorite.favorite <= 0.55);
+  const dataUnclear = score < 0.48 || (tone.lowData && score < 0.62);
+  const unknownBalance = probabilityClose && dataUnclear;
+  const trueBalance = probabilityClose && !dataUnclear;
+  const lowEventBalance = trueBalance && Number.isFinite(lambdaSum) && lambdaSum < 2.28 && (probabilities.under25 || 0) >= 0.53;
+  const openBalance = trueBalance && ((probabilities.btts || 0) >= 0.5 || (probabilities.over25 || 0) >= 0.48);
+  let classification = "ordinary";
+  if (unknownBalance) classification = "unknown_balance";
+  else if (lowEventBalance) classification = "true_balance_low_event";
+  else if (openBalance) classification = "true_balance_open";
+  else if (trueBalance) classification = "true_balance_neutral";
+  const label = {
+    unknown_balance: "未知型均势",
+    true_balance_low_event: "真均势偏低事件",
+    true_balance_open: "真均势偏开放",
+    true_balance_neutral: "真均势待现场确认",
+    ordinary: "非均势或普通形态"
+  }[classification];
+  if (unknownBalance) {
+    notes.push("概率接近主要可能来自数据不清晰，不自动推 BTTS，也不自动推 0-0；需要补近况、首发、伤停和盘口曲线。");
+  } else if (lowEventBalance) {
+    notes.push("概率接近且数据较清楚，总 xG/低比分簇支持 0-0/1-1/一球小胜思路。");
+  } else if (openBalance) {
+    notes.push("概率接近且数据较清楚，双方进球/大球路径可以作为形态观察。");
+  }
+
+  return {
+    ok: score >= 0.48,
+    version: "2026.07.24",
+    score,
+    confidence: score >= 0.72 ? "high" : score >= 0.52 ? "medium" : "low",
+    classification,
+    label,
+    probabilityClose,
+    unknownBalance,
+    trueBalance,
+    lowEventBalance,
+    openBalance,
+    xgGap: Number.isFinite(xgGap) ? roundTo(xgGap, 3) : null,
+    lambdaSum: Number.isFinite(lambdaSum) ? roundTo(lambdaSum, 3) : null,
+    components,
+    notes: [...new Set(notes)].slice(0, 4),
+    missing: [...new Set(missing)].slice(0, 5)
+  };
+}
+
 function historicalShapeCalibration(match, probabilities, options = {}) {
   if (!probabilities?.topScoresFull?.length) {
     return { ok: false, probabilities, deltas: {}, notes: [], missing: ["比分分布不可用"] };
@@ -2212,9 +2372,11 @@ function historicalShapeCalibration(match, probabilities, options = {}) {
   const deltas = { home: 0, draw: 0, away: 0, over25: 0, btts: 0 };
   const notes = [];
   const missing = [];
+  const dataClarity = options.dataClarity || dataClarityProfile(match, probabilities);
   const clubQualifierScale = tone.isClub && tone.isEuropeanClub && tone.isQualifier ? 0.62 : 1;
   const clubLowDataScale = tone.isClub && tone.lowData ? 0.72 : 1;
-  const shapeScale = clamp(clubQualifierScale * clubLowDataScale, 0.45, 1);
+  const clarityScale = dataClarity.unknownBalance ? 0.22 : dataClarity.score < 0.48 ? 0.42 : dataClarity.score < 0.62 ? 0.72 : 1;
+  const shapeScale = clamp(clubQualifierScale * clubLowDataScale * clarityScale, 0.18, 1);
 
   if (!Number.isFinite(xgGap) || !Number.isFinite(lambdaSum)) {
     missing.push("xG 差和总 xG 不完整");
@@ -2226,7 +2388,10 @@ function historicalShapeCalibration(match, probabilities, options = {}) {
       notes.push("国家队/世界杯归档样本显示赛前模型整体低估 BTTS/大2.5，国家队比赛做保守全局回补。");
     }
 
-    if (xgGap < 0.2 && favorite.favorite <= 0.48) {
+    if (dataClarity.unknownBalance) {
+      deltas.draw += 0.002;
+      notes.push("数据清晰度校准：概率接近更像信息不足，不把它解释成真均势；BTTS/0-0 方向都不额外上修。");
+    } else if (xgGap < 0.2 && favorite.favorite <= 0.48) {
       const lowEventCut = lambdaSum < 2.25 ? 0.034 : 0.024;
       deltas.over25 -= lowEventCut * shapeScale;
       deltas.btts -= 0.012 * shapeScale;
@@ -2239,7 +2404,7 @@ function historicalShapeCalibration(match, probabilities, options = {}) {
       notes.push("历史形态：轻微强弱差的比赛 BTTS 命中率最高，不能只按低比分模板压弱队进球。");
     }
 
-    if (favorite.favorite >= 0.45 && favorite.favorite <= 0.55 && favorite.gap <= 0.28) {
+    if (!dataClarity.unknownBalance && favorite.favorite >= 0.45 && favorite.favorite <= 0.55 && favorite.gap <= 0.28) {
       deltas.btts += 0.022 * shapeScale;
       deltas.draw += 0.006 * shapeScale;
       notes.push("盘口/模型接近五五开时，历史样本里平局和双方进球更常见，胜负方向不宜过度集中。");
@@ -2281,6 +2446,9 @@ function historicalShapeCalibration(match, probabilities, options = {}) {
   if (tone.isClub && tone.lowData) {
     notes.push("俱乐部低数据场只做小权重形态校准，阵容/近况未补齐前不把形态当强信号。");
   }
+  if (dataClarity.notes?.length) {
+    notes.push(...dataClarity.notes.slice(0, 2));
+  }
 
   for (const key of Object.keys(deltas)) {
     deltas[key] = roundTo(clamp(deltas[key], key === "draw" ? -0.024 : -0.055, key === "draw" ? 0.035 : 0.075), 4);
@@ -2312,7 +2480,16 @@ function historicalShapeCalibration(match, probabilities, options = {}) {
       drawLowMass: roundTo(drawLowMass, 4),
       oneNilMass: roundTo(oneNilMass, 4),
       threePlusMass: roundTo(threePlusMass, 4),
-      clubLowData: Boolean(tone.isClub && tone.lowData)
+      clubLowData: Boolean(tone.isClub && tone.lowData),
+      dataClarity: {
+        score: dataClarity.score,
+        confidence: dataClarity.confidence,
+        classification: dataClarity.classification,
+        label: dataClarity.label,
+        probabilityClose: dataClarity.probabilityClose,
+        unknownBalance: dataClarity.unknownBalance,
+        missing: dataClarity.missing
+      }
     },
     notes: [...new Set(notes)].slice(0, 6),
     missing: [...new Set(missing)].slice(0, 4),
@@ -3288,11 +3465,24 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       ].join(" ")
     });
   }
+  const dataClarity = dataClarityProfile(match, probabilities);
+  match.dataClarityProfile = dataClarity;
+  drivers.push({
+    label: "数据清晰度",
+    homeXgDelta: 0,
+    awayXgDelta: 0,
+    reason: [
+      `${dataClarity.label}，清晰度 ${Math.round(dataClarity.score * 100)}%。`,
+      dataClarity.notes.length ? dataClarity.notes[0] : "",
+      dataClarity.missing.length ? `缺口：${dataClarity.missing.slice(0, 3).join("；")}。` : ""
+    ].filter(Boolean).join(" ")
+  });
   const historicalShape = historicalShapeCalibration(match, probabilities, {
     lambdaHome,
     lambdaAway,
     clubReview,
-    researchCalibration
+    researchCalibration,
+    dataClarity
   });
   if (historicalShape.ok) {
     probabilities = historicalShape.probabilities;
@@ -3353,7 +3543,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.07.24-shape-calibration",
+    version: "2026.07.24-clarity-shape",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -3365,6 +3555,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     calibration,
     goalkeeperAgeAdjustment,
     physicalMatchupAdjustment,
+    dataClarityProfile: dataClarity,
     researchFactorCalibration: researchCalibration.ok ? {
       version: researchCalibration.version,
       deltas: researchCalibration.deltas,
@@ -3402,7 +3593,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       notes: historicalShape.notes || [],
       missing: historicalShape.missing || []
     },
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准", "历史形态校准"].includes(driver.label)).slice(0, 14),
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准", "数据清晰度", "历史形态校准"].includes(driver.label)).slice(0, 14),
     probabilities
   };
 }
@@ -3423,6 +3614,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     version: modelV2.version,
     calibration: modelV2.calibration,
     drivers: modelV2.drivers,
+    dataClarityProfile: modelV2.dataClarityProfile,
     researchFactorCalibration: modelV2.researchFactorCalibration,
     historicalShapeCalibration: modelV2.historicalShapeCalibration,
     clubCompetitionAdjustment: modelV2.clubCompetitionAdjustment,
@@ -4088,6 +4280,10 @@ function marketReviewAdjustments(match, rec) {
   const drawPathMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
   const clubTone = clubCompetitionTone(match);
   const clubLowData = clubTone.isClub && clubTone.lowData;
+  const dataClarity = match?.modelV2?.dataClarityProfile
+    || match?.dynamicModel?.goldmanStyle?.dataClarityProfile
+    || match?.dataClarityProfile
+    || dataClarityProfile(match, match?.probabilities || {});
   const preMatch = !isInProgressStatus(match?.scheduleStatus) && !match?.scheduleCompleted;
   const suspiciousExtremePrice = typeof rec.marketPrice === "number"
     && (rec.marketPrice <= 0.12 || rec.marketPrice >= 0.88)
@@ -4187,6 +4383,14 @@ function marketReviewAdjustments(match, rec) {
       scorePenalty += 0.055;
       reasons.push("低数据俱乐部赛里，模型方向与胜平负市场相反且 edge 不够厚，只保留观察。");
     }
+  }
+
+  if (dataClarity.unknownBalance && preMatch && typeof rec.edge === "number" && rec.edge > 0) {
+    const largerEdge = rec.edge >= 0.08;
+    edgePenalty += largerEdge ? 0.055 : 0.035;
+    scorePenalty += largerEdge ? 0.075 : 0.05;
+    if (["total", "btts"].includes(rec.marketType) && rec.edge < 0.14) forceNoBuy = true;
+    reasons.push("数据清晰度校准：概率接近属于未知型均势，不能把模型 edge 直接解释成 BTTS、小球或胜平负方向。");
   }
 
   const chartStatusKnown = Boolean(rec.chart);
@@ -6182,6 +6386,21 @@ function aiPredictionEvidence(match, top, rows) {
       : homeRank && awayRank ? "synced" : "partial",
     detail: `${teamRankLabel(match.homeTeam, match.home)}；${teamRankLabel(match.awayTeam, match.away)}。`
   });
+  const dataClarity = match.modelV2?.dataClarityProfile || match.dynamicModel?.goldmanStyle?.dataClarityProfile || match.dataClarityProfile;
+  if (dataClarity) {
+    evidence.push({
+      label: "数据清晰度/均势解释",
+      status: dataClarity.confidence === "high" ? "synced" : dataClarity.confidence === "medium" ? "partial" : "missing",
+      detail: [
+        `${dataClarity.label}，清晰度 ${Math.round((dataClarity.score || 0) * 100)}%。`,
+        dataClarity.notes?.[0] || (dataClarity.unknownBalance
+          ? "概率接近更可能来自数据不足，不自动推 BTTS 或 0-0。"
+          : "概率接近可进一步结合总 xG、近期进失球和盘口形态解释。"),
+        dataClarity.missing?.length ? `主要缺口：${dataClarity.missing.slice(0, 3).join("；")}。` : ""
+      ].filter(Boolean).join(" ")
+    });
+    drivers.push(`数据清晰度：${dataClarity.label}，${dataClarity.notes?.[0] || "用于区分真均势和未知型均势。"}`);
+  }
   evidence.push({
     label: "近期战绩",
     status: match.recentFormRecords?.home?.summary?.matches && match.recentFormRecords?.away?.summary?.matches ? "synced" : "partial",
