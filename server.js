@@ -89,7 +89,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-22-club-mls-context-v2";
+const DASHBOARD_MODEL_VERSION = "2026-07-24-club-review-discipline-v1";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -2215,12 +2215,14 @@ function clubCompetitionTone(match = {}) {
   const kickoffText = String(match?.kickoffShanghai || match?.kickoffLocal || match?.kickoffUtc || "");
   const month = Number(kickoffText.slice(5, 7));
   const isClub = isClubMatch(match);
+  const isMls = /\bmls\b|major league soccer/.test(text);
   const isLeague = competition.stageType === "league"
-    || /\b(mls|liga mx|liga-mx|premier league|la liga|serie a|bundesliga|ligue 1|allsvenskan)\b/.test(text);
+    || isMls
+    || /\b(liga mx|liga-mx|premier league|la liga|serie a|bundesliga|ligue 1|allsvenskan)\b/.test(text);
   const isEuropeanClub = /\b(ucl|uel|uecl)\b|champions league|europa league|conference league|欧冠|欧联|欧协/.test(text);
   const isQualifier = /qualif|qualification|prelim|playoff|资格/.test(text)
     || (isEuropeanClub && Number.isFinite(month) && month >= 7 && month <= 8);
-  const isAmericas = /\b(mls|liga mx|liga-mx|libertadores|sudamericana|concacaf)\b|美洲|墨西哥/.test(text);
+  const isAmericas = isMls || /\b(liga mx|liga-mx|libertadores|sudamericana|concacaf)\b|美洲|墨西哥/.test(text);
   const profiles = [match?.homeTeam?.ratingProfile, match?.awayTeam?.ratingProfile].filter(Boolean);
   const lowRatingConfidence = profiles.length < 2 || profiles.some((profile) => {
     const confidence = String(profile?.confidence || "").toLowerCase();
@@ -2232,6 +2234,7 @@ function clubCompetitionTone(match = {}) {
   const dynamicThin = !match?.contextSignals?.ok && !match?.context?.mediaConsensus?.ok;
   return {
     isClub,
+    isMls,
     isLeague,
     isEuropeanClub,
     isQualifier,
@@ -2257,14 +2260,20 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
   let favoriteWinPenalty = 0;
   const notes = [];
 
-  if (tone.isLeague || tone.isAmericas) {
-    overBoost += 0.018;
-    bttsBoost += 0.016;
+  if (tone.isMls) {
+    overBoost += 0.036;
+    bttsBoost += 0.033;
+    if (favorite.favorite >= 0.46 && favorite.gap <= 0.36) favoriteWinPenalty += 0.008;
+    notes.push("MLS 昨日样本偏开放，大2.5/BTTS 不能被低比分基线压得过重，小球和零封只在市场/阵容/现场同时支持时考虑。");
+  } else if (tone.isLeague || tone.isAmericas) {
+    overBoost += tone.isAmericas ? 0.024 : 0.018;
+    bttsBoost += tone.isAmericas ? 0.022 : 0.016;
     notes.push("俱乐部联赛/美洲赛事近期复盘更开放，赛前小球和零封路径不能只靠静态评分上修。");
   }
   if (tone.isEuropeanClub) {
     drawBoost += tone.isQualifier ? 0.008 : 0.005;
     bttsBoost += tone.isQualifier ? 0.007 : 0.004;
+    if (tone.isQualifier && tone.lowData) overBoost += 0.006;
     if (favorite.favorite >= 0.44 && favorite.gap <= 0.34) favoriteWinPenalty += 0.01;
     notes.push(tone.isQualifier
       ? "欧战资格赛强弱信息噪声较大，90分钟热门胜和纯小球需要阵容/近期战绩确认。"
@@ -2278,8 +2287,8 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
     notes.push("俱乐部低数据兜底：评分/近况/动态情报不完整时，降低单边热门和强小球确定性。");
   }
   if (tone.lowData && (probabilities.under25 || 0) >= 0.6) {
-    overBoost += 0.012;
-    bttsBoost += 0.008;
+    overBoost += 0.014;
+    bttsBoost += 0.01;
     notes.push("低数据下小球集中度过高，按复盘结果把早球/失误/转换进球风险重新加回比分分布。");
   }
   if (tone.lowData && lowScoreMass >= 0.56) {
@@ -2288,9 +2297,9 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
   }
 
   drawBoost = clamp(drawBoost, 0, 0.035);
-  bttsBoost = clamp(bttsBoost, 0, 0.035);
-  overBoost = clamp(overBoost, 0, 0.038);
-  favoriteWinPenalty = clamp(favoriteWinPenalty, 0, 0.028);
+  bttsBoost = clamp(bttsBoost, 0, 0.055);
+  overBoost = clamp(overBoost, 0, 0.055);
+  favoriteWinPenalty = clamp(favoriteWinPenalty, 0, 0.035);
   if (!drawBoost && !bttsBoost && !overBoost && !favoriteWinPenalty) {
     return { ok: false, probabilities, deltas: {}, notes };
   }
@@ -3006,7 +3015,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   if (clubReview.ok) {
     probabilities = clubReview.probabilities;
     match.clubCompetitionAdjustment = {
-      version: "2026.07.22",
+      version: "2026.07.24",
       tone: clubReview.tone,
       deltas: clubReview.deltas,
       notes: clubReview.notes
@@ -3104,7 +3113,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.07.22-club-risk",
+    version: "2026.07.24-club-review-discipline",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -3130,7 +3139,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       missing: researchCalibration.missing || []
     },
     clubCompetitionAdjustment: clubReview.ok ? {
-      version: "2026.07.22",
+      version: "2026.07.24",
       tone: clubReview.tone,
       deltas: clubReview.deltas,
       notes: clubReview.notes
@@ -3784,6 +3793,23 @@ function lowScoreCleanSheetMass(match) {
   }, 0);
 }
 
+function favoriteDeepHandicapInfo(match, rec) {
+  if (rec?.marketType !== "handicap" || !rec.handicap) return null;
+  const favoriteKey = match?.probabilities?.home >= match?.probabilities?.away ? "home" : "away";
+  const isHomeSelection = rec.key?.endsWith("-home");
+  const isAwaySelection = rec.key?.endsWith("-away");
+  const selectedLine = isHomeSelection ? Number(rec.handicap.homeLine) : isAwaySelection ? Number(rec.handicap.awayLine) : NaN;
+  const selectedSide = isHomeSelection ? "home" : isAwaySelection ? "away" : "";
+  const favoriteGivingLine = selectedSide === favoriteKey && Number.isFinite(selectedLine) && selectedLine < 0;
+  return {
+    favoriteKey,
+    selectedSide,
+    selectedLine,
+    absLine: Number.isFinite(selectedLine) ? Math.abs(selectedLine) : 0,
+    favoriteGivingLine
+  };
+}
+
 function marketReviewAdjustments(match, rec) {
   const reasons = [];
   let edgePenalty = 0;
@@ -3807,6 +3833,7 @@ function marketReviewAdjustments(match, rec) {
   const drawPathMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
   const clubTone = clubCompetitionTone(match);
   const clubLowData = clubTone.isClub && clubTone.lowData;
+  const preMatch = !isInProgressStatus(match?.scheduleStatus) && !match?.scheduleCompleted;
   const suspiciousExtremePrice = typeof rec.marketPrice === "number"
     && (rec.marketPrice <= 0.12 || rec.marketPrice >= 0.88)
     && !isInProgressStatus(match?.scheduleStatus)
@@ -3820,6 +3847,29 @@ function marketReviewAdjustments(match, rec) {
   }
 
   if (clubTone.isClub && ["total", "btts"].includes(rec.marketType) && typeof rec.marketPrice === "number") {
+    if (clubTone.isMls && rec.key === "under25") {
+      edgePenalty += rec.marketPrice <= 0.54 ? 0.13 : 0.09;
+      scorePenalty += rec.marketPrice <= 0.54 ? 0.14 : 0.1;
+      if (preMatch) forceNoBuy = true;
+      reasons.push("MLS 复盘：昨日 15 场中大2.5/BTTS 明显偏热，赛前小球需要市场、阵容和现场节奏三重确认；当前不做主买。");
+    }
+    if (clubTone.isMls && rec.key === "bttsNo") {
+      edgePenalty += rec.marketPrice <= 0.58 ? 0.11 : 0.075;
+      scorePenalty += rec.marketPrice <= 0.58 ? 0.12 : 0.085;
+      if (preMatch) forceNoBuy = true;
+      reasons.push("MLS 复盘：双方进球路径不能按普通低比分模型压低，BTTS No 只在首发/现场射门共同支持后再看。");
+    }
+    if (clubTone.isMls && (rec.key === "over25" || rec.key === "bttsYes") && rec.marketPrice <= 0.64) {
+      scorePenalty = Math.max(0, scorePenalty - 0.018);
+      reasons.push("MLS 开放度复盘支持 Over/BTTS Yes 进入观察，但仍要受价格和首发门槛约束。");
+    }
+    if (clubTone.isEuropeanClub && clubTone.isQualifier && rec.key === "under25") {
+      const extremeQualifierUnder = rec.marketPrice <= 0.18;
+      edgePenalty += extremeQualifierUnder ? 0.12 : 0.07;
+      scorePenalty += extremeQualifierUnder ? 0.12 : 0.075;
+      if (clubLowData || extremeQualifierUnder) forceNoBuy = true;
+      reasons.push("低数据欧战资格赛复盘：小球 edge 容易被盘口口径/早球风险放大，必须先核验真实盘口和阵容。");
+    }
     if (clubLowData && rec.key === "under25" && rec.marketPrice <= 0.46) {
       const strongMarketConflict = rec.marketPrice <= 0.42;
       edgePenalty += strongMarketConflict ? 0.12 : 0.09;
@@ -3940,6 +3990,12 @@ function marketReviewAdjustments(match, rec) {
       && ((rec.key.endsWith("-home") && favoriteKey === "home" && rec.handicap.homeLine < 0)
         || (rec.key.endsWith("-away") && favoriteKey === "away" && rec.handicap.awayLine < 0));
     const absLine = rec.key.endsWith("-home") ? Math.abs(rec.handicap.homeLine) : Math.abs(rec.handicap.awayLine);
+    if (clubTone.isClub && favoriteGivingLine && absLine >= 1.5) {
+      edgePenalty += clubLowData ? 0.085 : 0.06;
+      scorePenalty += clubLowData ? 0.095 : 0.075;
+      if (preMatch && (clubLowData || rec.edge < 0.16)) forceNoBuy = true;
+      reasons.push("俱乐部复盘：强队赢球不等于穿深让，尤其 MLS/资格赛常见 3-2、2-1 这类赢球不穿路径。");
+    }
     if (knockout && favoriteGivingLine && absLine >= 1.5) {
       edgePenalty += stageProfile.deepHandicapPenalty || 0.035;
       scorePenalty += stageProfile.key === "quarter" ? 0.085 : 0.07;
@@ -6160,8 +6216,21 @@ function tradableRecommendationScore(rec, match = null) {
   if (clubTone?.isClub && clubTone.lowData && rec.key === "bttsNo" && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.46) {
     score -= 0.055;
   }
+  if (clubTone?.isMls && rec.key === "under25") {
+    score -= 0.125;
+  }
+  if (clubTone?.isMls && rec.key === "bttsNo") {
+    score -= 0.105;
+  }
+  if (clubTone?.isEuropeanClub && clubTone.isQualifier && clubTone.lowData && rec.key === "under25") {
+    score -= 0.085;
+  }
   if (clubTone?.isClub && (clubTone.isLeague || clubTone.isAmericas) && (rec.key === "over25" || rec.key === "bttsYes") && typeof rec.marketPrice === "number" && rec.marketPrice >= 0.54) {
     score += 0.012;
+  }
+  const deepHandicap = favoriteDeepHandicapInfo(match, rec);
+  if (clubTone?.isClub && deepHandicap?.favoriteGivingLine && deepHandicap.absLine >= 1.5) {
+    score -= clubTone.lowData ? 0.095 : 0.07;
   }
   if (rec.reviewDiscipline?.forceNoBuy) {
     score -= 0.25;
@@ -6175,8 +6244,10 @@ function tradableRecommendationScore(rec, match = null) {
 function isActionableRecommendation(rec, match = null) {
   if (typeof rec.marketPrice !== "number" || typeof rec.modelProbability !== "number") return false;
   if (match?.manualMarkets?.sourceType === "auto-baseline" && rec.chart?.source !== "Polymarket") return false;
+  if (rec.reviewDiscipline?.forceNoBuy) return false;
+  if (rec.decision?.action === "NO_TRADE") return false;
   if (rec.decision?.action === "AVOID_OR_SELL") return false;
-  if (rec.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|低 edge 不再主推|BTTS 与小球结构冲突|低数据俱乐部赛|明显不支持小球|市场更偏双方进球/.test(String(reason)))) return false;
+  if (rec.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|不做主买|低 edge 不再主推|BTTS 与小球结构冲突|低数据俱乐部赛|明显不支持小球|市场更偏双方进球|必须先核验|强队赢球不等于穿深让/.test(String(reason)))) return false;
   const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
   if (edgeValue == null || edgeValue <= 0) return false;
   return true;
