@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-24-clarity-shape-v2";
+const DASHBOARD_MODEL_VERSION = "2026-07-24-btts-shape-v3";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -2040,6 +2040,215 @@ function matchShapeProfile(match, options = {}) {
   };
 }
 
+function buildBttsShapeProfile(match, probabilities = match?.probabilities || {}, options = {}) {
+  const scores = Array.isArray(probabilities?.topScoresFull) ? probabilities.topScoresFull : [];
+  const dataClarity = options.dataClarity
+    || match?.modelV2?.dataClarityProfile
+    || match?.dynamicModel?.goldmanStyle?.dataClarityProfile
+    || match?.dataClarityProfile
+    || dataClarityProfile(match, probabilities);
+  const bttsYes = clamp(Number(probabilities.btts) || 0, 0, 1);
+  const bttsNo = 1 - bttsYes;
+  const over25 = clamp(Number(probabilities.over25) || 0, 0, 1);
+  const under25 = clamp(Number(probabilities.under25) || 0, 0, 1);
+  const draw = clamp(Number(probabilities.draw) || 0, 0, 1);
+  const lambdaHome = Number(probabilities.lambdaHome ?? match?.dynamicModel?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
+  const lambdaAway = Number(probabilities.lambdaAway ?? match?.dynamicModel?.adjusted?.lambdaAway ?? match?.model?.lambdaAway);
+  const lowerXg = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? Math.min(lambdaHome, lambdaAway) : null;
+  const mass = (predicate) => scores.reduce((sum, row) => {
+    const homeGoals = Number(row.homeGoals);
+    const awayGoals = Number(row.awayGoals);
+    if (!Number.isFinite(homeGoals) || !Number.isFinite(awayGoals)) return sum;
+    return predicate(homeGoals, awayGoals, row) ? sum + (Number(row.probability) || 0) : sum;
+  }, 0);
+  const nilNilMass = mass((homeGoals, awayGoals) => homeGoals === 0 && awayGoals === 0);
+  const oneOneMass = mass((homeGoals, awayGoals) => homeGoals === 1 && awayGoals === 1);
+  const lowDrawMass = mass((homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
+  const oneNilMass = mass((homeGoals, awayGoals) => homeGoals + awayGoals === 1);
+  const twoNilMass = mass((homeGoals, awayGoals) => (homeGoals === 2 && awayGoals === 0) || (homeGoals === 0 && awayGoals === 2));
+  const zeroSheetNonNilMass = mass((homeGoals, awayGoals) => (homeGoals === 0 || awayGoals === 0) && !(homeGoals === 0 && awayGoals === 0));
+  const homeCleanSheetMass = mass((homeGoals, awayGoals) => awayGoals === 0);
+  const awayCleanSheetMass = mass((homeGoals, awayGoals) => homeGoals === 0);
+  const favorite = favoriteProfile(probabilities);
+  const favoriteCleanSheetMass = favorite.key === "away" ? awayCleanSheetMass : homeCleanSheetMass;
+  const bothXgFloor = lowerXg !== null && lowerXg >= 0.82;
+  const comboCoverage = clamp(bttsYes + nilNilMass, 0, 1);
+  const comboLeak = clamp(1 - comboCoverage, 0, 1);
+  const leakScores = scores
+    .filter((row) => {
+      const homeGoals = Number(row.homeGoals);
+      const awayGoals = Number(row.awayGoals);
+      return (homeGoals === 0 || awayGoals === 0) && !(homeGoals === 0 && awayGoals === 0);
+    })
+    .sort((a, b) => (Number(b.probability) || 0) - (Number(a.probability) || 0))
+    .slice(0, 5)
+    .map((row) => ({
+      score: row.score,
+      probability: roundTo(Number(row.probability) || 0, 4)
+    }));
+
+  const homeForm = recentFormStrength(recentFormSummary(match, "home"));
+  const awayForm = recentFormStrength(recentFormSummary(match, "away"));
+  const bothRecentCanScore = homeForm?.hasGoalTotals && awayForm?.hasGoalTotals
+    && homeForm.attackPerMatch >= 1.25
+    && awayForm.attackPerMatch >= 1.15;
+  const bothRecentConcede = homeForm?.hasGoalTotals && awayForm?.hasGoalTotals
+    && homeForm.defensePerMatch >= 0.95
+    && awayForm.defensePerMatch >= 0.95;
+  const tournamentBttsRate = Number(match?.tournamentTrend?.rates?.btts);
+  const trendSupportsBtts = Number.isFinite(tournamentBttsRate) && tournamentBttsRate >= 0.54 && (match?.tournamentTrend?.sampleSize || 0) >= 20;
+  const clubTone = clubCompetitionTone(match);
+  const leagueOpenHint = clubTone.isMls || clubTone.isLigaMx || (clubTone.isAmericas && clubTone.isLeague);
+
+  let key = "neutral";
+  if (dataClarity?.unknownBalance) key = "unknown_balance";
+  else if (bttsYes >= 0.54 && bothXgFloor && zeroSheetNonNilMass <= 0.34 && over25 >= 0.47) key = "open_btts";
+  else if (bttsYes >= 0.515 && (trendSupportsBtts || bothRecentCanScore || leagueOpenHint) && zeroSheetNonNilMass <= 0.39) key = "btts_watch";
+  else if (under25 >= 0.56 && (nilNilMass + oneOneMass >= 0.17 || lowDrawMass >= 0.2) && bttsYes <= 0.52) key = "low_event_balance";
+  else if (over25 >= 0.55 && bttsYes < 0.49 && favoriteCleanSheetMass >= 0.24) key = "one_sided_over";
+  else if (zeroSheetNonNilMass >= 0.37 || favoriteCleanSheetMass >= 0.3) key = "clean_sheet_risk";
+
+  const labelMap = {
+    open_btts: ["开放互捅型", "Open BTTS shape"],
+    btts_watch: ["BTTS观察型", "BTTS watch shape"],
+    low_event_balance: ["低事件均势型", "Low-event balance"],
+    one_sided_over: ["一边倒大球型", "One-sided over"],
+    clean_sheet_risk: ["零封风险型", "Clean-sheet risk"],
+    unknown_balance: ["未知型均势", "Unknown balance"],
+    neutral: ["中性待确认", "Neutral pending"]
+  };
+  const [label, labelEn] = labelMap[key] || labelMap.neutral;
+
+  const support = [];
+  const supportEn = [];
+  const against = [];
+  const againstEn = [];
+  if (bttsYes >= 0.52) {
+    support.push(`同一比分分布给出 BTTS Yes ${formatPercent(bttsYes)}。`);
+    supportEn.push(`The same score grid gives BTTS Yes ${formatPercent(bttsYes)}.`);
+  }
+  if (bothXgFloor) {
+    support.push(`两队 xG 下限都不低，弱侧约 ${lowerXg.toFixed(2)}。`);
+    supportEn.push(`Both teams have a usable xG floor; weaker side is about ${lowerXg.toFixed(2)}.`);
+  }
+  if (bothRecentCanScore) {
+    support.push(`近期进球样本支持双方都有进球能力。`);
+    supportEn.push("Recent form samples support both teams having scoring paths.");
+  }
+  if (bothRecentConcede) {
+    support.push(`近期失球样本显示两队防线都不是完全封闭。`);
+    supportEn.push("Recent conceded-goal samples do not point to two closed defences.");
+  }
+  if (trendSupportsBtts) {
+    support.push(`当前赛会/样本 BTTS ${formatPercent(tournamentBttsRate)}，给开放方向低权重支持。`);
+    supportEn.push(`Current competition sample has BTTS ${formatPercent(tournamentBttsRate)}, a low-weight open-game support.`);
+  }
+  if (leagueOpenHint) {
+    support.push("赛事类型偏开放，但只作低权重先验，仍要看价格和首发。");
+    supportEn.push("Competition family is more open, but only as a low-weight prior behind price and lineups.");
+  }
+  if (dataClarity?.unknownBalance) {
+    against.push("数据清晰度不足，概率接近不能直接解释成 BTTS 或 0-0 机会。");
+    againstEn.push("Data clarity is low, so close probabilities cannot be read directly as BTTS or 0-0 value.");
+  }
+  if (zeroSheetNonNilMass >= 0.32) {
+    against.push(`非 0-0 零封漏掉路径 ${formatPercent(zeroSheetNonNilMass)}，BTTS+0-0 会漏 1-0/2-0/0-1 等比分。`);
+    againstEn.push(`Non-0-0 clean-sheet leak is ${formatPercent(zeroSheetNonNilMass)}; BTTS+0-0 misses 1-0/2-0/0-1 paths.`);
+  }
+  if (under25 >= 0.56) {
+    against.push(`小2.5 为 ${formatPercent(under25)}，说明低事件路径仍重。`);
+    againstEn.push(`Under 2.5 is ${formatPercent(under25)}, so low-event paths remain heavy.`);
+  }
+  if (favoriteCleanSheetMass >= 0.26) {
+    against.push(`热门方零封路径约 ${formatPercent(favoriteCleanSheetMass)}，要防强队控场零封。`);
+    againstEn.push(`Favorite clean-sheet path is about ${formatPercent(favoriteCleanSheetMass)}, so controlled clean sheets are a risk.`);
+  }
+  if (lowerXg !== null && lowerXg < 0.72) {
+    against.push(`弱侧 xG 只有 ${lowerXg.toFixed(2)}，BTTS 需要现场射门质量确认。`);
+    againstEn.push(`Weaker-side xG is only ${lowerXg.toFixed(2)}, so BTTS needs live shot-quality confirmation.`);
+  }
+
+  const actionMap = {
+    open_btts: ["优先看 BTTS；0-0 只作便宜保护", "Prefer BTTS; use 0-0 only as cheap protection"],
+    btts_watch: ["BTTS 可观察；等价格或 18-25 分钟节奏", "BTTS watch; wait for price or 18-25 minute tempo"],
+    low_event_balance: ["优先看 0-0/1-1/小球簇，不先追 BTTS", "Prefer 0-0/1-1/under cluster, do not chase BTTS first"],
+    one_sided_over: ["大球可能比 BTTS 更干净，防强队零封", "Over may be cleaner than BTTS; watch favorite clean sheet"],
+    clean_sheet_risk: ["BTTS 降级，优先检查零封比分保护", "Downgrade BTTS; inspect clean-sheet score covers first"],
+    unknown_balance: ["先等数据，不用 BTTS 或 0-0 模板", "Wait for data; do not use BTTS or 0-0 template"],
+    neutral: ["没有强形态，按价格和现场节奏处理", "No strong shape; use price and live tempo"]
+  };
+  const [actionLabel, actionLabelEn] = actionMap[key] || actionMap.neutral;
+  const comboStatus = comboCoverage >= 0.6 && zeroSheetNonNilMass <= 0.34 && !dataClarity?.unknownBalance
+    ? "candidate"
+    : comboCoverage >= 0.55 && zeroSheetNonNilMass <= 0.4
+      ? "watch"
+      : "not_preferred";
+  const comboStatusLabel = comboStatus === "candidate"
+    ? "BTTS+0-0 可作为组合候选，但必须比较实际成本"
+    : comboStatus === "watch"
+      ? "BTTS+0-0 可观察，漏掉零封路径偏高"
+      : "BTTS+0-0 不是优先组合，漏掉路径或数据缺口过大";
+  const comboStatusLabelEn = comboStatus === "candidate"
+    ? "BTTS+0-0 can be a combo candidate, but only after checking actual cost"
+    : comboStatus === "watch"
+      ? "BTTS+0-0 is watch-only; clean-sheet leak is still material"
+      : "BTTS+0-0 is not preferred because leak paths or data gaps are too large";
+
+  return {
+    ok: Boolean(scores.length),
+    version: "2026.07.24-btts-shape",
+    key,
+    label,
+    labelEn,
+    actionLabel,
+    actionLabelEn,
+    comboStatus,
+    comboStatusLabel,
+    comboStatusLabelEn,
+    metrics: {
+      bttsYes: roundTo(bttsYes, 4),
+      bttsNo: roundTo(bttsNo, 4),
+      nilNil: roundTo(nilNilMass, 4),
+      oneOne: roundTo(oneOneMass, 4),
+      oneNil: roundTo(oneNilMass, 4),
+      twoNil: roundTo(twoNilMass, 4),
+      zeroSheetNonNil: roundTo(zeroSheetNonNilMass, 4),
+      homeCleanSheet: roundTo(homeCleanSheetMass, 4),
+      awayCleanSheet: roundTo(awayCleanSheetMass, 4),
+      favoriteCleanSheet: roundTo(favoriteCleanSheetMass, 4),
+      over25: roundTo(over25, 4),
+      under25: roundTo(under25, 4),
+      draw: roundTo(draw, 4),
+      comboCoverage: roundTo(comboCoverage, 4),
+      comboLeak: roundTo(comboLeak, 4),
+      lambdaHome: Number.isFinite(lambdaHome) ? roundTo(lambdaHome, 3) : null,
+      lambdaAway: Number.isFinite(lambdaAway) ? roundTo(lambdaAway, 3) : null,
+      lowerXg: lowerXg !== null ? roundTo(lowerXg, 3) : null
+    },
+    leakScores,
+    support: [...new Set(support)].slice(0, 5),
+    supportEn: [...new Set(supportEn)].slice(0, 5),
+    against: [...new Set(against)].slice(0, 5),
+    againstEn: [...new Set(againstEn)].slice(0, 5),
+    notes: [
+      `${label}：${actionLabel}。`,
+      comboStatusLabel,
+      leakScores.length ? `主要漏掉比分：${leakScores.map((item) => `${item.score} ${formatPercent(item.probability)}`).join(" / ")}。` : ""
+    ].filter(Boolean),
+    notesEn: [
+      `${labelEn}: ${actionLabelEn}.`,
+      comboStatusLabelEn,
+      leakScores.length ? `Main missed scores: ${leakScores.map((item) => `${item.score} ${formatPercent(item.probability)}`).join(" / ")}.` : ""
+    ].filter(Boolean),
+    dataClarity: dataClarity ? {
+      label: dataClarity.label,
+      confidence: dataClarity.confidence,
+      score: roundTo(dataClarity.score || 0, 3),
+      unknownBalance: Boolean(dataClarity.unknownBalance)
+    } : null
+  };
+}
+
 function scoreDistributionMass(probabilities, predicate) {
   return (probabilities?.topScoresFull || []).reduce((sum, row) => {
     const homeGoals = Number(row.homeGoals);
@@ -3548,11 +3757,23 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       reason: `参考公开价格 ${formatPercent(market.home)}/${formatPercent(market.draw)}/${formatPercent(market.away)}，只做 ${Math.round(marketWeight * 100)}% 权重校准，不让盘口替代模型。`
     });
   }
+  const bttsShapeProfile = buildBttsShapeProfile(match, probabilities, { dataClarity });
+  match.bttsShapeProfile = bttsShapeProfile;
+  drivers.push({
+    label: "BTTS形态",
+    homeXgDelta: 0,
+    awayXgDelta: 0,
+    reason: [
+      `${bttsShapeProfile.label}：${bttsShapeProfile.actionLabel}。`,
+      `BTTS ${formatPercent(bttsShapeProfile.metrics.bttsYes)}，0-0 ${formatPercent(bttsShapeProfile.metrics.nilNil)}，BTTS+0-0 覆盖 ${formatPercent(bttsShapeProfile.metrics.comboCoverage)}，非0-0零封漏掉 ${formatPercent(bttsShapeProfile.metrics.zeroSheetNonNil)}。`,
+      bttsShapeProfile.comboStatusLabel
+    ].join(" ")
+  });
 
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.07.24-clarity-shape",
+    version: "2026.07.24-btts-shape",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -3565,6 +3786,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
     goalkeeperAgeAdjustment,
     physicalMatchupAdjustment,
     dataClarityProfile: dataClarity,
+    bttsShapeProfile,
     researchFactorCalibration: researchCalibration.ok ? {
       version: researchCalibration.version,
       deltas: researchCalibration.deltas,
@@ -3602,7 +3824,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       notes: historicalShape.notes || [],
       missing: historicalShape.missing || []
     },
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准", "数据清晰度", "历史形态校准"].includes(driver.label)).slice(0, 14),
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准", "数据清晰度", "历史形态校准", "BTTS形态"].includes(driver.label)).slice(0, 14),
     probabilities
   };
 }
@@ -3624,6 +3846,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     calibration: modelV2.calibration,
     drivers: modelV2.drivers,
     dataClarityProfile: modelV2.dataClarityProfile,
+    bttsShapeProfile: modelV2.bttsShapeProfile,
     researchFactorCalibration: modelV2.researchFactorCalibration,
     historicalShapeCalibration: modelV2.historicalShapeCalibration,
     clubCompetitionAdjustment: modelV2.clubCompetitionAdjustment,
@@ -4274,6 +4497,7 @@ function marketReviewAdjustments(match, rec) {
   const favoriteKey = match?.probabilities?.home >= match?.probabilities?.away ? "home" : "away";
   const favoriteSide = favoriteKey;
   const favoriteCleanSheet = exactCleanSheetRisk(match, favoriteSide);
+  const over25 = match?.probabilities?.over25 || 0;
   const under25 = match?.probabilities?.under25 || 0;
   const btts = match?.probabilities?.btts || 0;
   const motivation = match.matchMotivation || buildMatchMotivationProfile(match);
@@ -4293,6 +4517,13 @@ function marketReviewAdjustments(match, rec) {
     || match?.dynamicModel?.goldmanStyle?.dataClarityProfile
     || match?.dataClarityProfile
     || dataClarityProfile(match, match?.probabilities || {});
+  const bttsShape = match?.bttsShapeProfile
+    || match?.modelV2?.bttsShapeProfile
+    || match?.dynamicModel?.goldmanStyle?.bttsShapeProfile
+    || buildBttsShapeProfile(match, match?.probabilities || {}, { dataClarity });
+  const bttsOpenShape = ["open_btts", "btts_watch"].includes(bttsShape.key);
+  const bttsRiskShape = ["clean_sheet_risk", "one_sided_over"].includes(bttsShape.key);
+  const bttsLowEventShape = bttsShape.key === "low_event_balance";
   const preMatch = !isInProgressStatus(match?.scheduleStatus) && !match?.scheduleCompleted;
   const suspiciousExtremePrice = typeof rec.marketPrice === "number"
     && (rec.marketPrice <= 0.12 || rec.marketPrice >= 0.88)
@@ -4480,9 +4711,29 @@ function marketReviewAdjustments(match, rec) {
       scorePenalty += 0.05;
       reasons.push("研究校准：低比分簇占优时，BTTS Yes 不能只靠弱队可能偷一个来追。");
     }
+    if (bttsOpenShape && rec.edge >= 0.035) {
+      edgePenalty = Math.max(0, edgePenalty - (bttsShape.key === "open_btts" ? 0.036 : 0.022));
+      scorePenalty = Math.max(0, scorePenalty - (bttsShape.key === "open_btts" ? 0.065 : 0.038));
+      reasons.push(`BTTS形态：${bttsShape.label}，${bttsShape.actionLabel}；但仍必须比较 BTTS 实际价格。`);
+    }
+    if (bttsLowEventShape) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.055;
+      reasons.push("BTTS形态：低事件均势，优先检查 0-0/1-1/小球簇，不把 BTTS Yes 作为赛前主路径。");
+    }
+    if (bttsRiskShape) {
+      edgePenalty += bttsShape.key === "one_sided_over" ? 0.045 : 0.038;
+      scorePenalty += bttsShape.key === "one_sided_over" ? 0.07 : 0.06;
+      reasons.push(`BTTS形态：${bttsShape.label}，非0-0零封漏掉 ${formatPercent(bttsShape.metrics?.zeroSheetNonNil || 0)}，BTTS Yes 降级。`);
+    }
   }
 
   if (rec.marketType === "btts" && rec.key === "bttsNo") {
+    if (bttsOpenShape && btts >= 0.5) {
+      edgePenalty += bttsShape.key === "open_btts" ? 0.042 : 0.026;
+      scorePenalty += bttsShape.key === "open_btts" ? 0.064 : 0.042;
+      reasons.push(`BTTS形态：${bttsShape.label}，BTTS No 需要更强零封证据。`);
+    }
     if (openMotivation && btts >= 0.43) {
       edgePenalty += 0.025;
       scorePenalty += 0.045;
@@ -4496,6 +4747,11 @@ function marketReviewAdjustments(match, rec) {
     if (favoriteCleanSheet >= 0.26 && under25 >= 0.59 && !openMotivation) {
       scorePenalty -= 0.012;
       reasons.push("低比分零封路径集中，BTTS No 结构有支撑。");
+    }
+    if (bttsRiskShape || bttsLowEventShape) {
+      edgePenalty = Math.max(0, edgePenalty - 0.014);
+      scorePenalty = Math.max(0, scorePenalty - 0.026);
+      reasons.push(`BTTS形态：${bttsShape.label}，BTTS No/零封保护有结构支撑，但仍看价格。`);
     }
   }
 
@@ -4576,6 +4832,16 @@ function marketReviewAdjustments(match, rec) {
         ? "淘汰赛复盘：3球以上和加时前追平路径不低，小球需要更强价格优势。"
         : "第三轮抢分/净胜球或3球以上路径不低，小球不作为主推荐。");
     }
+    if (bttsOpenShape && over25 >= 0.47) {
+      edgePenalty += 0.026;
+      scorePenalty += 0.04;
+      reasons.push(`BTTS形态：${bttsShape.label}，小球要防双方都有进球后的 2-1/1-2。`);
+    }
+    if (bttsLowEventShape) {
+      edgePenalty = Math.max(0, edgePenalty - 0.015);
+      scorePenalty = Math.max(0, scorePenalty - 0.026);
+      reasons.push("BTTS形态：低事件均势，小球与 0-0/1-1 簇有结构支撑。");
+    }
   }
 
   if (rec.marketType === "total" && rec.key === "over25") {
@@ -4592,6 +4858,16 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.024;
       scorePenalty += 0.045;
       reasons.push("研究校准：0-0/1-1 路径不低时，赛前大球需要现场节奏确认。");
+    }
+    if (bttsOpenShape && rec.edge >= 0.035) {
+      edgePenalty = Math.max(0, edgePenalty - 0.018);
+      scorePenalty = Math.max(0, scorePenalty - 0.03);
+      reasons.push(`BTTS形态：${bttsShape.label} 给大球/双进方向低权重支持。`);
+    }
+    if (bttsLowEventShape) {
+      edgePenalty += 0.028;
+      scorePenalty += 0.046;
+      reasons.push("BTTS形态：低事件均势，赛前大球需要更低价格或现场节奏确认。");
     }
   }
 
@@ -6409,6 +6685,19 @@ function aiPredictionEvidence(match, top, rows) {
       ].filter(Boolean).join(" ")
     });
     drivers.push(`数据清晰度：${dataClarity.label}，${dataClarity.notes?.[0] || "用于区分真均势和未知型均势。"}`);
+  }
+  const bttsShape = match.bttsShapeProfile || match.modelV2?.bttsShapeProfile || match.dynamicModel?.goldmanStyle?.bttsShapeProfile;
+  if (bttsShape?.ok) {
+    evidence.push({
+      label: "BTTS/双方进球形态",
+      status: bttsShape.key === "unknown_balance" ? "partial" : "synced",
+      detail: [
+        `${bttsShape.label}，${bttsShape.actionLabel}。`,
+        `BTTS ${formatPercent(bttsShape.metrics?.bttsYes)}，0-0 ${formatPercent(bttsShape.metrics?.nilNil)}，BTTS+0-0 覆盖 ${formatPercent(bttsShape.metrics?.comboCoverage)}。`,
+        `漏掉非0-0零封 ${formatPercent(bttsShape.metrics?.zeroSheetNonNil)}；${bttsShape.comboStatusLabel}。`
+      ].join(" ")
+    });
+    drivers.push(`BTTS形态：${bttsShape.notes?.[0] || `${bttsShape.label}，${bttsShape.actionLabel}。`}`);
   }
   evidence.push({
     label: "近期战绩",

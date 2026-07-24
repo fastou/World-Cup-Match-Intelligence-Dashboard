@@ -765,6 +765,122 @@
         background: #f5faf7;
       }
 
+      .btts-shape-panel {
+        margin: 0 0 10px;
+        padding: 10px;
+        border: 1px solid #d8e3dc;
+        border-radius: 8px;
+        background: #fffdf7;
+      }
+
+      .btts-shape-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .btts-shape-title {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 820;
+      }
+
+      .btts-shape-subtitle {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .btts-shape-badge {
+        flex: 0 0 auto;
+        padding: 4px 7px;
+        border-radius: 999px;
+        background: #fff0d9;
+        color: #9b5a00;
+        font-size: 11px;
+        font-weight: 780;
+        white-space: nowrap;
+      }
+
+      .btts-shape-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .btts-shape-metric {
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .btts-shape-metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .btts-shape-metric strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--ink);
+        font-size: 16px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .btts-shape-columns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .btts-shape-note {
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid #eadfcb;
+        border-radius: 8px;
+        background: #fffaf0;
+      }
+
+      .btts-shape-note strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+      }
+
+      .btts-shape-note ul {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding-left: 16px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .btts-leak-scores {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 8px;
+      }
+
+      .btts-leak-score {
+        padding: 3px 6px;
+        border-radius: 999px;
+        background: #f1f4f0;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 720;
+      }
+
       .prediction-situation-head {
         display: flex;
         align-items: flex-start;
@@ -3171,6 +3287,8 @@
         .line-profile-grid,
         .form-grid,
         .prediction-model-strip,
+        .btts-shape-grid,
+        .btts-shape-columns,
         .situation-team-grid,
         .bettingexpert-row,
         .live-stats-grid,
@@ -5286,6 +5404,88 @@
         };
       }
 
+      function bttsShapeForMatch(match = {}) {
+        return match.bttsShapeProfile || match.modelV2?.bttsShapeProfile || match.dynamicModel?.goldmanStyle?.bttsShapeProfile || null;
+      }
+
+      function recommendationByKey(match = {}, key) {
+        return (match.recommendations || []).find((rec) => rec.key === key) || null;
+      }
+
+      function correctScoreRow(match = {}, score) {
+        return (match.correctScoreRecommendations?.rows || []).find((row) => row.score === score) || null;
+      }
+
+      function renderBttsShape(match) {
+        const shape = bttsShapeForMatch(match);
+        if (!shape?.ok) return "";
+        const metrics = shape.metrics || {};
+        const support = currentLang === "en" ? (shape.supportEn || shape.support || []) : (shape.support || []);
+        const against = currentLang === "en" ? (shape.againstEn || shape.against || []) : (shape.against || []);
+        const label = currentLang === "en" ? shape.labelEn || shape.label : shape.label || shape.labelEn;
+        const action = currentLang === "en" ? shape.actionLabelEn || shape.actionLabel : shape.actionLabel || shape.actionLabelEn;
+        const comboStatus = currentLang === "en" ? shape.comboStatusLabelEn || shape.comboStatusLabel : shape.comboStatusLabel || shape.comboStatusLabelEn;
+        const bttsYesRec = recommendationByKey(match, "bttsYes");
+        const nilNilRow = correctScoreRow(match, "0-0");
+        const bttsPrice = typeof bttsYesRec?.marketPrice === "number" ? bttsYesRec.marketPrice : null;
+        const nilNilPrice = typeof nilNilRow?.marketPrice === "number" ? nilNilRow.marketPrice : null;
+        const comboCost = bttsPrice !== null && nilNilPrice !== null ? bttsPrice + nilNilPrice : null;
+        const comboEdge = comboCost !== null && typeof metrics.comboCoverage === "number" ? metrics.comboCoverage - comboCost : null;
+        const comboLine = comboCost !== null
+          ? (currentLang === "en"
+            ? `BTTS Yes + 0-0 cost ${fmtPrice(comboCost)}; model coverage ${fmtPct(metrics.comboCoverage)}; edge ${fmtPct(comboEdge)}.`
+            : `BTTS Yes + 0-0 成本 ${fmtPrice(comboCost)}；模型覆盖 ${fmtPct(metrics.comboCoverage)}；组合 edge ${fmtPct(comboEdge)}。`)
+          : (currentLang === "en"
+            ? `No complete BTTS + 0-0 live price yet; model coverage is ${fmtPct(metrics.comboCoverage)}.`
+            : `暂未拿齐 BTTS + 0-0 实时价格；模型覆盖 ${fmtPct(metrics.comboCoverage)}。`);
+        const leakScores = Array.isArray(shape.leakScores) ? shape.leakScores : [];
+        return `
+          <section class="btts-shape-panel">
+            <div class="btts-shape-head">
+              <div>
+                <strong class="btts-shape-title">${escapeHtml(currentLang === "en" ? "BTTS Shape" : "双方进球形态")}</strong>
+                <div class="btts-shape-subtitle">${escapeHtml(action || "")}</div>
+              </div>
+              <span class="btts-shape-badge">${escapeHtml(label || "-")}</span>
+            </div>
+            <div class="btts-shape-grid">
+              <div class="btts-shape-metric">
+                <span>${escapeHtml(currentLang === "en" ? "BTTS Yes" : "双方进球")}</span>
+                <strong>${escapeHtml(fmtPct(metrics.bttsYes))}</strong>
+              </div>
+              <div class="btts-shape-metric">
+                <span>${escapeHtml("0-0")}</span>
+                <strong>${escapeHtml(fmtPct(metrics.nilNil))}</strong>
+              </div>
+              <div class="btts-shape-metric">
+                <span>${escapeHtml(currentLang === "en" ? "BTTS + 0-0 cover" : "BTTS + 0-0覆盖")}</span>
+                <strong>${escapeHtml(fmtPct(metrics.comboCoverage))}</strong>
+              </div>
+              <div class="btts-shape-metric">
+                <span>${escapeHtml(currentLang === "en" ? "Clean-sheet leak" : "非0-0零封漏掉")}</span>
+                <strong>${escapeHtml(fmtPct(metrics.zeroSheetNonNil))}</strong>
+              </div>
+            </div>
+            <div class="confidence-note">${escapeHtml(comboLine)} ${escapeHtml(comboStatus || "")}</div>
+            <div class="btts-leak-scores">
+              ${leakScores.length
+                ? leakScores.map((item) => `<span class="btts-leak-score">${escapeHtml(item.score)} · ${escapeHtml(fmtPct(item.probability))}</span>`).join("")
+                : `<span class="btts-leak-score">${escapeHtml(currentLang === "en" ? "Leak scores pending" : "漏掉比分待算")}</span>`}
+            </div>
+            <div class="btts-shape-columns">
+              <div class="btts-shape-note">
+                <strong>${escapeHtml(currentLang === "en" ? "Supports BTTS" : "支持双进")}</strong>
+                ${support.length ? `<ul>${support.slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : `<ul><li>${escapeHtml(currentLang === "en" ? "No strong support yet." : "暂未形成强支持。")}</li></ul>`}
+              </div>
+              <div class="btts-shape-note">
+                <strong>${escapeHtml(currentLang === "en" ? "Against BTTS" : "反对双进")}</strong>
+                ${against.length ? `<ul>${against.slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : `<ul><li>${escapeHtml(currentLang === "en" ? "No major blocker from the score grid." : "比分分布暂未给出明显反对项。")}</li></ul>`}
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
       function renderAiPrediction(match) {
         const prediction = match.aiPrediction || {};
         const model = match.modelV2 || match.dynamicModel?.goldmanStyle || {};
@@ -5360,6 +5560,7 @@
                 </div>
               </div>
               ${renderGroupSituation(match)}
+              ${renderBttsShape(match)}
               <div class="prediction-grid">
                 ${rows.map((row) => `
                   <div class="prediction-prob-card">

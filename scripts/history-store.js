@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS match_snapshots (
   physical_home_xg_delta REAL,
   physical_away_xg_delta REAL,
   physical_draw_delta REAL,
+  btts_shape_key TEXT,
+  btts_shape_label TEXT,
+  btts_combo_coverage REAL,
+  btts_zero_sheet_leak REAL,
+  btts_nil_nil REAL,
   payload_json TEXT NOT NULL,
   FOREIGN KEY(run_id) REFERENCES dashboard_runs(run_id)
 );
@@ -541,6 +546,11 @@ WHERE mk.market_type = 'moneyline';
   await ensureColumn("match_snapshots", "physical_home_xg_delta", "REAL");
   await ensureColumn("match_snapshots", "physical_away_xg_delta", "REAL");
   await ensureColumn("match_snapshots", "physical_draw_delta", "REAL");
+  await ensureColumn("match_snapshots", "btts_shape_key", "TEXT");
+  await ensureColumn("match_snapshots", "btts_shape_label", "TEXT");
+  await ensureColumn("match_snapshots", "btts_combo_coverage", "REAL");
+  await ensureColumn("match_snapshots", "btts_zero_sheet_leak", "REAL");
+  await ensureColumn("match_snapshots", "btts_nil_nil", "REAL");
 }
 
 function json(value) {
@@ -602,6 +612,8 @@ async function recordDashboardSnapshot(payload, options = {}) {
     const groupImpact = (groupSituation.modelImpacts || [])[0] || {};
     const physicalAdjustment = match.modelV2?.physicalMatchupAdjustment || match.dynamicModel?.goldmanStyle?.physicalMatchupAdjustment || {};
     const physicalImpact = physicalAdjustment.impacts || {};
+    const bttsShape = match.bttsShapeProfile || match.modelV2?.bttsShapeProfile || match.dynamicModel?.goldmanStyle?.bttsShapeProfile || {};
+    const bttsMetrics = bttsShape.metrics || {};
     operations.push({
       sql: "DELETE FROM market_snapshots WHERE snapshot_id = ?;",
       params: [snapshotId]
@@ -642,8 +654,9 @@ async function recordDashboardSnapshot(payload, options = {}) {
         group_situation_summary, group_situation_home_status, group_situation_away_status,
         group_situation_home_xg_delta, group_situation_away_xg_delta,
         physical_matchup_summary, physical_home_xg_delta, physical_away_xg_delta, physical_draw_delta,
+        btts_shape_key, btts_shape_label, btts_combo_coverage, btts_zero_sheet_leak, btts_nil_nil,
         payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       params: [
         snapshotId,
         id,
@@ -674,6 +687,11 @@ async function recordDashboardSnapshot(payload, options = {}) {
         numberOrNull(physicalImpact.homeXgDelta),
         numberOrNull(physicalImpact.awayXgDelta),
         numberOrNull(physicalImpact.drawDelta),
+        textOrNull(bttsShape.key),
+        textOrNull(bttsShape.label),
+        numberOrNull(bttsMetrics.comboCoverage),
+        numberOrNull(bttsMetrics.zeroSheetNonNil),
+        numberOrNull(bttsMetrics.nilNil),
         archivedJson(match)
       ]
     });
