@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-24-club-btts-profile-v1";
+const DASHBOARD_MODEL_VERSION = "2026-07-24-shape-calibration-v1";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -2183,6 +2183,144 @@ function researchFactorCalibration(match, probabilities, contextSignals = null, 
   };
 }
 
+function probabilitySnapshot(probabilities = {}) {
+  return {
+    home: roundTo(probabilities.home, 4),
+    draw: roundTo(probabilities.draw, 4),
+    away: roundTo(probabilities.away, 4),
+    over25: roundTo(probabilities.over25, 4),
+    btts: roundTo(probabilities.btts, 4)
+  };
+}
+
+function historicalShapeCalibration(match, probabilities, options = {}) {
+  if (!probabilities?.topScoresFull?.length) {
+    return { ok: false, probabilities, deltas: {}, notes: [], missing: ["比分分布不可用"] };
+  }
+
+  const lambdaHome = Number(probabilities.lambdaHome ?? options.lambdaHome ?? match?.modelV2?.adjusted?.lambdaHome ?? match?.model?.lambdaHome);
+  const lambdaAway = Number(probabilities.lambdaAway ?? options.lambdaAway ?? match?.modelV2?.adjusted?.lambdaAway ?? match?.model?.lambdaAway);
+  const lambdaSum = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? lambdaHome + lambdaAway : null;
+  const xgGap = Number.isFinite(lambdaHome) && Number.isFinite(lambdaAway) ? Math.abs(lambdaHome - lambdaAway) : null;
+  const favorite = favoriteProfile(probabilities);
+  const tone = clubCompetitionTone(match);
+  const knockout = isNationalTeamKnockoutMatch(match);
+  const lowScoreMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals + awayGoals <= 2);
+  const drawLowMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
+  const oneNilMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals + awayGoals === 1);
+  const threePlusMass = scoreDistributionMass(probabilities, (homeGoals, awayGoals) => homeGoals + awayGoals >= 3);
+  const deltas = { home: 0, draw: 0, away: 0, over25: 0, btts: 0 };
+  const notes = [];
+  const missing = [];
+  const clubQualifierScale = tone.isClub && tone.isEuropeanClub && tone.isQualifier ? 0.62 : 1;
+  const clubLowDataScale = tone.isClub && tone.lowData ? 0.72 : 1;
+  const shapeScale = clamp(clubQualifierScale * clubLowDataScale, 0.45, 1);
+
+  if (!Number.isFinite(xgGap) || !Number.isFinite(lambdaSum)) {
+    missing.push("xG 差和总 xG 不完整");
+  } else {
+    if (!tone.isClub) {
+      deltas.btts += 0.034;
+      deltas.over25 += 0.028;
+      deltas.draw -= 0.006;
+      notes.push("国家队/世界杯归档样本显示赛前模型整体低估 BTTS/大2.5，国家队比赛做保守全局回补。");
+    }
+
+    if (xgGap < 0.2 && favorite.favorite <= 0.48) {
+      const lowEventCut = lambdaSum < 2.25 ? 0.034 : 0.024;
+      deltas.over25 -= lowEventCut * shapeScale;
+      deltas.btts -= 0.012 * shapeScale;
+      deltas.draw += 0.006 * shapeScale;
+      notes.push("历史形态：xG 几乎均势且总强度不高时，实际更容易落入 0-0/1-1/一球小胜簇。");
+    } else if (xgGap >= 0.2 && xgGap < 0.45 && favorite.favorite >= 0.38 && favorite.favorite <= 0.58) {
+      deltas.btts += 0.052 * shapeScale;
+      deltas.over25 += 0.024 * shapeScale;
+      deltas.draw += 0.004 * shapeScale;
+      notes.push("历史形态：轻微强弱差的比赛 BTTS 命中率最高，不能只按低比分模板压弱队进球。");
+    }
+
+    if (favorite.favorite >= 0.45 && favorite.favorite <= 0.55 && favorite.gap <= 0.28) {
+      deltas.btts += 0.022 * shapeScale;
+      deltas.draw += 0.006 * shapeScale;
+      notes.push("盘口/模型接近五五开时，历史样本里平局和双方进球更常见，胜负方向不宜过度集中。");
+    }
+
+    if (xgGap >= 0.75 || (favorite.favorite >= 0.62 && xgGap >= 0.55)) {
+      const sideBoost = 0.008 * shapeScale;
+      deltas[favorite.key] += sideBoost;
+      deltas.draw -= 0.012 * shapeScale;
+      deltas[favorite.key === "home" ? "away" : "home"] -= Math.max(0, sideBoost - 0.002);
+      deltas.over25 += 0.044 * shapeScale;
+      deltas.btts += 0.014 * shapeScale;
+      notes.push("历史形态：明显热门更容易带出第三球以上，不能自动把强队优势解释成零封小球。");
+    }
+
+    if (lambdaSum < 2.22 && xgGap < 0.35) {
+      deltas.over25 -= 0.018 * shapeScale;
+      deltas.btts -= 0.008 * shapeScale;
+      notes.push("总 xG 偏低且差距不大时，大球/BTTS 需要现场节奏确认。");
+    }
+  }
+
+  if (knockout && lowScoreMass >= 0.5 && favorite.gap <= 0.34) {
+    deltas.draw += 0.006;
+    deltas.over25 -= 0.008;
+    notes.push("淘汰赛形态：低比分簇占优且强弱差不大，90分钟平局保护继续保留。");
+  }
+
+  if (oneNilMass >= 0.2 && probabilities.btts < 0.52 && !tone.isMls && !tone.isLigaMx) {
+    deltas.btts -= 0.006;
+    notes.push("一球零封路径占比偏高，BTTS Yes 只保留小幅概率，不直接主推。");
+  }
+
+  if (threePlusMass >= 0.45 && probabilities.over25 < 0.5) {
+    deltas.over25 += 0.01;
+    notes.push("比分分布已有 3球+ 簇，但汇总大球偏低，做同源分布回补。");
+  }
+
+  if (tone.isClub && tone.lowData) {
+    notes.push("俱乐部低数据场只做小权重形态校准，阵容/近况未补齐前不把形态当强信号。");
+  }
+
+  for (const key of Object.keys(deltas)) {
+    deltas[key] = roundTo(clamp(deltas[key], key === "draw" ? -0.024 : -0.055, key === "draw" ? 0.035 : 0.075), 4);
+  }
+
+  const hasDelta = Object.values(deltas).some((value) => Math.abs(value) >= 0.001);
+  if (!hasDelta) {
+    return {
+      ok: false,
+      probabilities,
+      deltas,
+      notes: [...new Set(notes)].slice(0, 5),
+      missing: [...new Set(missing)].slice(0, 4)
+    };
+  }
+
+  const adjusted = applyProbabilityDeltasThroughScoreGrid(probabilities, deltas, { markTrendAdjusted: true });
+  return {
+    ok: true,
+    version: "2026.07.24",
+    probabilities: adjusted,
+    deltas,
+    shape: {
+      xgGap: Number.isFinite(xgGap) ? roundTo(xgGap, 3) : null,
+      lambdaSum: Number.isFinite(lambdaSum) ? roundTo(lambdaSum, 3) : null,
+      favorite: favorite.key,
+      favoriteProbability: roundTo(favorite.favorite, 4),
+      lowScoreMass: roundTo(lowScoreMass, 4),
+      drawLowMass: roundTo(drawLowMass, 4),
+      oneNilMass: roundTo(oneNilMass, 4),
+      threePlusMass: roundTo(threePlusMass, 4),
+      clubLowData: Boolean(tone.isClub && tone.lowData)
+    },
+    notes: [...new Set(notes)].slice(0, 6),
+    missing: [...new Set(missing)].slice(0, 4),
+    before: probabilitySnapshot(probabilities),
+    after: probabilitySnapshot(adjusted)
+  };
+}
+
 function favoriteProfile(probabilities = {}) {
   const home = Number(probabilities.home) || 0;
   const away = Number(probabilities.away) || 0;
@@ -2265,42 +2403,42 @@ function clubBttsReviewProfile(tone = {}) {
   if (!tone.isClub) return { bttsDelta: 0, over25Delta: 0, notes: [] };
   if (tone.isMls) {
     return {
-      key: "mls-btts-hot",
-      bttsDelta: 0.12,
-      over25Delta: 0.045,
-      notes: ["BTTS复盘校准：MLS 近三天 15 场有 11 场双进，赛前 BTTS Yes 基线显著上修，但按保守权重处理。"]
+      key: "mls-btts-watch",
+      bttsDelta: 0.025,
+      over25Delta: 0.012,
+      notes: ["BTTS复盘校准：MLS 严格已结算样本仍偏少，不再用宽口径样本强上修；只保留小幅开放倾向。"]
     };
   }
   if (tone.isLigaMx) {
     return {
       key: "liga-mx-btts-watch",
-      bttsDelta: 0.085,
-      over25Delta: 0.035,
-      notes: ["BTTS复盘校准：墨西哥联赛样本 2/2 双进，样本很小，只做中等上修，不直接强推。"]
+      bttsDelta: 0.018,
+      over25Delta: 0.01,
+      notes: ["BTTS复盘校准：墨西哥联赛样本太薄，只保留轻微开放倾向，不直接强推。"]
     };
   }
   if (tone.isCopaSudamericana) {
     return {
-      key: "sudamericana-btts-cold",
-      bttsDelta: -0.035,
-      over25Delta: -0.006,
-      notes: ["BTTS复盘校准：南美杯近三天 8 场仅 3 场双进，不跟随 MLS 的开放节奏，BTTS Yes 降权。"]
+      key: "sudamericana-btts-neutral",
+      bttsDelta: -0.012,
+      over25Delta: -0.004,
+      notes: ["BTTS复盘校准：南美杯严格样本不足以形成强规则，只做轻微降权，核心仍看球队形态和现场数据。"]
     };
   }
   if (tone.isUcl && tone.isQualifier) {
     return {
       key: "ucl-qualifier-btts-cold",
-      bttsDelta: -0.055,
-      over25Delta: -0.018,
-      notes: ["BTTS复盘校准：欧冠资格赛近三天 13 场仅 4 场双进，BTTS No/低比分结构继续保留。"]
+      bttsDelta: -0.025,
+      over25Delta: -0.01,
+      notes: ["BTTS复盘校准：欧冠资格赛近期偏低双进，但资格赛数据噪声大，只做保守降权。"]
     };
   }
   if ((tone.isUel || tone.isUecl) && tone.isQualifier) {
     return {
-      key: "uel-uecl-qualifier-neutral",
-      bttsDelta: 0.006,
-      over25Delta: 0.004,
-      notes: ["BTTS复盘校准：欧联/欧协资格赛双进约四成多，保持中性略开放，不按 MLS 上修。"]
+      key: "uel-uecl-qualifier-cautious",
+      bttsDelta: -0.018,
+      over25Delta: -0.006,
+      notes: ["BTTS复盘校准：欧联/欧协资格赛严格样本偏低双进，保持谨慎，不按联赛开放节奏处理。"]
     };
   }
   return { bttsDelta: 0, over25Delta: 0, notes: [] };
@@ -2322,22 +2460,22 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
   const bttsProfile = clubBttsReviewProfile(tone);
 
   if (tone.isMls) {
-    overBoost += 0.02;
-    bttsBoost += 0.018;
-    if (favorite.favorite >= 0.46 && favorite.gap <= 0.36) favoriteWinPenalty += 0.008;
-    notes.push("MLS 昨日样本偏开放，大2.5/BTTS 不能被低比分基线压得过重，小球和零封只在市场/阵容/现场同时支持时考虑。");
+    overBoost += 0.007;
+    bttsBoost += 0.008;
+    if (favorite.favorite >= 0.46 && favorite.gap <= 0.36) favoriteWinPenalty += 0.006;
+    notes.push("MLS 严格样本仍不足，只保留轻微开放倾向；是否追大球/BTTS 主要看球队形态、首发和现场节奏。");
   } else if (tone.isLigaMx) {
-    overBoost += 0.018;
-    bttsBoost += 0.016;
-    notes.push("墨西哥联赛近期 BTTS 偏热但样本少，BTTS Yes 只做保守上修。");
+    overBoost += 0.006;
+    bttsBoost += 0.007;
+    notes.push("墨西哥联赛样本太薄，BTTS Yes 只做轻微上修，不当成独立买入理由。");
   } else if (tone.isCopaSudamericana) {
     drawBoost += 0.004;
     favoriteWinPenalty += favorite.favorite >= 0.44 ? 0.006 : 0;
-    notes.push("南美杯按单独节奏处理：近期双进比例不高，不套用 MLS/墨西哥联赛的开放校准。");
+    notes.push("南美杯按单独节奏处理：不套用 MLS/墨西哥联赛的开放校准，重点看两回合形势和球队近况。");
   } else if (tone.isLeague || tone.isAmericas) {
-    overBoost += tone.isAmericas ? 0.024 : 0.018;
-    bttsBoost += tone.isAmericas ? 0.022 : 0.016;
-    notes.push("俱乐部联赛/美洲赛事近期复盘更开放，赛前小球和零封路径不能只靠静态评分上修。");
+    overBoost += tone.isAmericas ? 0.01 : 0.008;
+    bttsBoost += tone.isAmericas ? 0.01 : 0.008;
+    notes.push("俱乐部联赛/美洲赛事只保留小幅开放先验，具体方向交给球队形态、近况和盘口分歧校验。");
   }
   if (tone.isEuropeanClub) {
     drawBoost += tone.isQualifier ? 0.008 : 0.005;
@@ -3090,7 +3228,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   if (clubReview.ok) {
     probabilities = clubReview.probabilities;
     match.clubCompetitionAdjustment = {
-      version: "2026.07.24-btts-profile",
+      version: "2026.07.24-club-shape-profile",
       tone: clubReview.tone,
       deltas: clubReview.deltas,
       notes: clubReview.notes
@@ -3150,6 +3288,33 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       ].join(" ")
     });
   }
+  const historicalShape = historicalShapeCalibration(match, probabilities, {
+    lambdaHome,
+    lambdaAway,
+    clubReview,
+    researchCalibration
+  });
+  if (historicalShape.ok) {
+    probabilities = historicalShape.probabilities;
+    match.historicalShapeCalibration = {
+      version: historicalShape.version,
+      deltas: historicalShape.deltas,
+      shape: historicalShape.shape,
+      before: historicalShape.before,
+      after: historicalShape.after,
+      notes: historicalShape.notes,
+      missing: historicalShape.missing
+    };
+    drivers.push({
+      label: "历史形态校准",
+      homeXgDelta: 0,
+      awayXgDelta: 0,
+      reason: [
+        `按历史赛果/现场回测形态统一修正：平局 ${historicalShape.deltas.draw >= 0 ? "+" : ""}${formatPercent(historicalShape.deltas.draw)}，大2.5 ${historicalShape.deltas.over25 >= 0 ? "+" : ""}${formatPercent(historicalShape.deltas.over25)}，BTTS ${historicalShape.deltas.btts >= 0 ? "+" : ""}${formatPercent(historicalShape.deltas.btts)}。`,
+        ...historicalShape.notes.slice(0, 2)
+      ].join(" ")
+    });
+  }
   probabilities.lambdaHome = lambdaHome;
   probabilities.lambdaAway = lambdaAway;
   const preMarket = normalizeProbabilityTriplet(probabilities);
@@ -3188,7 +3353,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   return {
     name: "Elo-xG Poisson 概率模型",
     style: "Goldman-style public methodology, not Goldman Sachs official model",
-    version: "2026.07.24-club-btts-profile",
+    version: "2026.07.24-shape-calibration",
     base: {
       lambdaHome: baseHome,
       lambdaAway: baseAway
@@ -3214,7 +3379,7 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       missing: researchCalibration.missing || []
     },
     clubCompetitionAdjustment: clubReview.ok ? {
-      version: "2026.07.24-btts-profile",
+      version: "2026.07.24-club-shape-profile",
       tone: clubReview.tone,
       deltas: clubReview.deltas,
       notes: clubReview.notes
@@ -3223,7 +3388,21 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       deltas: {},
       notes: []
     },
-    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准"].includes(driver.label)).slice(0, 12),
+    historicalShapeCalibration: historicalShape.ok ? {
+      version: historicalShape.version,
+      deltas: historicalShape.deltas,
+      shape: historicalShape.shape,
+      before: historicalShape.before,
+      after: historicalShape.after,
+      notes: historicalShape.notes,
+      missing: historicalShape.missing
+    } : {
+      ok: false,
+      deltas: historicalShape.deltas || {},
+      notes: historicalShape.notes || [],
+      missing: historicalShape.missing || []
+    },
+    drivers: drivers.filter((driver) => driver.homeXgDelta || driver.awayXgDelta || ["俱乐部评分基线", "盘口轻校准", "衍生市场维度", "门将/年龄衍生修正", "身体错配衍生修正", "补充数据维度", "赛会趋势", "俱乐部赛事校准", "淘汰赛复盘修正", "研究因子校准", "历史形态校准"].includes(driver.label)).slice(0, 14),
     probabilities
   };
 }
@@ -3245,6 +3424,7 @@ function applyGoldmanStyleModel(match, fifaRankings = {}, options = {}) {
     calibration: modelV2.calibration,
     drivers: modelV2.drivers,
     researchFactorCalibration: modelV2.researchFactorCalibration,
+    historicalShapeCalibration: modelV2.historicalShapeCalibration,
     clubCompetitionAdjustment: modelV2.clubCompetitionAdjustment,
     physicalMatchupAdjustment: modelV2.physicalMatchupAdjustment,
     topScores: (modelV2.probabilities.topScores || []).slice(0, 6)
@@ -3923,41 +4103,39 @@ function marketReviewAdjustments(match, rec) {
 
   if (clubTone.isClub && ["total", "btts"].includes(rec.marketType) && typeof rec.marketPrice === "number") {
     if ((clubTone.isMls || clubTone.isLigaMx) && rec.key === "under25") {
-      edgePenalty += rec.marketPrice <= 0.54 ? 0.13 : 0.09;
-      scorePenalty += rec.marketPrice <= 0.54 ? 0.14 : 0.1;
-      if (preMatch && clubTone.isMls) forceNoBuy = true;
+      edgePenalty += rec.marketPrice <= 0.5 ? 0.055 : 0.035;
+      scorePenalty += rec.marketPrice <= 0.5 ? 0.065 : 0.045;
       reasons.push(clubTone.isMls
-        ? "MLS 复盘：近三天 15 场中 11 场双进，赛前小球需要市场、阵容和现场节奏三重确认；当前不做主买。"
-        : "墨西哥联赛近期双进偏热，小球赛前只能观察，不能按低比分模板主推。");
+        ? "MLS 严格样本不足以单独否定小球；但赛前小球需要球队形态、盘口和现场节奏共同支持。"
+        : "墨西哥联赛样本太薄，小球不能按低比分模板主推，需等待更多证据。");
     }
     if ((clubTone.isMls || clubTone.isLigaMx) && rec.key === "bttsNo") {
-      edgePenalty += clubTone.isMls ? (rec.marketPrice <= 0.58 ? 0.16 : 0.12) : (rec.marketPrice <= 0.58 ? 0.13 : 0.095);
-      scorePenalty += clubTone.isMls ? (rec.marketPrice <= 0.58 ? 0.18 : 0.13) : (rec.marketPrice <= 0.58 ? 0.145 : 0.105);
-      if (preMatch) forceNoBuy = true;
+      edgePenalty += clubTone.isMls ? (rec.marketPrice <= 0.55 ? 0.07 : 0.045) : (rec.marketPrice <= 0.55 ? 0.055 : 0.038);
+      scorePenalty += clubTone.isMls ? (rec.marketPrice <= 0.55 ? 0.085 : 0.055) : (rec.marketPrice <= 0.55 ? 0.065 : 0.045);
       reasons.push(clubTone.isMls
-        ? "MLS 复盘：BTTS Yes 实际 11/15，赛前 BTTS No 禁止主推，只能等现场射门/阵容共同支持。"
-        : "墨西哥联赛小样本 2/2 双进，BTTS No 先降级，等待更多样本或现场证据。");
+        ? "MLS 不能用宽口径样本直接禁止 BTTS No，但赛前零封判断必须有阵容/现场射门证据。"
+        : "墨西哥联赛 BTTS No 先降级，等待更多样本或现场证据。");
     }
     if ((clubTone.isMls || clubTone.isLigaMx) && (rec.key === "over25" || rec.key === "bttsYes") && rec.marketPrice <= 0.67) {
-      scorePenalty = Math.max(0, scorePenalty - (clubTone.isMls ? 0.05 : 0.035));
-      edgePenalty = Math.max(0, edgePenalty - (clubTone.isMls ? 0.025 : 0.015));
+      scorePenalty = Math.max(0, scorePenalty - (clubTone.isMls ? 0.018 : 0.012));
+      edgePenalty = Math.max(0, edgePenalty - (clubTone.isMls ? 0.008 : 0.006));
       reasons.push(clubTone.isMls
-        ? "MLS 开放度复盘支持 Over/BTTS Yes 进入观察队列，但仍按价格和首发纪律执行。"
-        : "墨西哥联赛双进样本偏热，Over/BTTS Yes 可观察但不按小样本强买。");
+        ? "MLS 只给 Over/BTTS Yes 小幅观察加权，仍按价格、形态和首发纪律执行。"
+        : "墨西哥联赛 Over/BTTS Yes 可观察但不按小样本强买。");
     }
     if (clubTone.isCopaSudamericana && rec.key === "bttsYes") {
-      edgePenalty += 0.035;
-      scorePenalty += 0.055;
-      reasons.push("南美杯近三天 BTTS Yes 仅 3/8，不跟随 MLS 双进逻辑，BTTS Yes 需要更低价格或明确阵容证据。");
+      edgePenalty += 0.025;
+      scorePenalty += 0.035;
+      reasons.push("南美杯不跟随 MLS 双进逻辑，BTTS Yes 需要更低价格或明确阵容/近况证据。");
     }
     if (clubTone.isCopaSudamericana && rec.key === "bttsNo" && rec.marketPrice <= 0.58) {
       scorePenalty = Math.max(0, scorePenalty - 0.012);
       reasons.push("南美杯近期双进比例偏低，BTTS No 结构有一定支撑，但仍看两回合形势和主客场。");
     }
     if (clubTone.isUcl && clubTone.isQualifier && rec.key === "bttsYes") {
-      edgePenalty += 0.04;
-      scorePenalty += 0.06;
-      reasons.push("欧冠资格赛近三天 BTTS Yes 仅 4/13，赛前 BTTS Yes 降权。");
+      edgePenalty += 0.032;
+      scorePenalty += 0.045;
+      reasons.push("欧冠资格赛严格样本偏低双进，赛前 BTTS Yes 需要价格或阵容强证据。");
     }
     if (clubTone.isUcl && clubTone.isQualifier && rec.key === "bttsNo") {
       scorePenalty = Math.max(0, scorePenalty - 0.028);
@@ -4008,6 +4186,35 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.035;
       scorePenalty += 0.055;
       reasons.push("低数据俱乐部赛里，模型方向与胜平负市场相反且 edge 不够厚，只保留观察。");
+    }
+  }
+
+  const chartStatusKnown = Boolean(rec.chart);
+  const hasPolymarketCurve = rec.chart?.source === "Polymarket" && Array.isArray(rec.chart.history) && rec.chart.history.length >= 2;
+  const positivePreEdge = preMatch
+    && typeof rec.edge === "number"
+    && rec.edge >= 0.06
+    && typeof rec.marketPrice === "number"
+    && typeof rec.modelProbability === "number";
+  if (positivePreEdge) {
+    const modelMarketGap = rec.modelProbability - rec.marketPrice;
+    if (["total", "btts"].includes(rec.marketType) && modelMarketGap >= 0.14) {
+      const severeGap = modelMarketGap >= 0.22 || rec.marketPrice <= 0.18;
+      edgePenalty += severeGap ? 0.085 : 0.052;
+      scorePenalty += severeGap ? 0.105 : 0.07;
+      if ((clubLowData || (chartStatusKnown && !hasPolymarketCurve)) && severeGap) forceNoBuy = true;
+      reasons.push("历史盘口分歧校准：衍生盘模型正 edge 但市场明显不认可时，过去命中差，必须有真实曲线/阵容/近况二次确认。");
+    }
+    if (rec.marketType === "moneyline" && rec.key !== "draw" && modelMarketGap >= 0.13 && rec.marketPrice <= 0.34) {
+      edgePenalty += 0.06;
+      scorePenalty += 0.08;
+      if (clubLowData && rec.edge < 0.14) forceNoBuy = true;
+      reasons.push("历史盘口分歧校准：低价胜平负正 edge 多数是模型漏掉背景信息，先降级为二次确认。");
+    }
+    if (rec.marketType === "moneyline" && rec.key === "draw" && modelMarketGap >= 0.1 && rec.marketPrice <= 0.22) {
+      edgePenalty += 0.035;
+      scorePenalty += 0.05;
+      reasons.push("历史盘口分歧校准：低价平局虽有价值空间，但样本波动大，只能观察/小仓。");
     }
   }
 
@@ -6322,13 +6529,13 @@ function tradableRecommendationScore(rec, match = null) {
     score -= clubTone.isUcl && clubTone.isQualifier ? 0.015 : 0.055;
   }
   if ((clubTone?.isMls || clubTone?.isLigaMx) && rec.key === "under25") {
-    score -= clubTone.isMls ? 0.15 : 0.1;
+    score -= clubTone.isMls ? 0.055 : 0.04;
   }
   if ((clubTone?.isMls || clubTone?.isLigaMx) && rec.key === "bttsNo") {
-    score -= clubTone.isMls ? 0.18 : 0.135;
+    score -= clubTone.isMls ? 0.07 : 0.052;
   }
   if ((clubTone?.isMls || clubTone?.isLigaMx) && (rec.key === "bttsYes" || rec.key === "over25") && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.67) {
-    score += clubTone.isMls ? 0.055 : 0.035;
+    score += clubTone.isMls ? 0.018 : 0.012;
   }
   if (clubTone?.isCopaSudamericana && rec.key === "bttsYes") {
     score -= 0.04;
@@ -7775,6 +7982,86 @@ function liveRecommendationEvidenceGate(rec, match, live, liveModel, dataQuality
   };
 }
 
+function liveHistoricalStageAdjustment(match, live) {
+  const elapsed = elapsedMinuteFromLive(live, match);
+  const homeScore = liveScoreNumber(live?.score?.home);
+  const awayScore = liveScoreNumber(live?.score?.away);
+  if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) {
+    return { ok: false, homeMultiplier: 1, awayMultiplier: 1, notes: [] };
+  }
+
+  const stats = live?.stats || {};
+  const homeShots = Number(stats.home?.shots);
+  const awayShots = Number(stats.away?.shots);
+  const homeSot = Number(stats.home?.shotsOnTarget);
+  const awaySot = Number(stats.away?.shotsOnTarget);
+  const totalShots = (Number.isFinite(homeShots) ? homeShots : 0) + (Number.isFinite(awayShots) ? awayShots : 0);
+  const totalSot = (Number.isFinite(homeSot) ? homeSot : 0) + (Number.isFinite(awaySot) ? awaySot : 0);
+  const hasStats = hasUsefulLiveStats(stats);
+  const totalGoals = homeScore + awayScore;
+  const goalDiff = homeScore - awayScore;
+  let homeMultiplier = 1;
+  let awayMultiplier = 1;
+  const notes = [];
+
+  if (totalGoals === 0 && elapsed >= 45) {
+    const factor = hasStats && (totalSot >= 4 || totalShots >= 16) ? 0.74 : 0.52;
+    homeMultiplier *= factor;
+    awayMultiplier *= factor;
+    notes.push(`${elapsed}' 仍为 0-0，历史现场样本显示后续 BTTS/大2.5 大幅下降；除非射正/禁区压力很强，否则剩余进球降权。`);
+  } else if (totalGoals === 0 && elapsed >= 20) {
+    const factor = hasStats && (totalSot >= 3 || totalShots >= 12) ? 0.9 : 0.72;
+    homeMultiplier *= factor;
+    awayMultiplier *= factor;
+    notes.push(`${elapsed}' 仍为 0-0，按时间衰减下调后续进球强度，等待18-25分钟后的真实节奏再补仓。`);
+  }
+
+  if (totalGoals >= 1 && elapsed <= 30) {
+    const factor = totalGoals >= 2 || totalSot >= 3 ? 1.22 : 1.14;
+    homeMultiplier *= factor;
+    awayMultiplier *= factor;
+    notes.push(`${elapsed}' 早球已出现，历史现场样本里后续大球路径明显上升，但仍需当前价不过热。`);
+  }
+
+  if (totalGoals >= 2 && elapsed >= 40 && elapsed <= 55) {
+    homeMultiplier *= 1.12;
+    awayMultiplier *= 1.12;
+    notes.push(`${elapsed}' 已有 ${totalGoals} 球，半场附近多球样本更容易继续开放，大球/其他比分路径上修。`);
+  }
+
+  if (hasStats && elapsed >= 55 && goalDiff !== 0) {
+    const trailingSide = goalDiff > 0 ? "away" : "home";
+    const leaderSide = goalDiff > 0 ? "home" : "away";
+    const trailingSot = Number(stats[trailingSide]?.shotsOnTarget);
+    const trailingShots = Number(stats[trailingSide]?.shots);
+    const leaderSot = Number(stats[leaderSide]?.shotsOnTarget);
+    const leaderShots = Number(stats[leaderSide]?.shots);
+    const trailingThreat = (Number.isFinite(trailingSot) && trailingSot >= 2)
+      || (Number.isFinite(trailingShots) && trailingShots >= 8 && Number.isFinite(trailingSot) && trailingSot >= 1);
+    if (trailingThreat) {
+      if (trailingSide === "home") homeMultiplier *= 1.17;
+      else awayMultiplier *= 1.17;
+      notes.push(`${elapsed}' 落后一方已有射正/射门威胁，追平和 BTTS 路径按现场样本上修。`);
+    }
+    if (Number.isFinite(leaderSot) && Number.isFinite(trailingSot) && Number.isFinite(leaderShots) && Number.isFinite(trailingShots)) {
+      if (leaderSot - trailingSot >= 3 && leaderShots - trailingShots >= 6) {
+        if (leaderSide === "home") homeMultiplier *= 1.12;
+        else awayMultiplier *= 1.12;
+        notes.push(`${elapsed}' 领先方仍保持射正压制，不能简单按领先控节奏砍掉下一球路径。`);
+      }
+    }
+  }
+
+  homeMultiplier = clamp(homeMultiplier, 0.42, 1.55);
+  awayMultiplier = clamp(awayMultiplier, 0.42, 1.55);
+  return {
+    ok: Math.abs(homeMultiplier - 1) >= 0.01 || Math.abs(awayMultiplier - 1) >= 0.01,
+    homeMultiplier,
+    awayMultiplier,
+    notes: [...new Set(notes)].slice(0, 4)
+  };
+}
+
 function liveRemainingGoalModel(match, live) {
   const elapsed = elapsedMinuteFromLive(live, match);
   if (live?.completed) {
@@ -7890,6 +8177,13 @@ function liveRemainingGoalModel(match, live) {
   if (Number.isFinite(homeSaves) && homeSaves >= 4 && elapsed >= 55) {
     awayLambda *= 0.88;
     notes.push(`${match.homeName}门将已完成 ${homeSaves} 次扑救，${match.awayName}后续转化率降权。`);
+  }
+
+  const liveStageAdjustment = liveHistoricalStageAdjustment(match, live);
+  if (liveStageAdjustment.ok) {
+    homeLambda *= liveStageAdjustment.homeMultiplier;
+    awayLambda *= liveStageAdjustment.awayMultiplier;
+    notes.push(...liveStageAdjustment.notes);
   }
 
   homeLambda = clamp(homeLambda, 0.001, 3.5);
@@ -17598,9 +17892,29 @@ function compactMarketCatalog(catalog = null) {
   };
 }
 
+function compactProbabilityBlock(probabilities = null) {
+  if (!probabilities || typeof probabilities !== "object") return probabilities;
+  return {
+    ...probabilities,
+    topScores: compactArray(probabilities.topScores, 10),
+    topScoresFull: compactArray(probabilities.topScoresFull, 30)
+  };
+}
+
+function compactModelV2(model = null) {
+  if (!model || typeof model !== "object") return model;
+  return {
+    ...model,
+    probabilities: compactProbabilityBlock(model.probabilities),
+    drivers: compactArray(model.drivers, 8)
+  };
+}
+
 function compactMatch(match = {}) {
   return {
     ...match,
+    probabilities: compactProbabilityBlock(match.probabilities),
+    modelV2: compactModelV2(match.modelV2),
     recommendations: (match.recommendations || []).map(compactRecommendation),
     correctScoreRecommendations: compactCorrectScoreRecommendations(match.correctScoreRecommendations),
     marketCatalog: compactMarketCatalog(match.marketCatalog),
