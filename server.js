@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-24-clarity-shape-v1";
+const DASHBOARD_MODEL_VERSION = "2026-07-24-clarity-shape-v2";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -815,6 +815,15 @@ const NON_SOCCER_POSITION_KEYWORDS = [
   "formula 1",
   "f1",
   "golf",
+  "cricket",
+  "t20",
+  "odi",
+  "test match",
+  "wicket",
+  "ipl",
+  "lanka premier league",
+  "big bash",
+  "cpl",
   "dota",
   "dota2",
   "dota 2",
@@ -10805,55 +10814,62 @@ function buildRuleTradePlan(match) {
     })
     .sort((a, b) => ((a.disciplinedEdge ?? a.edge) || 0) - ((b.disciplinedEdge ?? b.edge) || 0));
   const primary = primaryCandidates[0] || null;
-  const secondary = actionable.filter((rec) => rec !== primary).slice(0, 3);
-  const headline = primary
+  const observationPrimary = primary || actionable[0] || null;
+  const primaryIsStrict = Boolean(primary);
+  const secondary = actionable.filter((rec) => rec !== observationPrimary).slice(0, 3);
+  const headline = primaryIsStrict
     ? `${primary.name}，${formatCents(primary.marketPrice)} 附近只做${match.tradingGate?.allowStrongTrade ? "按计划" : "小仓/观察"}。`
-    : "没有达到价格纪律的正向盘口，先观察。";
+    : observationPrimary
+      ? `${observationPrimary.name} 是当前最好的观察候选，但未达到主买纪律。`
+      : "没有达到价格纪律的正向盘口，先观察。";
   const confidence = match.tradingGate?.allowStrongTrade
     ? "high"
-    : match.completeness?.confidence === "low" || !primary
+    : match.completeness?.confidence === "low" || !primaryIsStrict
       ? "low"
       : "medium";
-  const action = primary
-    ? primary.decision?.gated
+  const action = observationPrimary
+    ? observationPrimary.decision?.gated || !primaryIsStrict
       ? "watch"
-      : primary.decision?.action === "BUY" || primary.decision?.action === "BUY_SMALL"
+      : observationPrimary.decision?.action === "BUY" || observationPrimary.decision?.action === "BUY_SMALL"
         ? "buy"
         : "watch"
     : "avoid";
-  const stake = primary
-    ? match.tradingGate?.allowStrongTrade
-      ? primary.decision?.stake || "small"
-      : "small-watch"
+  const stake = observationPrimary
+    ? primaryIsStrict && match.tradingGate?.allowStrongTrade
+      ? observationPrimary.decision?.stake || "small"
+      : "none"
     : "none";
-  const entryText = primary
-    ? primary.decision?.gated
-      ? primary.decision?.reasons?.some((reason) => /本地参考价|不是真实盘口|真实盘口不可用|盘口价格缺失/.test(String(reason)))
-        ? `当前价格只作参考；等真实盘口/曲线可用后，参考上限 ${formatCents(primary.maxBuyPrice)}，超过不追。`
-        : `理想 ${formatCents(Math.min(primary.marketPrice, primary.maxBuyPrice || primary.marketPrice))} 以下；参考上限 ${formatCents(primary.maxBuyPrice)}，超过 ${formatCents(Math.max(primary.marketPrice + 0.04, primary.maxBuyPrice || primary.marketPrice))} 不追。`
-      : `建议买价不高于 ${formatCents(primary.maxBuyPrice)}；超过就等待回落。`
+  const entryText = observationPrimary
+    ? !primaryIsStrict
+      ? `观察上限 ${formatCents(observationPrimary.maxBuyPrice)}；需要真实盘口、首发/伤停或现场数据确认后才升级。`
+      : observationPrimary.decision?.gated
+        ? observationPrimary.decision?.reasons?.some((reason) => /本地参考价|不是真实盘口|真实盘口不可用|盘口价格缺失/.test(String(reason)))
+          ? `当前价格只作参考；等真实盘口/曲线可用后，参考上限 ${formatCents(observationPrimary.maxBuyPrice)}，超过不追。`
+          : `理想 ${formatCents(Math.min(observationPrimary.marketPrice, observationPrimary.maxBuyPrice || observationPrimary.marketPrice))} 以下；参考上限 ${formatCents(observationPrimary.maxBuyPrice)}，超过 ${formatCents(Math.max(observationPrimary.marketPrice + 0.04, observationPrimary.maxBuyPrice || observationPrimary.marketPrice))} 不追。`
+        : `建议买价不高于 ${formatCents(observationPrimary.maxBuyPrice)}；超过就等待回落。`
     : "无建议买价。";
 
   return {
     ok: true,
     source: "rule",
     updatedAt: new Date().toISOString(),
-    title: primary ? "AI 操作摘要" : "AI 观察摘要",
+    title: primaryIsStrict ? "AI 操作摘要" : "AI 观察摘要",
     action,
     confidence,
     stake,
-    primary: primary ? {
-      key: primary.key,
-      name: primary.name,
-      marketTypeLabel: primary.marketTypeLabel,
-      marketPrice: primary.marketPrice,
-      modelProbability: primary.modelProbability,
-      edge: primary.edge,
-      disciplinedEdge: primary.disciplinedEdge,
-      reviewDiscipline: primary.reviewDiscipline,
-      maxBuyPrice: primary.maxBuyPrice,
-      decisionLabel: primary.decision?.label || "观察",
-      source: primary.chart?.source || match.manualMarkets?.source || ""
+    primary: observationPrimary ? {
+      key: observationPrimary.key,
+      name: observationPrimary.name,
+      marketTypeLabel: observationPrimary.marketTypeLabel,
+      marketPrice: observationPrimary.marketPrice,
+      modelProbability: observationPrimary.modelProbability,
+      edge: observationPrimary.edge,
+      disciplinedEdge: observationPrimary.disciplinedEdge,
+      reviewDiscipline: observationPrimary.reviewDiscipline,
+      maxBuyPrice: observationPrimary.maxBuyPrice,
+      decisionLabel: primaryIsStrict ? observationPrimary.decision?.label || "观察" : "观察候选",
+      source: observationPrimary.chart?.source || match.manualMarkets?.source || "",
+      observationOnly: !primaryIsStrict
     } : null,
     secondary: secondary.map((rec) => ({
       key: rec.key,
@@ -10879,14 +10895,16 @@ function buildRuleTradePlan(match) {
     })),
     summary: headline,
     entryText,
-    rationale: primary ? [
-      `模型概率 ${formatPercent(primary.modelProbability)}，当前价格 ${formatCents(primary.marketPrice)}，纪律后 edge ${formatPercent(primary.disciplinedEdge ?? primary.edge)}${typeof primary.disciplinedEdge === "number" && primary.disciplinedEdge !== primary.edge ? `（原始 ${formatPercent(primary.edge)}）` : ""}。`,
-      ...(primary.reviewDiscipline?.reasons || []),
+    rationale: observationPrimary ? [
+      primaryIsStrict
+        ? `模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`
+        : `这是观察候选，不是主买：模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`,
+      ...(observationPrimary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
-      primary.holderSummary?.count ? `该盘口公开持仓 ${primary.holderSummary.count} 人，Top holder ${primary.holderSummary.topHolder || "-"}。` : "",
-      primary.eliteSummary?.count ? `世界杯 Top10 命中 ${primary.eliteSummary.count} 人，当前价值约 ${Math.round(primary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
+      observationPrimary.holderSummary?.count ? `该盘口公开持仓 ${observationPrimary.holderSummary.count} 人，Top holder ${observationPrimary.holderSummary.topHolder || "-"}。` : "",
+      observationPrimary.eliteSummary?.count ? `世界杯 Top10 命中 ${observationPrimary.eliteSummary.count} 人，当前价值约 ${Math.round(observationPrimary.eliteSummary.totalCurrentValue || 0).toLocaleString()} 美元。` : ""
     ].filter(Boolean).slice(0, 5) : ["当前没有非胜平负盘口达到价格纪律；胜平负长赔只作为激进观察，不做首选。"],
-    riskNotes: topRiskNotes(match, primary),
+    riskNotes: topRiskNotes(match, observationPrimary),
     disclaimer: "研究辅助，不自动下单；首发、伤停、盘口跳动后需要重新评估。"
   };
 }
