@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-27-mls-primary-v1";
+const DASHBOARD_MODEL_VERSION = "2026-07-27-club-empirical-v1";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -2794,8 +2794,111 @@ function clubCompetitionTone(match = {}) {
   };
 }
 
+const CLUB_COMPETITION_BACKTEST_PROFILES = {
+  mls: {
+    key: "mls",
+    label: "MLS",
+    sample: 30,
+    mainDirectionHitRate: 0.533,
+    bttsRate: 0.567,
+    over25Rate: 0.567,
+    drawRate: 0.233,
+    avgGoals: 2.67,
+    confidence: "medium"
+  },
+  ligaMx: {
+    key: "liga-mx",
+    label: "墨西哥联赛",
+    sample: 9,
+    mainDirectionHitRate: 0.444,
+    bttsRate: 0.667,
+    over25Rate: 0.556,
+    drawRate: 0.222,
+    avgGoals: 2.33,
+    confidence: "low"
+  },
+  sudamericana: {
+    key: "sudamericana",
+    label: "南美杯",
+    sample: 9,
+    mainDirectionHitRate: 0.444,
+    bttsRate: 0.556,
+    over25Rate: 0.778,
+    drawRate: 0.333,
+    avgGoals: 3.44,
+    confidence: "low"
+  },
+  uclQualifier: {
+    key: "ucl-qualifier",
+    label: "欧冠资格赛",
+    sample: 13,
+    mainDirectionHitRate: 0.615,
+    bttsRate: 0.308,
+    over25Rate: 0.385,
+    drawRate: 0.231,
+    avgGoals: 2.54,
+    confidence: "medium"
+  },
+  uelQualifier: {
+    key: "uel-qualifier",
+    label: "欧联杯资格赛",
+    sample: 9,
+    mainDirectionHitRate: 0.333,
+    bttsRate: 0.444,
+    over25Rate: 0.444,
+    drawRate: 0.222,
+    avgGoals: 2.44,
+    confidence: "low"
+  },
+  ueclQualifier: {
+    key: "uecl-qualifier",
+    label: "欧协联资格赛",
+    sample: 28,
+    mainDirectionHitRate: 0.536,
+    bttsRate: 0.536,
+    over25Rate: 0.5,
+    drawRate: 0.214,
+    avgGoals: 2.93,
+    confidence: "medium"
+  }
+};
+
+function clubEmpiricalBacktestProfile(tone = {}) {
+  if (!tone.isClub) return null;
+  const profile = tone.isMls
+    ? CLUB_COMPETITION_BACKTEST_PROFILES.mls
+    : tone.isLigaMx
+      ? CLUB_COMPETITION_BACKTEST_PROFILES.ligaMx
+      : tone.isCopaSudamericana
+        ? CLUB_COMPETITION_BACKTEST_PROFILES.sudamericana
+        : tone.isUcl && tone.isQualifier
+          ? CLUB_COMPETITION_BACKTEST_PROFILES.uclQualifier
+          : tone.isUel && tone.isQualifier
+            ? CLUB_COMPETITION_BACKTEST_PROFILES.uelQualifier
+            : tone.isUecl && tone.isQualifier
+              ? CLUB_COMPETITION_BACKTEST_PROFILES.ueclQualifier
+              : null;
+  if (!profile) return null;
+  const sampleWeight = clamp((profile.sample || 0) / 30, 0.45, 1);
+  return {
+    ...profile,
+    sampleWeight,
+    note: `${profile.label} 近 ${profile.sample} 场临时匹配回测：主方向 ${formatPercent(profile.mainDirectionHitRate)}，BTTS ${formatPercent(profile.bttsRate)}，大2.5 ${formatPercent(profile.over25Rate)}，平局 ${formatPercent(profile.drawRate)}。`
+  };
+}
+
 function clubBttsReviewProfile(tone = {}) {
   if (!tone.isClub) return { bttsDelta: 0, over25Delta: 0, notes: [] };
+  const empirical = clubEmpiricalBacktestProfile(tone);
+  if (empirical) {
+    const weight = empirical.sampleWeight || 0.5;
+    return {
+      key: `${empirical.key}-empirical-shape`,
+      bttsDelta: clamp((empirical.bttsRate - 0.5) * 0.17 * weight, -0.035, 0.035),
+      over25Delta: clamp((empirical.over25Rate - 0.5) * 0.17 * weight, -0.035, 0.035),
+      notes: [`BTTS/大小球实证画像：${empirical.note} 样本仍按低权重使用，不替代球队形态和盘口。`]
+    };
+  }
   if (tone.isMls) {
     return {
       key: "mls-btts-watch",
@@ -2850,9 +2953,11 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
   let bttsBoost = 0;
   let overBoost = 0;
   let favoriteWinPenalty = 0;
+  let favoriteWinBoost = 0;
   const probabilityDeltas = { btts: 0, over25: 0 };
   const notes = [];
   const bttsProfile = clubBttsReviewProfile(tone);
+  const empirical = clubEmpiricalBacktestProfile(tone);
 
   if (tone.isMls) {
     overBoost += 0.007;
@@ -2897,15 +3002,35 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
     overBoost += 0.006;
     drawBoost += 0.004;
   }
+  if (empirical) {
+    const weight = empirical.sampleWeight || 0.5;
+    const bttsDelta = clamp((empirical.bttsRate - 0.5) * 0.12 * weight, -0.018, 0.022);
+    const overDelta = clamp((empirical.over25Rate - 0.5) * 0.13 * weight, -0.018, 0.026);
+    const drawDelta = clamp((empirical.drawRate - 0.24) * 0.11 * weight, -0.008, 0.014);
+    if (bttsDelta > 0) bttsBoost += bttsDelta;
+    else probabilityDeltas.btts += bttsDelta;
+    if (overDelta > 0) overBoost += overDelta;
+    else probabilityDeltas.over25 += overDelta;
+    if (drawDelta > 0) drawBoost += drawDelta;
+    if (empirical.mainDirectionHitRate >= 0.58 && favorite.favorite >= 0.42) {
+      favoriteWinBoost += clamp((empirical.mainDirectionHitRate - 0.56) * 0.13 * weight, 0.004, 0.014);
+      favoriteWinPenalty = Math.max(0, favoriteWinPenalty - 0.008);
+    }
+    if (empirical.mainDirectionHitRate <= 0.47 && favorite.favorite >= 0.38) {
+      favoriteWinPenalty += clamp((0.5 - empirical.mainDirectionHitRate) * 0.13 * weight, 0.004, 0.016);
+    }
+    notes.push(`赛事回测画像：${empirical.note}`);
+  }
 
   drawBoost = clamp(drawBoost, 0, 0.035);
   bttsBoost = clamp(bttsBoost, 0, 0.055);
   overBoost = clamp(overBoost, 0, 0.055);
   favoriteWinPenalty = clamp(favoriteWinPenalty, 0, 0.035);
+  favoriteWinBoost = clamp(favoriteWinBoost, 0, 0.02);
   probabilityDeltas.btts += bttsProfile.bttsDelta || 0;
   probabilityDeltas.over25 += bttsProfile.over25Delta || 0;
   notes.push(...(bttsProfile.notes || []));
-  if (!drawBoost && !bttsBoost && !overBoost && !favoriteWinPenalty) {
+  if (!drawBoost && !bttsBoost && !overBoost && !favoriteWinPenalty && !favoriteWinBoost) {
     if (!probabilityDeltas.btts && !probabilityDeltas.over25) return { ok: false, probabilities, deltas: {}, notes };
   }
 
@@ -2918,6 +3043,8 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
     if (homeGoals === awayGoals) weight += drawBoost;
     if (homeGoals > 0 && awayGoals > 0) weight += bttsBoost;
     if (totalGoals >= 3) weight += overBoost;
+    if (favoriteKey === "home" && homeGoals > awayGoals) weight += favoriteWinBoost;
+    if (favoriteKey === "away" && awayGoals > homeGoals) weight += favoriteWinBoost;
     if (favoriteKey === "home" && homeGoals > awayGoals) weight -= favoriteWinPenalty;
     if (favoriteKey === "away" && awayGoals > homeGoals) weight -= favoriteWinPenalty;
     return weight;
@@ -2930,6 +3057,17 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
     ok: true,
     probabilities: adjusted,
     tone,
+    backtestProfile: empirical ? {
+      key: empirical.key,
+      label: empirical.label,
+      sample: empirical.sample,
+      mainDirectionHitRate: empirical.mainDirectionHitRate,
+      bttsRate: empirical.bttsRate,
+      over25Rate: empirical.over25Rate,
+      drawRate: empirical.drawRate,
+      avgGoals: empirical.avgGoals,
+      confidence: empirical.confidence
+    } : null,
     deltas: {
       home: roundTo((adjusted.home || 0) - (probabilities.home || 0), 4),
       draw: roundTo((adjusted.draw || 0) - (probabilities.draw || 0), 4),
@@ -3623,8 +3761,9 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
   if (clubReview.ok) {
     probabilities = clubReview.probabilities;
     match.clubCompetitionAdjustment = {
-      version: "2026.07.24-club-shape-profile",
+      version: "2026.07.27-club-empirical-profile",
       tone: clubReview.tone,
+      backtestProfile: clubReview.backtestProfile,
       deltas: clubReview.deltas,
       notes: clubReview.notes
     };
@@ -3801,8 +3940,9 @@ function buildGoldmanStyleModel(match, fifaRankings = {}, { useMarketCalibration
       missing: researchCalibration.missing || []
     },
     clubCompetitionAdjustment: clubReview.ok ? {
-      version: "2026.07.24-club-shape-profile",
+      version: "2026.07.27-club-empirical-profile",
       tone: clubReview.tone,
+      backtestProfile: clubReview.backtestProfile,
       deltas: clubReview.deltas,
       notes: clubReview.notes
     } : {
@@ -4513,6 +4653,7 @@ function marketReviewAdjustments(match, rec) {
   const drawPathMass = scoreMass(match, (homeGoals, awayGoals) => homeGoals === awayGoals && homeGoals + awayGoals <= 2);
   const clubTone = clubCompetitionTone(match);
   const clubLowData = clubTone.isClub && clubTone.lowData;
+  const clubEmpirical = clubEmpiricalBacktestProfile(clubTone);
   const dataClarity = match?.modelV2?.dataClarityProfile
     || match?.dynamicModel?.goldmanStyle?.dataClarityProfile
     || match?.dataClarityProfile
@@ -4553,20 +4694,37 @@ function marketReviewAdjustments(match, rec) {
         : "墨西哥联赛 BTTS No 先降级，等待更多样本或现场证据。");
     }
     if ((clubTone.isMls || clubTone.isLigaMx) && (rec.key === "over25" || rec.key === "bttsYes") && rec.marketPrice <= 0.67) {
-      scorePenalty = Math.max(0, scorePenalty - (clubTone.isMls ? 0.018 : 0.012));
-      edgePenalty = Math.max(0, edgePenalty - (clubTone.isMls ? 0.008 : 0.006));
+      scorePenalty = Math.max(0, scorePenalty - (clubTone.isMls ? 0.018 : 0.026));
+      edgePenalty = Math.max(0, edgePenalty - (clubTone.isMls ? 0.008 : 0.014));
       reasons.push(clubTone.isMls
         ? "MLS 只给 Over/BTTS Yes 小幅观察加权，仍按价格、形态和首发纪律执行。"
-        : "墨西哥联赛 Over/BTTS Yes 可观察但不按小样本强买。");
+        : "墨西哥联赛近期 BTTS 偏高，Over/BTTS Yes 可提高观察优先级，但仍按价格执行。");
     }
     if (clubTone.isCopaSudamericana && rec.key === "bttsYes") {
-      edgePenalty += 0.025;
-      scorePenalty += 0.035;
-      reasons.push("南美杯不跟随 MLS 双进逻辑，BTTS Yes 需要更低价格或明确阵容/近况证据。");
+      if (rec.marketPrice <= 0.64 && btts >= 0.46) {
+        edgePenalty = Math.max(0, edgePenalty - 0.01);
+        scorePenalty = Math.max(0, scorePenalty - 0.022);
+        reasons.push("南美杯近期偏开放，BTTS Yes 不再默认降级；但样本小，价格过高仍不追。");
+      } else {
+        edgePenalty += 0.012;
+        scorePenalty += 0.018;
+        reasons.push("南美杯 BTTS Yes 只在价格和球队形态都支持时进入观察，不能单靠赛事样本。");
+      }
     }
     if (clubTone.isCopaSudamericana && rec.key === "bttsNo" && rec.marketPrice <= 0.58) {
-      scorePenalty = Math.max(0, scorePenalty - 0.012);
-      reasons.push("南美杯近期双进比例偏低，BTTS No 结构有一定支撑，但仍看两回合形势和主客场。");
+      edgePenalty += 0.032;
+      scorePenalty += 0.046;
+      reasons.push("南美杯近期大球/双进偏热，BTTS No 需要明确零封证据才看。");
+    }
+    if (clubTone.isCopaSudamericana && rec.key === "over25") {
+      edgePenalty = Math.max(0, edgePenalty - 0.016);
+      scorePenalty = Math.max(0, scorePenalty - 0.03);
+      reasons.push("南美杯近样本大2.5偏高，Over 2.5 观察优先级上修。");
+    }
+    if (clubTone.isCopaSudamericana && rec.key === "under25") {
+      edgePenalty += 0.038;
+      scorePenalty += 0.06;
+      reasons.push("南美杯近样本大球率偏高，小球赛前主推门槛提高。");
     }
     if (clubTone.isUcl && clubTone.isQualifier && rec.key === "bttsYes") {
       edgePenalty += 0.032;
@@ -4580,10 +4738,14 @@ function marketReviewAdjustments(match, rec) {
     }
     if (clubTone.isEuropeanClub && clubTone.isQualifier && rec.key === "under25") {
       const extremeQualifierUnder = rec.marketPrice <= 0.18;
-      edgePenalty += extremeQualifierUnder ? 0.12 : 0.07;
-      scorePenalty += extremeQualifierUnder ? 0.12 : 0.075;
-      if (clubLowData || extremeQualifierUnder) forceNoBuy = true;
-      reasons.push("低数据欧战资格赛复盘：小球 edge 容易被盘口口径/早球风险放大，必须先核验真实盘口和阵容。");
+      const uclColdProfile = clubTone.isUcl && clubEmpirical?.over25Rate <= 0.42;
+      edgePenalty += uclColdProfile ? (extremeQualifierUnder ? 0.06 : 0.025) : (extremeQualifierUnder ? 0.12 : 0.07);
+      scorePenalty += uclColdProfile ? (extremeQualifierUnder ? 0.07 : 0.035) : (extremeQualifierUnder ? 0.12 : 0.075);
+      if (!uclColdProfile && (clubLowData || extremeQualifierUnder)) forceNoBuy = true;
+      if (extremeQualifierUnder) forceNoBuy = true;
+      reasons.push(uclColdProfile
+        ? "欧冠资格赛近样本偏低双进/低大球，小球可观察，但极端低价仍需核验盘口。"
+        : "低数据欧战资格赛复盘：小球 edge 容易被盘口口径/早球风险放大，必须先核验真实盘口和阵容。");
     }
     if (clubLowData && rec.key === "under25" && rec.marketPrice <= 0.46) {
       const strongMarketConflict = rec.marketPrice <= 0.42;
@@ -4622,6 +4784,23 @@ function marketReviewAdjustments(match, rec) {
       edgePenalty += 0.035;
       scorePenalty += 0.055;
       reasons.push("低数据俱乐部赛里，模型方向与胜平负市场相反且 edge 不够厚，只保留观察。");
+    }
+  }
+  if (clubEmpirical && rec.marketType === "moneyline" && typeof rec.edge === "number") {
+    if (rec.key === favoriteKey && clubEmpirical.mainDirectionHitRate >= 0.58 && rec.modelProbability >= 0.5 && rec.edge >= 0.06) {
+      edgePenalty = Math.max(0, edgePenalty - 0.01);
+      scorePenalty = Math.max(0, scorePenalty - 0.02);
+      reasons.push(`${clubEmpirical.label} 近样本主方向命中较好，胜平负热门方向可提高观察优先级。`);
+    }
+    if (rec.key !== "draw" && clubEmpirical.mainDirectionHitRate <= 0.47 && rec.edge < 0.14) {
+      edgePenalty += 0.032;
+      scorePenalty += 0.05;
+      reasons.push(`${clubEmpirical.label} 近样本胜平负主方向偏弱，单边胜负需要更厚 edge。`);
+    }
+    if (rec.key === "draw" && clubEmpirical.drawRate >= 0.3 && rec.edge >= 0.035) {
+      edgePenalty = Math.max(0, edgePenalty - 0.012);
+      scorePenalty = Math.max(0, scorePenalty - 0.018);
+      reasons.push(`${clubEmpirical.label} 近样本平局率偏高，平局可作为观察路径。`);
     }
   }
 
@@ -7039,6 +7218,7 @@ function tradableRecommendationScore(rec, match = null) {
   const disciplinePenalty = rec.reviewDiscipline?.scorePenalty || 0;
   let score = edgeValue + holderBoost + recommendationMarketPriority(rec) * 0.003 + trendScoreBoost(match, rec) - disciplinePenalty;
   const clubTone = match ? clubCompetitionTone(match) : null;
+  const clubEmpirical = clubTone ? clubEmpiricalBacktestProfile(clubTone) : null;
   if (clubTone?.isClub && clubTone.lowData && rec.key === "under25" && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.46) {
     score -= 0.06;
   }
@@ -7055,10 +7235,16 @@ function tradableRecommendationScore(rec, match = null) {
     score += clubTone.isMls ? 0.018 : 0.012;
   }
   if (clubTone?.isCopaSudamericana && rec.key === "bttsYes") {
-    score -= 0.04;
+    score += 0.018;
   }
   if (clubTone?.isCopaSudamericana && rec.key === "bttsNo") {
-    score += 0.012;
+    score -= 0.035;
+  }
+  if (clubTone?.isCopaSudamericana && rec.key === "over25") {
+    score += 0.032;
+  }
+  if (clubTone?.isCopaSudamericana && rec.key === "under25") {
+    score -= 0.045;
   }
   if (clubTone?.isUcl && clubTone.isQualifier && rec.key === "bttsYes") {
     score -= 0.035;
@@ -7074,6 +7260,15 @@ function tradableRecommendationScore(rec, match = null) {
   }
   if (isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue)) {
     score += 0.035;
+  }
+  if (!clubTone?.isMls && isHighProbabilityClubMoneylinePrimary(match, rec, edgeValue)) {
+    score += clubTone?.isUcl && clubTone.isQualifier ? 0.03 : 0.02;
+  }
+  if (clubEmpirical && rec.marketType === "moneyline" && rec.key !== "draw" && clubEmpirical.mainDirectionHitRate <= 0.47) {
+    score -= 0.04;
+  }
+  if (clubEmpirical && rec.marketType === "moneyline" && rec.key === "draw" && clubEmpirical.drawRate >= 0.3) {
+    score += 0.018;
   }
   const deepHandicap = favoriteDeepHandicapInfo(match, rec);
   if (clubTone?.isClub && deepHandicap?.favoriteGivingLine && deepHandicap.absLine >= 1.5) {
@@ -7104,7 +7299,7 @@ function hasReviewDisqualificationReason(rec) {
   return Boolean(rec?.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|不做主买|赛前 BTTS No 禁止主推|低 edge 不再主推|BTTS 与小球结构冲突|低数据俱乐部赛|明显不支持小球|市场更偏双方进球|必须先核验|强队赢球不等于穿深让|不跟随 MLS 双进逻辑|赛前 BTTS Yes 降权/.test(String(reason))));
 }
 
-function isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue = null) {
+function isHighProbabilityClubMoneylinePrimary(match, rec, edgeValue = null) {
   const effectiveEdge = typeof edgeValue === "number"
     ? edgeValue
     : typeof rec?.disciplinedEdge === "number"
@@ -7114,14 +7309,27 @@ function isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue = null) {
   if (rec?.marketType !== "moneyline" || rec.key === "draw") return false;
   if (!match?.tradingGate?.allowPriceAdvice) return false;
   const tone = clubCompetitionTone(match);
-  if (!tone.isMls) return false;
+  if (!tone.isClub) return false;
+  const empirical = clubEmpiricalBacktestProfile(tone);
+  if (!empirical || empirical.mainDirectionHitRate < 0.53) return false;
   const topWinKey = match.probabilities?.home >= match.probabilities?.away ? "home" : "away";
-  if (rec.key !== topWinKey || rec.modelProbability < 0.68) return false;
+  const probabilityFloor = tone.isMls
+    ? 0.68
+    : tone.isUcl && tone.isQualifier
+      ? 0.56
+      : 0.64;
+  const edgeFloor = tone.isMls ? 0.06 : tone.isUcl && tone.isQualifier ? 0.065 : 0.08;
+  if (effectiveEdge < edgeFloor) return false;
+  if (rec.key !== topWinKey || rec.modelProbability < probabilityFloor) return false;
   const peers = new Map((match.recommendations || []).filter((row) => row.marketType === "moneyline").map((row) => [row.key, row]));
   const otherWin = rec.key === "home" ? peers.get("away") : peers.get("home");
   const marketSupports = typeof otherWin?.marketPrice !== "number"
     || rec.marketPrice >= otherWin.marketPrice - 0.025;
   return marketSupports || effectiveEdge >= 0.12;
+}
+
+function isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue = null) {
+  return clubCompetitionTone(match).isMls && isHighProbabilityClubMoneylinePrimary(match, rec, edgeValue);
 }
 
 function isPrimaryTradeCandidate(match, rec) {
@@ -7131,7 +7339,7 @@ function isPrimaryTradeCandidate(match, rec) {
   if (rec.marketType !== "moneyline") return true;
   if (rec.key === "draw") return false;
   const topWinKey = match.probabilities?.home >= match.probabilities?.away ? "home" : "away";
-  if (isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue)) return true;
+  if (isHighProbabilityClubMoneylinePrimary(match, rec, edgeValue)) return true;
   return Boolean(
     match.tradingGate?.allowStrongTrade
     && rec.key === topWinKey
@@ -11212,8 +11420,8 @@ function buildRuleTradePlan(match) {
       primaryIsStrict
         ? `模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`
         : `这是观察候选，不是主买：模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`,
-      isHighProbabilityMlsMoneylinePrimary(match, observationPrimary)
-        ? "MLS 主方向概率达到高置信门槛，且价格纪律仍为正，因此允许进入首选；阵容/伤停未确认时仍按小仓/观察处理。"
+      isHighProbabilityClubMoneylinePrimary(match, observationPrimary)
+        ? `${clubEmpiricalBacktestProfile(clubCompetitionTone(match))?.label || "该赛事"} 主方向概率达到赛事门槛，且价格纪律仍为正，因此允许进入首选；阵容/伤停未确认时仍按小仓/观察处理。`
         : "",
       ...(observationPrimary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
