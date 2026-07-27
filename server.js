@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-24-btts-shape-v3";
+const DASHBOARD_MODEL_VERSION = "2026-07-27-mls-primary-v1";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -7072,6 +7072,9 @@ function tradableRecommendationScore(rec, match = null) {
   if (clubTone?.isClub && (clubTone.isLeague || clubTone.isAmericas) && (rec.key === "over25" || rec.key === "bttsYes") && typeof rec.marketPrice === "number" && rec.marketPrice >= 0.54) {
     score += 0.012;
   }
+  if (isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue)) {
+    score += 0.035;
+  }
   const deepHandicap = favoriteDeepHandicapInfo(match, rec);
   if (clubTone?.isClub && deepHandicap?.favoriteGivingLine && deepHandicap.absLine >= 1.5) {
     score -= clubTone.lowData ? 0.095 : 0.07;
@@ -7101,6 +7104,26 @@ function hasReviewDisqualificationReason(rec) {
   return Boolean(rec?.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|不做主买|赛前 BTTS No 禁止主推|低 edge 不再主推|BTTS 与小球结构冲突|低数据俱乐部赛|明显不支持小球|市场更偏双方进球|必须先核验|强队赢球不等于穿深让|不跟随 MLS 双进逻辑|赛前 BTTS Yes 降权/.test(String(reason))));
 }
 
+function isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue = null) {
+  const effectiveEdge = typeof edgeValue === "number"
+    ? edgeValue
+    : typeof rec?.disciplinedEdge === "number"
+      ? rec.disciplinedEdge
+      : rec?.edge;
+  if (!Number.isFinite(effectiveEdge) || effectiveEdge < 0.06) return false;
+  if (rec?.marketType !== "moneyline" || rec.key === "draw") return false;
+  if (!match?.tradingGate?.allowPriceAdvice) return false;
+  const tone = clubCompetitionTone(match);
+  if (!tone.isMls) return false;
+  const topWinKey = match.probabilities?.home >= match.probabilities?.away ? "home" : "away";
+  if (rec.key !== topWinKey || rec.modelProbability < 0.68) return false;
+  const peers = new Map((match.recommendations || []).filter((row) => row.marketType === "moneyline").map((row) => [row.key, row]));
+  const otherWin = rec.key === "home" ? peers.get("away") : peers.get("home");
+  const marketSupports = typeof otherWin?.marketPrice !== "number"
+    || rec.marketPrice >= otherWin.marketPrice - 0.025;
+  return marketSupports || effectiveEdge >= 0.12;
+}
+
 function isPrimaryTradeCandidate(match, rec) {
   if (!isActionableRecommendation(rec, match)) return false;
   const edgeValue = typeof rec.disciplinedEdge === "number" ? rec.disciplinedEdge : rec.edge;
@@ -7108,6 +7131,7 @@ function isPrimaryTradeCandidate(match, rec) {
   if (rec.marketType !== "moneyline") return true;
   if (rec.key === "draw") return false;
   const topWinKey = match.probabilities?.home >= match.probabilities?.away ? "home" : "away";
+  if (isHighProbabilityMlsMoneylinePrimary(match, rec, edgeValue)) return true;
   return Boolean(
     match.tradingGate?.allowStrongTrade
     && rec.key === topWinKey
@@ -11188,6 +11212,9 @@ function buildRuleTradePlan(match) {
       primaryIsStrict
         ? `模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`
         : `这是观察候选，不是主买：模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`,
+      isHighProbabilityMlsMoneylinePrimary(match, observationPrimary)
+        ? "MLS 主方向概率达到高置信门槛，且价格纪律仍为正，因此允许进入首选；阵容/伤停未确认时仍按小仓/观察处理。"
+        : "",
       ...(observationPrimary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
       observationPrimary.holderSummary?.count ? `该盘口公开持仓 ${observationPrimary.holderSummary.count} 人，Top holder ${observationPrimary.holderSummary.topHolder || "-"}。` : "",
