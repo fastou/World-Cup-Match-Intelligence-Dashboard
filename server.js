@@ -90,7 +90,7 @@ const KNOCKOUT_PHASE_START_SHANGHAI = process.env.KNOCKOUT_PHASE_START_SHANGHAI 
 const KNOCKOUT_PHASE_START_KEY = KNOCKOUT_PHASE_START_SHANGHAI.replace(/\D/g, "");
 const ROUND_OF_16_PHASE_START_SHANGHAI = process.env.ROUND_OF_16_PHASE_START_SHANGHAI || "2026-07-04";
 const ROUND_OF_16_PHASE_START_KEY = ROUND_OF_16_PHASE_START_SHANGHAI.replace(/\D/g, "");
-const DASHBOARD_MODEL_VERSION = "2026-07-27-club-empirical-v1";
+const DASHBOARD_MODEL_VERSION = "2026-07-28-open-league-value-v1";
 const ROUND_OF_32_TOP_TWO_PATHS = {
   C: {
     winner: { opponentGroup: "F", opponentRank: 2, matchNo: 76, labelZh: "C组第一 vs F组第二", labelEn: "Group C winner vs Group F runner-up" },
@@ -2809,12 +2809,12 @@ const CLUB_COMPETITION_BACKTEST_PROFILES = {
   ligaMx: {
     key: "liga-mx",
     label: "墨西哥联赛",
-    sample: 9,
-    mainDirectionHitRate: 0.444,
-    bttsRate: 0.667,
-    over25Rate: 0.556,
-    drawRate: 0.222,
-    avgGoals: 2.33,
+    sample: 11,
+    mainDirectionHitRate: 0.364,
+    bttsRate: 0.727,
+    over25Rate: 0.636,
+    drawRate: 0.182,
+    avgGoals: 2.45,
     confidence: "low"
   },
   sudamericana: {
@@ -2887,16 +2887,43 @@ function clubEmpiricalBacktestProfile(tone = {}) {
   };
 }
 
+function isEmpiricalOpenValueProfile(profile) {
+  if (!profile || (profile.sample || 0) < 8) return false;
+  const weakMainDirection = Number(profile.mainDirectionHitRate) <= 0.48;
+  const openScoring = Number(profile.bttsRate) >= 0.6 || Number(profile.over25Rate) >= 0.6;
+  return weakMainDirection && openScoring;
+}
+
+function isOpenLeagueUnderdogValue(match, rec, profile = null, tone = null) {
+  if (!match || !rec || rec.marketType !== "moneyline" || rec.key === "draw") return false;
+  const effectiveTone = tone || clubCompetitionTone(match);
+  const empirical = profile || clubEmpiricalBacktestProfile(effectiveTone);
+  if (!effectiveTone?.isClub || !(effectiveTone.isLeague || effectiveTone.isAmericas)) return false;
+  if (!isEmpiricalOpenValueProfile(empirical)) return false;
+  const edgeValue = typeof rec.edge === "number" ? rec.edge : null;
+  const marketPrice = typeof rec.marketPrice === "number" ? rec.marketPrice : null;
+  if (!Number.isFinite(edgeValue) || !Number.isFinite(marketPrice)) return false;
+  const edgeFloor = effectiveTone.isLigaMx ? 0.075 : 0.095;
+  const priceCeiling = effectiveTone.isLigaMx ? 0.36 : 0.34;
+  if (edgeValue < edgeFloor || marketPrice > priceCeiling) return false;
+  const homeWin = Number(match?.probabilities?.home) || 0;
+  const awayWin = Number(match?.probabilities?.away) || 0;
+  const topWinKey = homeWin >= awayWin ? "home" : "away";
+  const winGap = Math.abs(homeWin - awayWin);
+  return rec.key !== topWinKey && winGap <= 0.22;
+}
+
 function clubBttsReviewProfile(tone = {}) {
   if (!tone.isClub) return { bttsDelta: 0, over25Delta: 0, notes: [] };
   const empirical = clubEmpiricalBacktestProfile(tone);
   if (empirical) {
     const weight = empirical.sampleWeight || 0.5;
+    const openValue = isEmpiricalOpenValueProfile(empirical);
     return {
       key: `${empirical.key}-empirical-shape`,
-      bttsDelta: clamp((empirical.bttsRate - 0.5) * 0.17 * weight, -0.035, 0.035),
-      over25Delta: clamp((empirical.over25Rate - 0.5) * 0.17 * weight, -0.035, 0.035),
-      notes: [`BTTS/大小球实证画像：${empirical.note} 样本仍按低权重使用，不替代球队形态和盘口。`]
+      bttsDelta: clamp((empirical.bttsRate - 0.5) * (openValue ? 0.22 : 0.17) * weight, -0.035, 0.042),
+      over25Delta: clamp((empirical.over25Rate - 0.5) * (openValue ? 0.22 : 0.17) * weight, -0.035, 0.04),
+      notes: [`BTTS/大小球实证画像：${empirical.note} ${openValue ? "开放且主方向命中偏弱，模型会提高双方进球/大球警惕，并降低单边热门确定性。" : "样本仍按低权重使用，不替代球队形态和盘口。"}`]
     };
   }
   if (tone.isMls) {
@@ -2965,9 +2992,11 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
     if (favorite.favorite >= 0.46 && favorite.gap <= 0.36) favoriteWinPenalty += 0.006;
     notes.push("MLS 严格样本仍不足，只保留轻微开放倾向；是否追大球/BTTS 主要看球队形态、首发和现场节奏。");
   } else if (tone.isLigaMx) {
-    overBoost += 0.006;
-    bttsBoost += 0.007;
-    notes.push("墨西哥联赛样本太薄，BTTS Yes 只做轻微上修，不当成独立买入理由。");
+    overBoost += 0.012;
+    bttsBoost += 0.014;
+    drawBoost += 0.003;
+    if (favorite.favorite >= 0.38) favoriteWinPenalty += favorite.gap <= 0.32 ? 0.014 : 0.008;
+    notes.push("墨西哥联赛复盘：近期 BTTS/大球偏热且赛前主方向命中偏弱，降低单边热门确定性，优先识别开放盘和冷门保护。");
   } else if (tone.isCopaSudamericana) {
     drawBoost += 0.004;
     favoriteWinPenalty += favorite.favorite >= 0.44 ? 0.006 : 0;
@@ -3004,8 +3033,9 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
   }
   if (empirical) {
     const weight = empirical.sampleWeight || 0.5;
-    const bttsDelta = clamp((empirical.bttsRate - 0.5) * 0.12 * weight, -0.018, 0.022);
-    const overDelta = clamp((empirical.over25Rate - 0.5) * 0.13 * weight, -0.018, 0.026);
+    const openValue = isEmpiricalOpenValueProfile(empirical);
+    const bttsDelta = clamp((empirical.bttsRate - 0.5) * (openValue ? 0.18 : 0.12) * weight, -0.018, 0.034);
+    const overDelta = clamp((empirical.over25Rate - 0.5) * (openValue ? 0.18 : 0.13) * weight, -0.018, 0.034);
     const drawDelta = clamp((empirical.drawRate - 0.24) * 0.11 * weight, -0.008, 0.014);
     if (bttsDelta > 0) bttsBoost += bttsDelta;
     else probabilityDeltas.btts += bttsDelta;
@@ -3017,7 +3047,7 @@ function clubCompetitionReviewAdjustment(match, probabilities) {
       favoriteWinPenalty = Math.max(0, favoriteWinPenalty - 0.008);
     }
     if (empirical.mainDirectionHitRate <= 0.47 && favorite.favorite >= 0.38) {
-      favoriteWinPenalty += clamp((0.5 - empirical.mainDirectionHitRate) * 0.13 * weight, 0.004, 0.016);
+      favoriteWinPenalty += clamp((0.5 - empirical.mainDirectionHitRate) * (openValue ? 0.2 : 0.13) * weight, 0.004, openValue ? 0.026 : 0.016);
     }
     notes.push(`赛事回测画像：${empirical.note}`);
   }
@@ -4654,6 +4684,7 @@ function marketReviewAdjustments(match, rec) {
   const clubTone = clubCompetitionTone(match);
   const clubLowData = clubTone.isClub && clubTone.lowData;
   const clubEmpirical = clubEmpiricalBacktestProfile(clubTone);
+  const openLeagueUnderdogValue = isOpenLeagueUnderdogValue(match, rec, clubEmpirical, clubTone);
   const dataClarity = match?.modelV2?.dataClarityProfile
     || match?.dynamicModel?.goldmanStyle?.dataClarityProfile
     || match?.dataClarityProfile
@@ -4780,10 +4811,14 @@ function marketReviewAdjustments(match, rec) {
     const marketFavorite = [["home", moneyline.home], ["away", moneyline.away]]
       .filter(([, value]) => typeof value === "number")
       .sort((a, b) => b[1] - a[1])[0]?.[0] || "";
-    if (marketFavorite && rec.key !== "draw" && rec.key !== marketFavorite && rec.edge < 0.12) {
+    if (marketFavorite && rec.key !== "draw" && rec.key !== marketFavorite && rec.edge < 0.12 && !openLeagueUnderdogValue) {
       edgePenalty += 0.035;
       scorePenalty += 0.055;
       reasons.push("低数据俱乐部赛里，模型方向与胜平负市场相反且 edge 不够厚，只保留观察。");
+    } else if (marketFavorite && rec.key !== "draw" && rec.key !== marketFavorite && openLeagueUnderdogValue) {
+      edgePenalty += 0.012;
+      scorePenalty += 0.018;
+      reasons.push(`${clubEmpirical?.label || "开放联赛"}复盘：主方向命中偏弱，低价冷门正 edge 可列入小仓观察，但不能升级主买。`);
     }
   }
   if (clubEmpirical && rec.marketType === "moneyline" && typeof rec.edge === "number") {
@@ -4792,10 +4827,13 @@ function marketReviewAdjustments(match, rec) {
       scorePenalty = Math.max(0, scorePenalty - 0.02);
       reasons.push(`${clubEmpirical.label} 近样本主方向命中较好，胜平负热门方向可提高观察优先级。`);
     }
-    if (rec.key !== "draw" && clubEmpirical.mainDirectionHitRate <= 0.47 && rec.edge < 0.14) {
+    if (rec.key !== "draw" && clubEmpirical.mainDirectionHitRate <= 0.47 && rec.edge < 0.14 && !openLeagueUnderdogValue) {
       edgePenalty += 0.032;
       scorePenalty += 0.05;
       reasons.push(`${clubEmpirical.label} 近样本胜平负主方向偏弱，单边胜负需要更厚 edge。`);
+    } else if (openLeagueUnderdogValue) {
+      scorePenalty = Math.max(0, scorePenalty - 0.012);
+      reasons.push(`${clubEmpirical.label} 近样本热门方向不稳，冷门胜只能作为价格保护/小仓观察路径。`);
     }
     if (rec.key === "draw" && clubEmpirical.drawRate >= 0.3 && rec.edge >= 0.035) {
       edgePenalty = Math.max(0, edgePenalty - 0.012);
@@ -4806,10 +4844,16 @@ function marketReviewAdjustments(match, rec) {
 
   if (dataClarity.unknownBalance && preMatch && typeof rec.edge === "number" && rec.edge > 0) {
     const largerEdge = rec.edge >= 0.08;
-    edgePenalty += largerEdge ? 0.055 : 0.035;
-    scorePenalty += largerEdge ? 0.075 : 0.05;
-    if (["total", "btts"].includes(rec.marketType) && rec.edge < 0.14) forceNoBuy = true;
-    reasons.push("数据清晰度校准：概率接近属于未知型均势，不能把模型 edge 直接解释成 BTTS、小球或胜平负方向。");
+    if (openLeagueUnderdogValue) {
+      edgePenalty += 0.018;
+      scorePenalty += 0.024;
+      reasons.push("数据清晰度仍低：冷门正 edge 只允许小仓观察，需等首发/现场确认，不按强信号处理。");
+    } else {
+      edgePenalty += largerEdge ? 0.055 : 0.035;
+      scorePenalty += largerEdge ? 0.075 : 0.05;
+      if (["total", "btts"].includes(rec.marketType) && rec.edge < 0.14) forceNoBuy = true;
+      reasons.push("数据清晰度校准：概率接近属于未知型均势，不能把模型 edge 直接解释成 BTTS、小球或胜平负方向。");
+    }
   }
 
   const chartStatusKnown = Boolean(rec.chart);
@@ -4829,10 +4873,16 @@ function marketReviewAdjustments(match, rec) {
       reasons.push("历史盘口分歧校准：衍生盘模型正 edge 但市场明显不认可时，过去命中差，必须有真实曲线/阵容/近况二次确认。");
     }
     if (rec.marketType === "moneyline" && rec.key !== "draw" && modelMarketGap >= 0.13 && rec.marketPrice <= 0.34) {
-      edgePenalty += 0.06;
-      scorePenalty += 0.08;
-      if (clubLowData && rec.edge < 0.14) forceNoBuy = true;
-      reasons.push("历史盘口分歧校准：低价胜平负正 edge 多数是模型漏掉背景信息，先降级为二次确认。");
+      if (openLeagueUnderdogValue) {
+        edgePenalty += 0.018;
+        scorePenalty += 0.026;
+        reasons.push("低价冷门与盘口分歧较大：开放联赛可观察，但必须用小仓和现场节奏复核。");
+      } else {
+        edgePenalty += 0.06;
+        scorePenalty += 0.08;
+        if (clubLowData && rec.edge < 0.14) forceNoBuy = true;
+        reasons.push("历史盘口分歧校准：低价胜平负正 edge 多数是模型漏掉背景信息，先降级为二次确认。");
+      }
     }
     if (rec.marketType === "moneyline" && rec.key === "draw" && modelMarketGap >= 0.1 && rec.marketPrice <= 0.22) {
       edgePenalty += 0.035;
@@ -5059,6 +5109,7 @@ function marketReviewAdjustments(match, rec) {
     edgePenalty,
     scorePenalty,
     forceNoBuy,
+    openLeagueUnderdogValue,
     reasons: [...new Set(reasons)].slice(0, 4),
     conflict: reasons.length > 0
   };
@@ -5071,6 +5122,7 @@ function applyReviewDiscipline(rec, match) {
     edgePenalty: roundTo(adjustment.edgePenalty, 4),
     scorePenalty: roundTo(adjustment.scorePenalty, 4),
     forceNoBuy: Boolean(adjustment.forceNoBuy),
+    openLeagueUnderdogValue: Boolean(adjustment.openLeagueUnderdogValue),
     reasons: adjustment.reasons
   };
   if (typeof disciplinedEdge === "number" && Number.isFinite(disciplinedEdge)) {
@@ -5083,7 +5135,7 @@ function applyReviewDiscipline(rec, match) {
     if (adjustment.forceNoBuy || disciplinedEdge < 0.06 || rec.decision.action === "WATCH") {
       rec.decision = {
         action: adjustment.forceNoBuy ? "NO_TRADE" : disciplinedEdge >= 0.035 ? "WATCH" : "NO_TRADE",
-        label: adjustment.forceNoBuy ? "待核验不买" : disciplinedEdge >= 0.035 ? "复盘降级观察" : "复盘降级不买",
+        label: adjustment.forceNoBuy ? "待核验不买" : disciplinedEdge >= 0.035 ? (adjustment.openLeagueUnderdogValue ? "冷门小仓观察" : "复盘降级观察") : "复盘降级不买",
         stake: "none",
         gated: true,
         reasons: [...(rec.decision.reasons || []), ...adjustment.reasons].slice(0, 6)
@@ -7232,7 +7284,10 @@ function tradableRecommendationScore(rec, match = null) {
     score -= clubTone.isMls ? 0.07 : 0.052;
   }
   if ((clubTone?.isMls || clubTone?.isLigaMx) && (rec.key === "bttsYes" || rec.key === "over25") && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.67) {
-    score += clubTone.isMls ? 0.018 : 0.012;
+    score += clubTone.isMls ? 0.018 : 0.026;
+  }
+  if (clubTone?.isLigaMx && (rec.key === "bttsYes" || rec.key === "over25") && typeof rec.marketPrice === "number" && rec.marketPrice <= 0.62) {
+    score += 0.018;
   }
   if (clubTone?.isCopaSudamericana && rec.key === "bttsYes") {
     score += 0.018;
@@ -7265,7 +7320,7 @@ function tradableRecommendationScore(rec, match = null) {
     score += clubTone?.isUcl && clubTone.isQualifier ? 0.03 : 0.02;
   }
   if (clubEmpirical && rec.marketType === "moneyline" && rec.key !== "draw" && clubEmpirical.mainDirectionHitRate <= 0.47) {
-    score -= 0.04;
+    score += rec.reviewDiscipline?.openLeagueUnderdogValue ? 0.028 : -0.04;
   }
   if (clubEmpirical && rec.marketType === "moneyline" && rec.key === "draw" && clubEmpirical.drawRate >= 0.3) {
     score += 0.018;
@@ -7296,6 +7351,9 @@ function isActionableRecommendation(rec, match = null) {
 }
 
 function hasReviewDisqualificationReason(rec) {
+  if (rec?.reviewDiscipline?.openLeagueUnderdogValue) {
+    return Boolean(rec?.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|不做主买|赛前 BTTS No 禁止主推|低 edge 不再主推|BTTS 与小球结构冲突|明显不支持小球|必须先核验|强队赢球不等于穿深让|不跟随 MLS 双进逻辑|赛前 BTTS Yes 降权/.test(String(reason))));
+  }
   return Boolean(rec?.reviewDiscipline?.reasons?.some((reason) => /不作为主推荐|不做主买|赛前 BTTS No 禁止主推|低 edge 不再主推|BTTS 与小球结构冲突|低数据俱乐部赛|明显不支持小球|市场更偏双方进球|必须先核验|强队赢球不等于穿深让|不跟随 MLS 双进逻辑|赛前 BTTS Yes 降权/.test(String(reason))));
 }
 
@@ -11422,6 +11480,9 @@ function buildRuleTradePlan(match) {
         : `这是观察候选，不是主买：模型概率 ${formatPercent(observationPrimary.modelProbability)}，当前价格 ${formatCents(observationPrimary.marketPrice)}，纪律后 edge ${formatPercent(observationPrimary.disciplinedEdge ?? observationPrimary.edge)}${typeof observationPrimary.disciplinedEdge === "number" && observationPrimary.disciplinedEdge !== observationPrimary.edge ? `（原始 ${formatPercent(observationPrimary.edge)}）` : ""}。`,
       isHighProbabilityClubMoneylinePrimary(match, observationPrimary)
         ? `${clubEmpiricalBacktestProfile(clubCompetitionTone(match))?.label || "该赛事"} 主方向概率达到赛事门槛，且价格纪律仍为正，因此允许进入首选；阵容/伤停未确认时仍按小仓/观察处理。`
+        : "",
+      observationPrimary.reviewDiscipline?.openLeagueUnderdogValue
+        ? "开放联赛复盘信号：近期主方向命中偏弱、BTTS/大球偏热，低价冷门正 edge 可以进入小仓观察，但必须等待首发或现场节奏二次确认。"
         : "",
       ...(observationPrimary.reviewDiscipline?.reasons || []),
       match.tournamentTrend?.applied ? `本届趋势修正：${match.tournamentTrend.notes.slice(0, 2).join(" ")}` : "",
